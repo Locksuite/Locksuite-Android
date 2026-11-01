@@ -258,7 +258,7 @@
    * @throws Error con el motivo, para que la pantalla lo muestre. Un error acá NUNCA debe
    *         leerse como «la app no existe»: solo `status: "missing"` dice eso.
    */
-  const URL_CHECK_PLAY = "https://checkplayapps-687828714595.us-central1.run.app";
+  const URL_CHECK_PLAY = "https://checkplayapps-5i52mt6h3q-uc.a.run.app";
   const CHECK_PLAY_LOTE = 40; // mismo tope que play_lookup.js
   LS.checkPlayApps = async function (packages) {
     const lista = Array.from(new Set((packages || []).filter((p) => typeof p === "string" && p)));
