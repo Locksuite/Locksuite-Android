@@ -223,9 +223,9 @@ fun DashboardScreen(onLogout: () -> Unit) {
     var reauthPinInput by remember { mutableStateOf("") }
     var reauthError by remember { mutableStateOf("") }
 
-    val navyDark = Color(0xFF0B192C)
-    val navyMedium = Color(0xFF1E3E62)
-    val accentOrange = Color(0xFFF1C40F)
+    val navyDark = Color(0xFF0E141B)
+    val navyMedium = Color(0xFF1A222C)
+    val accentOrange = Color(0xFFF5C438)
 
     if (showReauthDialogForPermissions || showReauthDialogForUninstall) {
         val actionText = if (showReauthDialogForPermissions) "revocar todos los privilegios" else "desinstalar la aplicación"
@@ -495,8 +495,8 @@ fun HomeTabContent(context: Context, onIrA: (Int) -> Unit) {
     val prefs = remember { PrefsHelper.getMdmPrefs(context) }
     var refreshKey by remember { mutableIntStateOf(0) }
 
-    val accentOrange = Color(0xFFF1C40F)
-    val navyMedium = Color(0xFF1E3E62)
+    val accentOrange = Color(0xFFF5C438)
+    val navyMedium = Color(0xFF1A222C)
     val rojo = Color(0xFFEF4444)
     val verde = Color(0xFF10B981)
     val amarillo = Color(0xFFF59E0B)
@@ -693,7 +693,7 @@ fun PoliciesTabContent(context: Context) {
         item {
             Card(
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isSuspendedNow) Color(0xFF7F3B12) else Color(0xFF1E3E62)
+                    containerColor = if (isSuspendedNow) Color(0xFF7F3B12) else Color(0xFF1A222C)
                 ),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
@@ -701,7 +701,7 @@ fun PoliciesTabContent(context: Context) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
                         if (isSuspendedNow) "⚠ LockSuite SUSPENDIDO" else "Suspender LockSuite",
-                        color = if (isSuspendedNow) Color.White else Color(0xFFF1C40F),
+                        color = if (isSuspendedNow) Color.White else Color(0xFFF5C438),
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
                     )
@@ -746,12 +746,12 @@ fun PoliciesTabContent(context: Context) {
 
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Identificación del Dispositivo", color = Color(0xFFF1C40F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Identificación del Dispositivo", color = Color(0xFFF5C438), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -763,7 +763,7 @@ fun PoliciesTabContent(context: Context) {
                             placeholder = { Text("Nombre del dispositivo", color = Color.Gray) },
                             singleLine = true,
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Color(0xFFF1C40F),
+                                focusedBorderColor = Color(0xFFF5C438),
                                 unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
                                 focusedTextColor = Color.White,
                                 unfocusedTextColor = Color.White
@@ -782,7 +782,7 @@ fun PoliciesTabContent(context: Context) {
                                 com.ejemplo.locksuite.util.FirebaseDeviceSync.pushDeviceName(context, deviceNameInput)
                                 android.widget.Toast.makeText(context, "Nombre guardado con éxito", android.widget.Toast.LENGTH_SHORT).show()
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF1C40F), contentColor = Color(0xFF0B192C))
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C438), contentColor = Color(0xFF0E141B))
                         ) {
                             Text("Guardar", fontWeight = FontWeight.Bold)
                         }
@@ -793,12 +793,12 @@ fun PoliciesTabContent(context: Context) {
 
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Instalar / Actualizar APK Permitida", color = Color(0xFFF1C40F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Instalar / Actualizar APK Permitida", color = Color(0xFFF5C438), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     Text(
                         "Si tienes el archivo APK de una aplicación permitida en tu almacenamiento, puedes seleccionarlo aquí para instalarlo o actualizarlo, incluso si el bloqueo de APKs está activo.",
                         color = Color.White.copy(alpha = 0.7f),
@@ -814,7 +814,7 @@ fun PoliciesTabContent(context: Context) {
                                 Toast.makeText(context, "Error al abrir selector de archivos: ${e.message}", Toast.LENGTH_LONG).show()
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF1C40F), contentColor = Color(0xFF0B192C)),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C438), contentColor = Color(0xFF0E141B)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Seleccionar e Instalar APK", fontWeight = FontWeight.Bold)
@@ -825,12 +825,12 @@ fun PoliciesTabContent(context: Context) {
 
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Actualizar LockSuite", color = Color(0xFFF1C40F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Actualizar LockSuite", color = Color(0xFFF5C438), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     Text(
                         "Comprueba si hay una nueva versión del sistema LockSuite MDM e instálala de forma inmediata.",
                         color = Color.White.copy(alpha = 0.7f),
@@ -846,7 +846,7 @@ fun PoliciesTabContent(context: Context) {
                                 }
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF1C40F), contentColor = Color(0xFF0B192C)),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C438), contentColor = Color(0xFF0E141B)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Buscar Actualizaciones", fontWeight = FontWeight.Bold)
@@ -1240,7 +1240,7 @@ fun PoliciesTabContent(context: Context) {
     if (pendingSuspendConfirm) {
         AlertDialog(
             onDismissRequest = { pendingSuspendConfirm = false },
-            containerColor = Color(0xFF0B192C),
+            containerColor = Color(0xFF0E141B),
             title = { Text("¿Suspender LockSuite?", color = Color.White, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
@@ -1277,7 +1277,7 @@ fun PoliciesTabContent(context: Context) {
 @Composable
 fun PolicyGroupCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp)
     ) {
@@ -1286,7 +1286,7 @@ fun PolicyGroupCard(title: String, content: @Composable ColumnScope.() -> Unit) 
         ) {
             Text(
                 text = LocaleManager.t(title),
-                color = Color(0xFFF1C40F),
+                color = Color(0xFFF5C438),
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 12.dp)
@@ -1326,10 +1326,10 @@ fun PolicySwitchRow(
                 if (!accepted) checked = !newValue  // revertir si falló
             },
             colors = SwitchDefaults.colors(
-                checkedThumbColor = Color(0xFF0B192C),
-                checkedTrackColor = Color(0xFFF1C40F),
+                checkedThumbColor = Color(0xFF0E141B),
+                checkedTrackColor = Color(0xFFF5C438),
                 uncheckedThumbColor = Color.Gray,
-                uncheckedTrackColor = Color(0xFF0B192C)
+                uncheckedTrackColor = Color(0xFF0E141B)
             )
         )
     }
@@ -1485,7 +1485,7 @@ fun AppManagerTabContent(context: Context) {
             // Interruptor maestro: Bloquear apps populares no kosher
             item(key = "cab_populares") {
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 ) {
@@ -1515,7 +1515,7 @@ fun AppManagerTabContent(context: Context) {
                         if (isUpdatingPopular) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(24.dp),
-                                color = Color(0xFFF1C40F),
+                                color = Color(0xFFF5C438),
                                 strokeWidth = 2.dp
                             )
                         } else {
@@ -1539,8 +1539,8 @@ fun AppManagerTabContent(context: Context) {
                                     }
                                 },
                                 colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color(0xFF0B192C),
-                                    checkedTrackColor = Color(0xFFF1C40F)
+                                    checkedThumbColor = Color(0xFF0E141B),
+                                    checkedTrackColor = Color(0xFFF5C438)
                                 )
                             )
                         }
@@ -1557,10 +1557,10 @@ fun AppManagerTabContent(context: Context) {
                     leadingIcon = { Icon(Icons.Default.Search, "Buscar", tint = Color.Gray) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFFF1C40F),
-                        unfocusedBorderColor = Color(0xFF1E3E62),
-                        focusedContainerColor = Color(0xFF1E3E62).copy(alpha = 0.3f),
-                        unfocusedContainerColor = Color(0xFF1E3E62).copy(alpha = 0.3f),
+                        focusedBorderColor = Color(0xFFF5C438),
+                        unfocusedBorderColor = Color(0xFF1A222C),
+                        focusedContainerColor = Color(0xFF1A222C).copy(alpha = 0.3f),
+                        unfocusedContainerColor = Color(0xFF1A222C).copy(alpha = 0.3f),
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White
                     ),
@@ -1596,9 +1596,9 @@ fun AppManagerTabContent(context: Context) {
                             onClick = { selectedFilter = filterKey },
                             label = { Text(filterLabel, fontSize = 12.sp) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color(0xFFF1C40F),
-                                selectedLabelColor = Color(0xFF0B192C),
-                                containerColor = Color(0xFF1E3E62).copy(alpha = 0.5f),
+                                selectedContainerColor = Color(0xFFF5C438),
+                                selectedLabelColor = Color(0xFF0E141B),
+                                containerColor = Color(0xFF1A222C).copy(alpha = 0.5f),
                                 labelColor = Color.White
                             )
                         )
@@ -1615,7 +1615,7 @@ fun AppManagerTabContent(context: Context) {
                             .height(160.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        CircularProgressIndicator(color = Color(0xFFF1C40F))
+                        CircularProgressIndicator(color = Color(0xFFF5C438))
                     }
                 }
             } else {
@@ -1624,7 +1624,7 @@ fun AppManagerTabContent(context: Context) {
                     item(key = "recargando") {
                         LinearProgressIndicator(
                             modifier = Modifier.fillMaxWidth(),
-                            color = Color(0xFFF1C40F)
+                            color = Color(0xFFF5C438)
                         )
                     }
                 }
@@ -1648,7 +1648,7 @@ fun AppManagerTabContent(context: Context) {
                     item(key = "sec_administrables") {
                         Text(
                             text = "Aplicaciones Administrables (${normalApps.size})",
-                            color = Color(0xFFF1C40F),
+                            color = Color(0xFFF5C438),
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
                             modifier = Modifier.padding(top = 4.dp)
@@ -1805,7 +1805,7 @@ fun AppRowItem(
     }
 
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp)
     ) {
@@ -1875,7 +1875,7 @@ fun AppRowItem(
                     Icon(
                         imageVector = Icons.Default.Settings,
                         contentDescription = "Configuración Avanzada",
-                        tint = if (imageBlockingMode != "none") Color(0xFFF1C40F) else Color.White
+                        tint = if (imageBlockingMode != "none") Color(0xFFF5C438) else Color.White
                     )
                 }
 
@@ -1890,7 +1890,7 @@ fun AppRowItem(
         }
         
         if (!app.isCritical) {
-            HorizontalDivider(color = Color(0xFF0B192C), thickness = 1.dp)
+            HorizontalDivider(color = Color(0xFF0E141B), thickness = 1.dp)
 
             if (compacto) {
                 // Pantalla chica: chips deslizables de costado (ver el KDoc de arriba).
@@ -1938,8 +1938,8 @@ fun AppRowItem(
                             }
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFF0B192C),
-                            checkedTrackColor = Color(0xFFF1C40F)
+                            checkedThumbColor = Color(0xFF0E141B),
+                            checkedTrackColor = Color(0xFFF5C438)
                         ),
                         modifier = Modifier.scale(0.7f)
                     )
@@ -1963,8 +1963,8 @@ fun AppRowItem(
                             }
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFF0B192C),
-                            checkedTrackColor = Color(0xFFF1C40F)
+                            checkedThumbColor = Color(0xFF0E141B),
+                            checkedTrackColor = Color(0xFFF5C438)
                         ),
                         modifier = Modifier.scale(0.7f)
                     )
@@ -1988,8 +1988,8 @@ fun AppRowItem(
                             }
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFF0B192C),
-                            checkedTrackColor = Color(0xFFF1C40F)
+                            checkedThumbColor = Color(0xFF0E141B),
+                            checkedTrackColor = Color(0xFFF5C438)
                         ),
                         modifier = Modifier.scale(0.7f)
                     )
@@ -1997,7 +1997,7 @@ fun AppRowItem(
             }
 
             if (expanded) {
-                HorizontalDivider(color = Color(0xFF0B192C), thickness = 1.dp)
+                HorizontalDivider(color = Color(0xFF0E141B), thickness = 1.dp)
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2026,7 +2026,7 @@ fun AppRowItem(
                                 modifier = Modifier
                                     .weight(1f)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) Color(0xFFF1C40F) else Color(0xFF0B192C))
+                                    .background(if (isSelected) Color(0xFFF5C438) else Color(0xFF0E141B))
                                     .clickable {
                                         imageBlockingMode = valStr
                                         scope.launch(Dispatchers.IO) {
@@ -2039,7 +2039,7 @@ fun AppRowItem(
                             ) {
                                 Text(
                                     text = label,
-                                    color = if (isSelected) Color(0xFF0B192C) else Color.White,
+                                    color = if (isSelected) Color(0xFF0E141B) else Color.White,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -2066,8 +2066,8 @@ fun AppRowItem(
                                 Toast.makeText(context, if (enabled) "Internet bloqueado en ${app.label}." else "Internet permitido en ${app.label}.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
-                                checkedTrackColor = Color(0xFFF1C40F)
+                                checkedThumbColor = Color(0xFF0E141B),
+                                checkedTrackColor = Color(0xFFF5C438)
                             )
                         )
                     }
@@ -2088,9 +2088,9 @@ private fun InterruptorCompacto(etiqueta: String, activo: Boolean, alCambiar: (B
         onClick = { alCambiar(!activo) },
         label = { Text((if (activo) "✓ " else "") + etiqueta, fontSize = 12.sp) },
         colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = Color(0xFFF1C40F),
-            selectedLabelColor = Color(0xFF0B192C),
-            containerColor = Color(0xFF0B192C),
+            selectedContainerColor = Color(0xFFF5C438),
+            selectedLabelColor = Color(0xFF0E141B),
+            containerColor = Color(0xFF0E141B),
             labelColor = Color.White
         )
     )
@@ -2134,14 +2134,14 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
     }
 
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
                 "⚡ Configuración rápida",
-                color = Color(0xFFF1C40F),
+                color = Color(0xFFF5C438),
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp
             )
@@ -2223,7 +2223,7 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
                             }) {
                                 Text(
                                     "${duraciones[graceIdx].first}  ▸",
-                                    color = Color(0xFFF1C40F),
+                                    color = Color(0xFFF5C438),
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 13.sp
                                 )
@@ -2253,7 +2253,7 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
             onDismissRequest = { if (!isApplying) pendingProfile = null },
             containerColor = Color(0xFF0B2447),
             title = {
-                Text(profile.label, color = Color(0xFFF1C40F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(profile.label, color = Color(0xFFF5C438), fontWeight = FontWeight.Bold, fontSize = 16.sp)
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2270,7 +2270,7 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
                     profile.warning?.let { warning ->
                         Text(
                             "⚠️ $warning",
-                            color = Color(0xFFF1C40F),
+                            color = Color(0xFFF5C438),
                             fontSize = 12.sp
                         )
                     }
@@ -2402,12 +2402,12 @@ fun PresetsTabContent(context: Context) {
         }
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Guardar Configuración Actual (Preset)", color = Color(0xFFF1C40F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Guardar Configuración Actual (Preset)", color = Color(0xFFF5C438), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     Text(
                         "Guarda todas las políticas y restricciones activas con un nombre personalizado.",
                         color = Color.White.copy(alpha = 0.7f),
@@ -2419,7 +2419,7 @@ fun PresetsTabContent(context: Context) {
                         placeholder = { Text("Ej: Bloqueo A Fuerte", color = Color.Gray) },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFFF1C40F),
+                            focusedBorderColor = Color(0xFFF5C438),
                             unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White
@@ -2447,7 +2447,7 @@ fun PresetsTabContent(context: Context) {
                                     Toast.makeText(context, "Perfil guardado con éxito.", Toast.LENGTH_SHORT).show()
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF1C40F), contentColor = Color(0xFF0B192C)),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C438), contentColor = Color(0xFF0E141B)),
                             modifier = Modifier.weight(1f)
                         ) {
                             Text("Guardar Local", fontWeight = FontWeight.Bold)
@@ -2477,12 +2477,12 @@ fun PresetsTabContent(context: Context) {
 
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Importar Copia de Seguridad (.locksuite)", color = Color(0xFFF1C40F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Importar Copia de Seguridad (.locksuite)", color = Color(0xFFF5C438), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     Text(
                         "Selecciona un archivo de respaldo .locksuite. El archivo se verificará criptográficamente mediante HMAC SHA-256 para evitar alteraciones.",
                         color = Color.White.copy(alpha = 0.7f),
@@ -2497,7 +2497,7 @@ fun PresetsTabContent(context: Context) {
                                 Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF1C40F), contentColor = Color(0xFF0B192C)),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C438), contentColor = Color(0xFF0E141B)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Cargar Archivo .locksuite", fontWeight = FontWeight.Bold)
@@ -2507,7 +2507,7 @@ fun PresetsTabContent(context: Context) {
         }
 
         item {
-            Text("Perfiles Guardados Localmente", color = Color(0xFFF1C40F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("Perfiles Guardados Localmente", color = Color(0xFFF5C438), fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
 
         if (presetsMap.isEmpty()) {
@@ -2518,7 +2518,7 @@ fun PresetsTabContent(context: Context) {
             items(presetsMap.keys.toList()) { name ->
                 val jsonStr = presetsMap[name] ?: ""
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 ) {
@@ -2627,8 +2627,8 @@ fun ServicesTabContent(
         false
     }
 
-    val navyMedium = Color(0xFF1E3E62)
-    val accentOrange = Color(0xFFF1C40F)
+    val navyMedium = Color(0xFF1A222C)
+    val accentOrange = Color(0xFFF5C438)
 
     LazyColumn(
         modifier = Modifier
@@ -2684,7 +2684,7 @@ fun ServicesTabContent(
 
                         AlertDialog(
                             onDismissRequest = { showChangePinDialog = false },
-                            containerColor = Color(0xFF0B192C),
+                            containerColor = Color(0xFF0E141B),
                             title = {
                                 Text(
                                     "Cambiar PIN de Administrador",
@@ -2762,7 +2762,7 @@ fun ServicesTabContent(
                                             }
                                         }
                                     },
-                                    colors = ButtonDefaults.buttonColors(containerColor = accentOrange, contentColor = Color(0xFF0B192C))
+                                    colors = ButtonDefaults.buttonColors(containerColor = accentOrange, contentColor = Color(0xFF0E141B))
                                 ) {
                                     Text("Guardar", fontWeight = FontWeight.Bold)
                                 }
@@ -2786,7 +2786,7 @@ fun ServicesTabContent(
                     // Botón para Cambiar PIN
                     Button(
                         onClick = { showChangePinDialog = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = accentOrange, contentColor = Color(0xFF0B192C)),
+                        colors = ButtonDefaults.buttonColors(containerColor = accentOrange, contentColor = Color(0xFF0E141B)),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2830,7 +2830,7 @@ fun ServicesTabContent(
                                 }
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedThumbColor = Color(0xFF0E141B),
                                 checkedTrackColor = accentOrange
                             )
                         )
@@ -2863,7 +2863,7 @@ fun ServicesTabContent(
                                 Toast.makeText(context, if (enabled) "Auto Evasión Activada." else "Auto Evasión Desactivada.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedThumbColor = Color(0xFF0E141B),
                                 checkedTrackColor = accentOrange
                             )
                         )
@@ -2902,7 +2902,7 @@ fun ServicesTabContent(
                                 Toast.makeText(context, if (enabled) "Modo IA Activado." else "Modo IA Desactivado.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedThumbColor = Color(0xFF0E141B),
                                 checkedTrackColor = accentOrange
                             )
                         )
@@ -2938,7 +2938,7 @@ fun ServicesTabContent(
                                 Toast.makeText(context, if (enabled) "Bloqueo Maps Activado." else "Bloqueo Maps Desactivado.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedThumbColor = Color(0xFF0E141B),
                                 checkedTrackColor = accentOrange
                             )
                         )
@@ -2974,7 +2974,7 @@ fun ServicesTabContent(
                                 Toast.makeText(context, if (enabled) "Estados Bloqueados." else "Estados Permitidos.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedThumbColor = Color(0xFF0E141B),
                                 checkedTrackColor = accentOrange
                             )
                         )
@@ -3010,7 +3010,7 @@ fun ServicesTabContent(
                                 Toast.makeText(context, if (enabled) "Canales Bloqueados." else "Canales Permitidos.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedThumbColor = Color(0xFF0E141B),
                                 checkedTrackColor = accentOrange
                             )
                         )
@@ -3046,7 +3046,7 @@ fun ServicesTabContent(
                                 Toast.makeText(context, if (enabled) "Ofertas MP (Accesibilidad) Bloqueadas." else "Ofertas MP Permitidas.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedThumbColor = Color(0xFF0E141B),
                                 checkedTrackColor = accentOrange
                             )
                         )
@@ -3082,7 +3082,7 @@ fun ServicesTabContent(
                                 Toast.makeText(context, if (enabled) "Ofertas MP (VPN) Bloqueadas." else "Ofertas MP Permitidas.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedThumbColor = Color(0xFF0E141B),
                                 checkedTrackColor = accentOrange
                             )
                         )
@@ -3118,7 +3118,7 @@ fun ServicesTabContent(
                                 Toast.makeText(context, if (enabled) "Mercado Libre en MP Bloqueado." else "Mercado Libre en MP Permitido.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedThumbColor = Color(0xFF0E141B),
                                 checkedTrackColor = accentOrange
                             )
                         )
@@ -3163,7 +3163,7 @@ fun ServicesTabContent(
                             )
                         }
                         
-                        val navyDark = Color(0xFF0B192C)
+                        val navyDark = Color(0xFF0E141B)
                         Button(
                             onClick = {
                                 try {
@@ -3237,7 +3237,7 @@ fun ServicesTabContent(
                             )
                         }
 
-                        val navyDark = Color(0xFF0B192C)
+                        val navyDark = Color(0xFF0E141B)
                         Button(
                             onClick = {
                                 val prepareIntent = android.net.VpnService.prepare(context)
@@ -3334,7 +3334,7 @@ fun ServicesTabContent(
                                 }
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedThumbColor = Color(0xFF0E141B),
                                 checkedTrackColor = accentOrange
                             )
                         )
@@ -3361,7 +3361,7 @@ fun ServicesTabContent(
                                 useDefaultFrp = useDef
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedThumbColor = Color(0xFF0E141B),
                                 checkedTrackColor = accentOrange
                             )
                         )
@@ -3369,7 +3369,7 @@ fun ServicesTabContent(
 
                     if (useDefaultFrp) {
                         Card(
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0B192C)),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0E141B)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
@@ -3416,7 +3416,7 @@ fun ServicesTabContent(
                                 }
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = accentOrange, contentColor = Color(0xFF0B192C)),
+                        colors = ButtonDefaults.buttonColors(containerColor = accentOrange, contentColor = Color(0xFF0E141B)),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -3894,8 +3894,8 @@ private fun WhitelistTabContent(context: Context) {
     var busy by remember { mutableStateOf(false) }
     var filtro by remember { mutableStateOf("") }
 
-    val accentOrange = Color(0xFFF1C40F)
-    val navyMedium = Color(0xFF1E3E62)
+    val accentOrange = Color(0xFFF5C438)
+    val navyMedium = Color(0xFF1A222C)
 
     fun refresh() {
         decisions = wl.allDecisions()
@@ -4234,7 +4234,7 @@ private fun WhitelistAppRow(
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62))
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C))
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

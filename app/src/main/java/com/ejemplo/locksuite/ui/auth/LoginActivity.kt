@@ -91,6 +91,7 @@ class LoginActivity : ComponentActivity() {
         })
 
         val openStore = intent?.getBooleanExtra("OPEN_STORE", false) ?: false
+        if (openStore) { startActivity(com.ejemplo.locksuite.ui.playstore.PlayStoreActivity.intent(this)); finish(); return }
 
         setContent {
             LoginScreen(
@@ -197,10 +198,11 @@ fun LoginScreen(
     }
 
     // Colores Dark-mode Premium
-    val navyDark = Color(0xFF0B192C)
-    val navyMedium = Color(0xFF1E3E62)
-    val accentOrange = Color(0xFFF1C40F)
-    val alertRed = Color(0xFFC0392B)
+    val navyDark = Color(0xFF0E141B)
+    val compacto = androidx.compose.ui.platform.LocalConfiguration.current.let { it.screenWidthDp < 360 || it.screenHeightDp < 600 }
+    val navyMedium = Color(0xFF1A222C)
+    val accentOrange = Color(0xFFF5C438)
+    val alertRed = Color(0xFFF87171)
 
     val scrollState = rememberScrollState()
     val focusRequester = remember { FocusRequester() }
@@ -334,7 +336,7 @@ fun LoginScreen(
                         painter = painterResource(id = R.drawable.ic_logo),
                         contentDescription = "LockSuite Logo",
                         modifier = Modifier
-                            .size(140.dp)
+                            .size(if (compacto) 84.dp else 132.dp)
                             .clip(RoundedCornerShape(24.dp))
                             .background(navyMedium)
                             .padding(20.dp)
@@ -386,7 +388,7 @@ fun LoginScreen(
                     // Botón para Tienda Kosher
                     Button(
                         onClick = {
-                            showStoreDialog = true
+                            context.startActivity(com.ejemplo.locksuite.ui.playstore.PlayStoreActivity.intent(context))
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = accentOrange, contentColor = navyDark),
                         modifier = Modifier.fillMaxWidth(0.85f),
@@ -545,7 +547,7 @@ fun LoginScreen(
                     }
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(32.dp)
+                verticalArrangement = Arrangement.spacedBy(if (compacto) 12.dp else 28.dp)
             ) {
                 // Barra superior con botón de regreso
                 Row(
@@ -596,7 +598,7 @@ fun LoginScreen(
                         painter = painterResource(id = R.drawable.ic_logo),
                         contentDescription = "LockSuite Logo",
                         modifier = Modifier
-                            .size(100.dp)
+                            .size(if (compacto) 64.dp else 96.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(navyMedium)
                             .padding(12.dp)
@@ -724,7 +726,7 @@ fun LoginScreen(
                                     ),
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier
-                                        .size(72.dp)
+                                        .size(if (compacto) 58.dp else 72.dp)
                                         .padding(4.dp)
                                 ) {
                                     Text(

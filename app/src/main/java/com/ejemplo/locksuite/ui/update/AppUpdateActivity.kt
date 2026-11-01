@@ -64,9 +64,9 @@ fun AppUpdateScreen(onClose: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val bgDark = Color(0xFF0B192C)
-    val cardBg = Color(0xFF1E293B)
-    val accentAmber = Color(0xFFF59E0B)
+    val bgDark = Color(0xFF0E141B)
+    val cardBg = Color(0xFF1A222C)
+    val accentAmber = Color(0xFFF5C438)
     val textPrimary = Color.White
     val textSecondary = Color(0xFF94A3B8)
 
@@ -344,8 +344,8 @@ fun AppUpdateItemCard(
     lang: String,
     onUpdateClick: () -> Unit
 ) {
-    val cardBg = Color(0xFF1E293B)
-    val accentAmber = Color(0xFFF59E0B)
+    val cardBg = Color(0xFF1A222C)
+    val accentAmber = Color(0xFFF5C438)
 
     Card(
         modifier = Modifier.fillMaxWidth(),

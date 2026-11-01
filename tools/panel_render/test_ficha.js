@@ -82,8 +82,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await p.waitForTimeout(1200);
 
   // Todas las secciones existen y se abren desde el riel.
-  const secciones = await p.evaluate(() => [...document.querySelectorAll('#c-rail button')].map(x => x.dataset.sec));
-  ok(['resumen', 'rapida', 'celapps', 'apps', 'politicas', 'actualizaciones', 'dns', 'tienda', 'tiendaplay', 'acciones', 'diag']
+  const secciones = await p.evaluate(() => [...document.querySelectorAll('#c-rail button:not(.hidden)')].map(x => x.dataset.sec));
+  ok(['resumen', 'rapida', 'celapps', 'apps', 'politicas', 'actualizaciones', 'dns', 'tiendaplay', 'acciones', 'diag']
     .every(s => secciones.includes(s)), 'riel con todas las secciones (incluida Tienda Play): ' + secciones.join(','));
   for (const s of secciones) {
     await p.click('#c-rail button[data-sec="' + s + '"]');
@@ -223,7 +223,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok(updAuto && updAuto.command === 'UPDATE_APP' && !('route' in updAuto), 'UPDATE_APP en automático: sin campo route (idéntico al de siempre) ' + JSON.stringify(updAuto));
 
   // Tienda: «Actualizar desde la Tienda» fuerza route=hosted sin cambiar la elección.
-  await p.click('#c-rail button[data-sec="tienda"]');
+  await p.evaluate(() => document.querySelector('#c-rail button[data-sec="tienda"]').click());
   n = await p.evaluate(() => __calls.length);
   await p.click('#c-tienda button[data-tienda-upd="com.waze"]');
   await sleep(250);

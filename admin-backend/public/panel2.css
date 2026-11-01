@@ -1,406 +1,986 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * panel2.css — estilos de las pantallas nuevas (10/9/2026).
- *
- * Archivo APARTE de styles.css a propósito: las pantallas nuevas no pueden
- * romper el panel viejo, ni siquiera por un selector demasiado ancho. Todo lo de
- * acá va prefijado `ls-` y solo reusa las VARIABLES de color de styles.css, que
- * es lo que hace que las dos pantallas se vean de la misma familia.
- * ═══════════════════════════════════════════════════════════════════════════ */
+   panel2.css — Material Design 3 System for Ficha (celular.html),
+   Editor de Dominios (dominios.html) y Tienda Play (tienda.html)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --ls-rail-w: 228px;
+  --accent: var(--md-sys-color-primary, #F5C438);
+  --navy-subtle: var(--md-sys-color-surface-container, #1A222C);
+  --text-muted: #64748B;
+}
 
 .ls-body {
-  margin: 0;
-  background: var(--navy-dark);
-  color: var(--text-light);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
+  background: var(--md-sys-color-background, #0E141B);
+  color: var(--md-sys-color-on-surface, #E2E8F0);
 }
 
-/* ── Reset de los botones heredados de styles.css ──────────────────────────
- * `styles.css` tiene un `button { width: 100%; … }` global (línea ~120), pensado
- * para los botones grandes del panel viejo, que son de ancho completo. Acá casi
- * todos los botones son chicos y van en fila, así que sin este reset TODOS salen
- * estirados de lado a lado: el de "Dominios" de cada app se convertía en una
- * barra, y los del carrito quedaban uno debajo del otro.
- *
- * Se resetea solo dentro de `.ls-body`, que es exclusivo de las pantallas nuevas,
- * así que el panel viejo no se entera. Se descubrió renderizando la página, no
- * leyéndola — un `node --check` verde no dice nada del aspecto.
- *
- * ⚠️ Va con `:where()`, y eso NO es un adorno. `:where()` no suma especificidad,
- * así que este bloque pesa lo mismo que el `button` de styles.css y le gana solo
- * por venir después en la cascada — mientras que cualquier clase propia
- * (`.ls-btn-primary`, `.ls-seg button.on-allow`) le sigue ganando a él.
- *
- * La primera versión decía `.ls-body button` y eso pesa (0,1,1): le ganaba a
- * `.ls-btn-primary` (0,1,0) y **dejaba al botón «Guardar» sin fondo**, o sea un
- * botón principal invisible sobre fondo oscuro. Se vio en la captura, no leyendo.
- * ───────────────────────────────────────────────────────────────────────── */
-:where(.ls-body) button {
-  width: auto;
-  box-shadow: none;
-  background: none;
-  font-size: inherit;
-  font-weight: inherit;
-  border-radius: 8px;
-}
-:where(.ls-body) button:hover { transform: none; }
-
-/* ── Cabecera fija ─────────────────────────────────────────────────────── */
+/* ── Top App Bar (M3 Small / Medium Top App Bar) ──────────────────────────── */
 .ls-top {
-  position: sticky; top: 0; z-index: 40;
-  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-  padding: 12px 20px;
-  background: var(--navy-medium);
-  border-bottom: 1px solid var(--navy-border);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+  background: rgba(22, 29, 38, 0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  flex-wrap: wrap;
 }
-.ls-top h1 { font-size: 18px; margin: 0; line-height: 1.2; }
-.ls-top .ls-sub { font-size: 11px; color: var(--text-muted); font-family: monospace; }
-.ls-top-spacer { flex: 1 1 auto; }
-
-.ls-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-.ls-dot.on { background: var(--success-green); }
-.ls-dot.idle { background: var(--warning-yellow); }
-.ls-dot.off { background: var(--text-muted); }
+.ls-top h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+}
+.ls-top .ls-sub {
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  font-size: 11.5px;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.ls-top-spacer { flex: 1; }
 
 .ls-chip {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
-  background: var(--navy-light); color: var(--text-gray); white-space: nowrap;
-}
-.ls-chip.ok { background: var(--success-green-bg); color: var(--success-green); }
-.ls-chip.warn { background: rgba(245, 158, 11, 0.14); color: var(--warning-yellow); }
-.ls-chip.bad { background: var(--alert-red-bg); color: var(--alert-red); }
-
-/* ── Estructura ────────────────────────────────────────────────────────── */
-.ls-layout { display: flex; align-items: flex-start; gap: 0; }
-.ls-rail {
-  position: sticky; top: 57px; align-self: flex-start;
-  width: 210px; flex: 0 0 210px; padding: 16px 10px;
-  border-right: 1px solid var(--navy-border);
-  max-height: calc(100vh - 57px); overflow-y: auto;
-}
-.ls-rail button {
-  display: block; width: 100%; text-align: left;
-  background: none; border: none; color: var(--text-gray);
-  padding: 10px 12px; border-radius: 8px; cursor: pointer;
-  font-size: 13.5px; font-weight: 600; margin-bottom: 2px;
-}
-.ls-rail button:hover { background: var(--navy-medium); color: var(--text-light); }
-.ls-rail button.active { background: var(--navy-light); color: var(--accent); }
-.ls-rail .ls-rail-count {
-  float: right; font-size: 11px; font-weight: 700; color: var(--text-muted);
-}
-
-.ls-main { flex: 1 1 auto; padding: 20px 24px 120px; min-width: 0; }
-.ls-section { display: none; }
-.ls-section.active { display: block; }
-.ls-section > h2 {
-  font-size: 20px; margin: 0 0 4px;
-}
-.ls-section > .ls-lead { color: var(--text-gray); font-size: 13px; margin: 0 0 18px; max-width: 78ch; }
-
-.ls-card {
-  background: var(--navy-medium); border: 1px solid var(--navy-border);
-  border-radius: 12px; padding: 16px 18px; margin-bottom: 16px;
-}
-.ls-card > h3 { margin: 0 0 10px; font-size: 15px; }
-.ls-card .ls-hint { color: var(--text-gray); font-size: 12.5px; margin: 0 0 12px; line-height: 1.5; }
-
-.ls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
-.ls-kv { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--navy-border); }
-.ls-kv:last-child { border-bottom: none; }
-.ls-kv span:first-child { color: var(--text-gray); }
-.ls-kv span:last-child { text-align: right; }
-
-/* ── Botones ───────────────────────────────────────────────────────────── */
-.ls-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: var(--navy-light); color: var(--text-light);
-  border: 1px solid var(--navy-border); border-radius: 8px;
-  padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border-radius: var(--md-sys-shape-corner-full, 9999px);
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--md-sys-color-surface-container-high, #242D3A);
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
   text-decoration: none;
 }
-.ls-btn:hover { border-color: var(--navy-border-hover); }
-.ls-btn:disabled { opacity: .45; cursor: not-allowed; }
-.ls-btn-primary { background: var(--accent); color: #0B192C; border-color: transparent; }
-.ls-btn-danger { background: var(--alert-red-bg); color: var(--alert-red); border-color: rgba(239,68,68,.3); }
-.ls-btn-sm { padding: 5px 10px; font-size: 12px; }
+.ls-chip.ok {
+  background: var(--md-sys-color-success-container, #0F392B);
+  color: var(--md-sys-color-on-success-container, #A7F3D0);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+.ls-chip.bad {
+  background: var(--md-sys-color-error-container, #4C141B);
+  color: var(--md-sys-color-on-error-container, #FECACA);
+  border-color: rgba(248, 113, 113, 0.38);
+}
+.ls-chip.warn {
+  background: var(--md-sys-color-warning-container, #452B06);
+  color: var(--md-sys-color-on-warning-container, #FDE68A);
+  border-color: rgba(251, 191, 36, 0.38);
+}
+.ls-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.ls-dot.on  { background: var(--md-sys-color-success, #34D399); box-shadow: 0 0 8px var(--md-sys-color-success, #34D399); }
+.ls-dot.off { background: var(--text-muted); }
+
+/* ── Main Layout: M3 Navigation Rail + Workspace ──────────────────────────── */
+.ls-layout {
+  display: flex;
+  flex: 1;
+  max-width: 1480px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.ls-rail {
+  width: var(--ls-rail-w);
+  flex-shrink: 0;
+  padding: 16px 12px;
+  border-right: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  position: sticky;
+  top: 61px;
+  align-self: flex-start;
+  max-height: calc(100vh - 61px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ls-rail button {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--md-sys-shape-corner-full, 9999px);
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1),
+              color 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.ls-rail button:hover {
+  background: rgba(226, 232, 240, 0.06);
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+}
+.ls-rail button:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary, #F5C438);
+  outline-offset: 2px;
+}
+.ls-rail button.active {
+  background: var(--md-sys-color-secondary-container, #283548);
+  color: var(--md-sys-color-on-secondary-container, #D8E3F8);
+  font-weight: 700;
+}
+.ls-rail .ls-rail-count {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--md-sys-shape-corner-full, 9999px);
+  background: var(--md-sys-color-surface-container-highest, #2F3948);
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  font-weight: 600;
+}
+.ls-rail button.active .ls-rail-count {
+  background: rgba(245, 196, 56, 0.2);
+  color: var(--md-sys-color-primary, #F5C438);
+}
+
+.ls-main {
+  flex: 1;
+  min-width: 0;
+  padding: 24px 28px 110px;
+}
+
+.ls-section { display: none; }
+.ls-section.active { display: block; }
+
+.ls-section > h2 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+}
+.ls-section > .ls-lead {
+  margin: 0 0 20px;
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  font-size: 13.5px;
+  line-height: 1.55;
+  max-width: 78ch;
+}
+
+/* ── M3 Cards & Containers ────────────────────────────────────────────────── */
+.ls-card {
+  background: var(--md-sys-color-surface-container-low, #161D26);
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  border-radius: var(--md-sys-shape-corner-large, 16px);
+  padding: 18px 20px;
+  margin-bottom: 16px;
+  box-shadow: var(--md-sys-elevation-level1, 0 1px 3px rgba(0,0,0,0.28));
+}
+.ls-card h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ls-card .ls-hint {
+  margin: 0 0 12px;
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.ls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.ls-kv {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  row-gap: 7px;
+  column-gap: 12px;
+  font-size: 13px;
+}
+.ls-kv dt { color: var(--md-sys-color-on-surface-variant, #94A3B8); }
+.ls-kv dd { margin: 0; word-break: break-word; color: var(--md-sys-color-on-surface, #E2E8F0); }
+
+/* ── M3 Controls (Buttons, Inputs, Selects) ───────────────────────────────── */
+/* Specificity 0 (:where) so .ls-btn-primary and .ls-seg button.on-* win cleanly */
+:where(.ls-body) button {
+  margin-top: 0;
+  background: var(--md-sys-color-surface-container-high, #242D3A);
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  box-shadow: none;
+  font-weight: 600;
+}
+:where(.ls-body) button:hover {
+  transform: none;
+  box-shadow: none;
+  background: var(--md-sys-color-surface-container-highest, #2F3948);
+}
+
+.ls-btn {
+  appearance: none;
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  background: var(--md-sys-color-surface-container-high, #242D3A);
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  padding: 8px 16px;
+  border-radius: var(--md-sys-shape-corner-full, 9999px);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1),
+              border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+              color 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.ls-btn:hover {
+  background: var(--md-sys-color-surface-container-highest, #2F3948);
+  border-color: var(--md-sys-color-outline, #64748B);
+}
+.ls-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ls-btn-primary {
+  background: var(--md-sys-color-primary, #F5C438);
+  color: var(--md-sys-color-on-primary, #261900);
+  border-color: var(--md-sys-color-primary, #F5C438);
+  font-weight: 700;
+}
+.ls-btn-primary:hover {
+  background: var(--accent-orange-hover, #FFD15C);
+  border-color: var(--accent-orange-hover, #FFD15C);
+}
+.ls-btn-danger {
+  background: var(--md-sys-color-error-container, #4C141B);
+  color: var(--md-sys-color-on-error-container, #FECACA);
+  border-color: rgba(248, 113, 113, 0.4);
+}
+.ls-btn-danger:hover {
+  background: #691B24;
+  border-color: var(--md-sys-color-error, #F87171);
+}
+.ls-btn-sm { padding: 5px 12px; font-size: 12px; }
 
 .ls-input, .ls-select {
-  background: var(--navy-dark); color: var(--text-light);
-  border: 1px solid var(--navy-light); border-radius: 8px;
-  padding: 8px 11px; font-size: 13px; font-family: inherit;
+  background: var(--md-sys-color-surface-container-lowest, #090D12);
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  border-radius: var(--md-sys-shape-corner-small, 8px);
+  padding: 8px 12px;
+  font-size: 13px;
+  width: auto;
+  transition: border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+              box-shadow 150ms cubic-bezier(0.2, 0, 0, 1);
 }
-.ls-input:focus, .ls-select:focus { outline: none; border-color: var(--accent); }
-.ls-input.ls-wide { width: 100%; box-sizing: border-box; }
+.ls-input:hover, .ls-select:hover {
+  border-color: var(--md-sys-color-outline, #64748B);
+}
+.ls-input:focus, .ls-select:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary, #F5C438);
+  box-shadow: 0 0 0 2px rgba(245, 196, 56, 0.2);
+}
+.ls-wide { width: 100%; }
 
-/* ── Selector de modo (lista negra / blanca) ───────────────────────────── */
-.ls-modes { display: flex; gap: 10px; flex-wrap: wrap; }
+/* ── Filter Mode Radio Cards (M3 Selectable Outlined Cards) ────────────────── */
+.ls-modes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
 .ls-mode {
-  /* Es un <button>: los navegadores centran su contenido con una caja anónima, así
-     que sin `display:block` el <b> y el <small> salen uno al lado del otro en vez
-     de apilados. Otra que solo se ve renderizando. */
-  display: block;
-  flex: 1 1 220px; text-align: left; cursor: pointer;
-  background: var(--navy-dark); border: 2px solid var(--navy-light);
-  border-radius: 10px; padding: 12px 14px; color: var(--text-light);
+  border: 1.5px solid var(--md-sys-color-outline-variant, #2A3647);
+  border-radius: var(--md-sys-shape-corner-medium, 12px);
+  padding: 14px 16px;
+  cursor: pointer;
+  background: var(--md-sys-color-surface-container, #1A222C);
+  transition: border-color 150ms, background-color 150ms, box-shadow 150ms;
 }
-.ls-mode:hover { border-color: var(--navy-border-hover); }
-.ls-mode.active { border-color: var(--accent); background: var(--navy-light); }
-.ls-mode b { display: block; font-size: 13.5px; margin-bottom: 3px; }
-.ls-mode small { color: var(--text-gray); font-size: 11.5px; line-height: 1.45; display: block; }
+.ls-mode:hover {
+  border-color: var(--md-sys-color-outline, #64748B);
+  background: var(--md-sys-color-surface-container-high, #242D3A);
+}
+.ls-mode.selected {
+  border-color: var(--md-sys-color-primary, #F5C438);
+  background: rgba(245, 196, 56, 0.08);
+  box-shadow: 0 0 0 1px rgba(245, 196, 56, 0.25);
+}
+.ls-mode .ls-mode-title {
+  font-weight: 700;
+  font-size: 13.5px;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+}
+.ls-mode .ls-mode-desc {
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  font-size: 12px;
+  line-height: 1.45;
+}
 
-/* ── Lista de apps ─────────────────────────────────────────────────────── */
+/* ── Unified App & Domain Rows (M3 List Cards + M3 Segmented Button) ──────── */
 .ls-approw {
-  border: 1px solid var(--navy-border); border-radius: 10px;
-  margin-bottom: 8px; background: var(--navy-dark); overflow: hidden;
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  border-radius: var(--md-sys-shape-corner-medium, 12px);
+  padding: 11px 14px;
+  margin-bottom: 8px;
+  background: var(--md-sys-color-surface-container, #1A222C);
+  transition: border-color 150ms, background-color 150ms;
 }
-.ls-approw.st-allow { border-left: 3px solid var(--success-green); }
-.ls-approw.st-block { border-left: 3px solid var(--alert-red); }
-.ls-approw.st-unset { border-left: 3px solid var(--text-muted); }
-/* Tienda Play (B.101): «a pedido» */
-.ls-approw.st-req { border-left: 3px solid var(--warning-yellow); }
-.ls-approw.pending { box-shadow: inset 0 0 0 1px var(--accent); }
+.ls-approw.allow { border-left: 3.5px solid var(--md-sys-color-success, #34D399); }
+.ls-approw.block { border-left: 3.5px solid var(--md-sys-color-error, #F87171); }
+.ls-approw-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ls-approw-title {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+}
+.ls-approw-pkg {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.ls-approw-badges {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.ls-approw-spacer { flex: 1; }
 
-.ls-apphead { display: flex; align-items: center; gap: 12px; padding: 10px 12px; flex-wrap: wrap; }
-.ls-appname { font-weight: 700; font-size: 14px; }
-.ls-apppkg { font-family: monospace; font-size: 11px; color: var(--text-muted); }
-.ls-appgrow { flex: 1 1 240px; min-width: 0; }
-.ls-apphead > .ls-seg, .ls-apphead > .ls-btn { flex: 0 0 auto; }
-
-.ls-seg { display: inline-flex; border: 1px solid var(--navy-light); border-radius: 8px; overflow: hidden; }
+/* M3 Segmented Button */
+.ls-seg {
+  display: inline-flex;
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  border-radius: var(--md-sys-shape-corner-full, 9999px);
+  overflow: hidden;
+  background: var(--md-sys-color-surface-container-lowest, #090D12);
+}
 .ls-seg button {
-  background: var(--navy-dark); color: var(--text-gray); border: none;
-  padding: 6px 12px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+  all: unset;
+  cursor: pointer;
+  padding: 5px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  border-right: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  transition: background-color 140ms, color 140ms;
 }
-.ls-seg button + button { border-left: 1px solid var(--navy-light); }
-.ls-seg button:hover { background: var(--navy-light); color: var(--text-light); }
-.ls-seg button.on-allow { background: var(--success-green); color: #0B192C; }
-.ls-seg button.on-block { background: var(--alert-red); color: #fff; }
-.ls-seg button.on-unset { background: var(--navy-light); color: var(--text-light); }
-.ls-seg button.on-req { background: var(--warning-yellow); color: #0B192C; }
+.ls-seg button:last-child { border-right: none; }
+.ls-seg button:hover {
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  background: rgba(226, 232, 240, 0.06);
+}
+.ls-seg button.on-allow {
+  background: var(--md-sys-color-success-container, #0F392B);
+  color: var(--md-sys-color-on-success-container, #A7F3D0);
+  font-weight: 700;
+}
+.ls-seg button.on-unset {
+  background: var(--md-sys-color-secondary-container, #283548);
+  color: var(--md-sys-color-on-secondary-container, #D8E3F8);
+  font-weight: 700;
+}
+.ls-seg button.on-block {
+  background: var(--md-sys-color-error-container, #4C141B);
+  color: var(--md-sys-color-on-error-container, #FECACA);
+  font-weight: 700;
+}
 
-.ls-appbody { padding: 0 12px 12px; border-top: 1px solid var(--navy-border); }
-.ls-domlist { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
-.ls-dom {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-family: monospace; font-size: 11.5px; padding: 4px 9px; border-radius: 6px;
-  background: var(--navy-light); color: var(--text-gray);
+.ls-approw-doms {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--md-sys-color-outline-variant, #2A3647);
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  display: none;
 }
-.ls-dom.allow { background: var(--success-green-bg); color: var(--success-green); }
-.ls-dom.block { background: var(--alert-red-bg); color: var(--alert-red); }
-.ls-dom.off { opacity: .45; text-decoration: line-through; }
-.ls-dom button {
-  background: none; border: none; color: inherit; cursor: pointer;
-  font-size: 13px; line-height: 1; padding: 0 0 0 2px; opacity: .7;
-}
-.ls-dom button:hover { opacity: 1; }
-.ls-domtitle { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); margin-top: 10px; }
+.ls-approw.open .ls-approw-doms { display: block; }
 
-/* ── Barra de cambios pendientes ───────────────────────────────────────── */
-.ls-cart {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
-  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-  padding: 12px 20px;
-  background: var(--navy-light); border-top: 2px solid var(--accent);
-  box-shadow: 0 -6px 24px rgba(0,0,0,.45);
-  transform: translateY(110%); transition: transform .18s ease;
+.ls-domtag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  margin: 2px 3px 2px 0;
+  border-radius: var(--md-sys-shape-corner-extra-small, 4px);
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11.5px;
 }
-.ls-cart.show { transform: translateY(0); }
-.ls-cart b { font-size: 14px; flex: 0 0 auto; }
-.ls-cart .ls-btn { flex: 0 0 auto; }
-.ls-cart .ls-cart-detail { color: var(--text-gray); font-size: 12px; flex: 1 1 320px; min-width: 0; }
-
-.ls-progress { margin-top: 10px; font-size: 12.5px; }
-.ls-progress div { padding: 3px 0; border-bottom: 1px solid var(--navy-border); }
-.ls-progress .ok { color: var(--success-green); }
-.ls-progress .bad { color: var(--alert-red); }
-.ls-progress .wait { color: var(--text-gray); }
-
-/* ── Avisos flotantes ──────────────────────────────────────────────────── */
-.ls-toasts { position: fixed; right: 16px; bottom: 84px; z-index: 90; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, 90vw); }
-.ls-toast {
-  background: var(--navy-medium); border: 1px solid var(--navy-border);
-  border-left: 4px solid var(--accent-cyan);
-  border-radius: 8px; padding: 11px 14px; font-size: 13px; line-height: 1.45;
-  box-shadow: var(--card-shadow); transition: opacity .3s;
+.ls-domtag.allow {
+  background: rgba(52, 211, 153, 0.14);
+  color: var(--md-sys-color-on-success-container, #A7F3D0);
+  border: 1px solid rgba(52, 211, 153, 0.3);
 }
-.ls-toast.ok { border-left-color: var(--success-green); }
-.ls-toast.error { border-left-color: var(--alert-red); }
-.ls-toast.warn { border-left-color: var(--warning-yellow); }
-
-/* ── Políticas ─────────────────────────────────────────────────────────── */
-.ls-polgroup { margin-bottom: 6px; }
-.ls-polgroup > summary {
-  cursor: pointer; padding: 10px 12px; font-weight: 700; font-size: 13.5px;
-  background: var(--navy-dark); border-radius: 8px; list-style: none;
+.ls-domtag.block {
+  background: rgba(248, 113, 113, 0.14);
+  color: var(--md-sys-color-on-error-container, #FECACA);
+  border: 1px solid rgba(248, 113, 113, 0.32);
 }
-.ls-polgroup > summary::-webkit-details-marker { display: none; }
-.ls-polgroup > summary::before { content: "▸ "; color: var(--accent); }
-.ls-polgroup[open] > summary::before { content: "▾ "; }
+.ls-domtag.base  { opacity: 0.82; }
+.ls-domtag button {
+  all: unset;
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 0 2px;
+  font-weight: 700;
+}
+.ls-domtag button:hover { opacity: 1; }
+
+/* ── Policies Accordion & M3 Switch ───────────────────────────────────────── */
+.ls-polgroup {
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  border-radius: var(--md-sys-shape-corner-medium, 12px);
+  margin-bottom: 10px;
+  background: var(--md-sys-color-surface-container, #1A222C);
+  overflow: hidden;
+}
+.ls-polgroup summary {
+  cursor: pointer;
+  padding: 12px 16px;
+  font-weight: 700;
+  font-size: 13.5px;
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+  transition: background-color 140ms;
+}
+.ls-polgroup summary:hover {
+  background: rgba(226, 232, 240, 0.04);
+}
+.ls-polgroup summary::-webkit-details-marker { display: none; }
+.ls-polgroup summary::before {
+  content: '▸';
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  transition: transform 0.15s;
+}
+.ls-polgroup[open] summary::before { transform: rotate(90deg); }
+.ls-polgroup-body {
+  padding: 6px 16px 12px;
+  border-top: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+}
 .ls-polrow {
-  display: flex; align-items: center; gap: 12px;
-  padding: 9px 12px; border-bottom: 1px solid var(--navy-border); font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 4px;
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  cursor: pointer;
 }
 .ls-polrow:last-child { border-bottom: none; }
-.ls-polrow.pending { background: rgba(241,196,15,.07); }
-.ls-polrow label { flex: 1 1 auto; cursor: pointer; }
-.ls-polrow .ls-polmark { font-size: 11px; color: var(--accent); font-weight: 700; }
-
-/* interruptor */
-.ls-sw { position: relative; width: 42px; height: 23px; flex: 0 0 42px; }
-.ls-sw input { opacity: 0; width: 0; height: 0; position: absolute; }
-.ls-sw span {
-  position: absolute; inset: 0; background: var(--navy-light);
-  border-radius: 999px; cursor: pointer; transition: background .15s;
-}
-.ls-sw span::after {
-  content: ""; position: absolute; left: 3px; top: 3px;
-  width: 17px; height: 17px; border-radius: 50%; background: var(--text-gray);
-  transition: transform .15s, background .15s;
-}
-.ls-sw input:checked + span { background: var(--success-green); }
-.ls-sw input:checked + span::after { transform: translateX(19px); background: #fff; }
-.ls-sw input:disabled + span { opacity: .4; cursor: not-allowed; }
-
-/* ── Tabla ─────────────────────────────────────────────────────────────── */
-.ls-tablewrap { overflow-x: auto; }
-.ls-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.ls-table th, .ls-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--navy-border); }
-.ls-table th { color: var(--text-gray); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
-
-.ls-empty { color: var(--text-muted); font-size: 13px; padding: 14px 0; }
-
-/* ══ 26/10/2026 (B.98) — ficha completa rearmada ══════════════════════════
- * Clases nuevas de la ficha: filas genéricas, atajos, apps del celular,
- * actualizaciones (estado en vivo, barra, paso a paso) y diagnóstico. Mismo
- * criterio que el resto del archivo: todo prefijado `ls-`, solo variables de
- * styles.css, y nada que pueda alcanzar al panel viejo.
- * ───────────────────────────────────────────────────────────────────────── */
-.ls-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-/* Enlaces de texto: el azul por omisión del navegador no se lee sobre el fondo oscuro. */
-.ls-main a:not(.ls-btn) { color: var(--accent-cyan); text-decoration: none; }
-.ls-main a:not(.ls-btn):hover { text-decoration: underline; }
-.ls-quick { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 16px; }
-.ls-chiprow { margin-top: 5px; display: flex; gap: 5px; flex-wrap: wrap; }
-.ls-chip-btn { border: none; cursor: pointer; background: rgba(241, 196, 15, 0.16); color: var(--accent); }
-.ls-chip-btn:hover { background: rgba(241, 196, 15, 0.26); }
-
-/* Avisos del Resumen y tarjetas de resultado */
-.ls-alert { border-left: 4px solid var(--text-muted); padding: 12px 16px; margin-bottom: 10px; }
-.ls-alert.bad { border-left-color: var(--alert-red); }
-.ls-alert.warn { border-left-color: var(--warning-yellow); }
-.ls-alert.okb { border-left-color: var(--success-green); }
-.ls-danger { border-color: rgba(239, 68, 68, .35); }
-
-/* Filtros en forma de chips (Apps del celular) */
-.ls-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
-.ls-chips button {
-  background: var(--navy-dark); color: var(--text-gray); border: 1px solid var(--navy-light);
-  border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
-}
-.ls-chips button:hover { color: var(--text-light); border-color: var(--navy-border-hover); }
-.ls-chips button.on { background: var(--navy-light); color: var(--accent); border-color: var(--accent); }
-
-/* Selector segmentado ancho (camino de la actualización) */
-.ls-seg-wide { display: flex; flex-wrap: wrap; width: 100%; }
-.ls-seg-wide button { flex: 1 1 160px; }
-
-/* Botón "encendido" (la acción ya está aplicada: ofrece deshacerla) */
-.ls-btn.ls-on { background: var(--alert-red-bg); color: var(--alert-red); border-color: rgba(239,68,68,.3); }
-
-/* Apps del celular */
-.ls-irow { border: 1px solid var(--navy-border); border-radius: 10px; margin-bottom: 8px; background: var(--navy-dark); }
-.ls-irow.restr { border-left: 3px solid var(--alert-red); }
-.ls-ihead { display: flex; align-items: center; gap: 10px; padding: 10px 12px; flex-wrap: wrap; }
-.ls-ihead > .ls-btn { flex: 0 0 auto; }
-.ls-ibody { padding: 4px 12px 10px; border-top: 1px solid var(--navy-border); }
-.ls-ibody .ls-kv span:first-child { max-width: 60%; }
-.ls-ibody small { color: var(--text-muted); }
-.ls-avatar {
-  flex: 0 0 34px; width: 34px; height: 34px; border-radius: 9px;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: var(--navy-light); color: var(--accent); font-weight: 800; font-size: 15px;
+.ls-polrow.changed {
+  background: rgba(245, 196, 56, 0.08);
+  margin: 0 -8px;
+  padding-left: 12px;
+  padding-right: 12px;
+  border-radius: var(--md-sys-shape-corner-small, 8px);
 }
 
-/* Actualizaciones */
-.ls-live { border-color: rgba(241, 196, 15, .45); box-shadow: 0 0 0 1px rgba(241, 196, 15, .15) inset; }
-.ls-stage { font-size: 15px; font-weight: 700; margin: 4px 0 8px; }
-.ls-bar { height: 8px; border-radius: 999px; background: var(--navy-light); overflow: hidden; }
-.ls-bar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .4s ease; }
-.ls-bar-ind span { width: 35%; animation: ls-ind 1.4s ease-in-out infinite; }
-@keyframes ls-ind { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
-@media (prefers-reduced-motion: reduce) { .ls-bar-ind span { animation: none; width: 100%; opacity: .5; } }
-.ls-steps { list-style: none; margin: 0; padding: 0; font-size: 13px; }
-.ls-steps li { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--navy-border); line-height: 1.45; }
-.ls-steps li:last-child { border-bottom: none; }
-.ls-steptime { flex: 0 0 74px; color: var(--text-muted); font-family: monospace; font-size: 12px; padding-top: 1px; }
-.ls-stepmark { flex: 0 0 14px; font-weight: 800; color: var(--text-gray); text-align: center; }
-.ls-steps li.ok .ls-stepmark { color: var(--success-green); }
-.ls-steps li.bad .ls-stepmark, .ls-steps li.bad { color: var(--alert-red); }
-.ls-steps li.warn .ls-stepmark { color: var(--warning-yellow); }
-.ls-steps li.act .ls-stepmark { color: var(--accent-cyan); }
-.ls-updlist { max-height: 460px; overflow-y: auto; border: 1px solid var(--navy-border); border-radius: 10px; }
-.ls-updrow { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--navy-border); }
-.ls-updrow:last-child { border-bottom: none; }
-
-/* Desplegables (<details>) y diagnóstico */
-.ls-more > summary { cursor: pointer; color: var(--text-gray); font-size: 13px; }
-.ls-more > summary:hover { color: var(--text-light); }
-.ls-pre {
-  background: var(--navy-dark); border: 1px solid var(--navy-border); border-radius: 8px;
-  padding: 10px; font-size: 11.5px; max-height: 480px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+/* M3 Switch Component */
+.ls-sw {
+  appearance: none;
+  width: 40px;
+  height: 22px;
+  border-radius: var(--md-sys-shape-corner-full, 9999px);
+  background: var(--md-sys-color-surface-container-highest, #2F3948);
+  border: 1.5px solid var(--md-sys-color-outline, #64748B);
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.16s cubic-bezier(0.2, 0, 0, 1),
+              border-color 0.16s cubic-bezier(0.2, 0, 0, 1);
+  padding: 0;
 }
-.ls-diagtable { max-height: 520px; overflow-y: auto; }
-.ls-diagtable td { font-size: 12px; padding: 5px 8px; vertical-align: top; }
+.ls-sw::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--md-sys-color-on-surface-variant, #94A3B8);
+  transition: transform 0.16s cubic-bezier(0.2, 0, 0, 1),
+              background-color 0.16s cubic-bezier(0.2, 0, 0, 1),
+              width 0.16s cubic-bezier(0.2, 0, 0, 1);
+}
+.ls-sw:checked {
+  background: var(--md-sys-color-primary, #F5C438);
+  border-color: var(--md-sys-color-primary, #F5C438);
+}
+.ls-sw:checked::after {
+  transform: translateX(17px);
+  background: var(--md-sys-color-on-primary, #261900);
+}
 
-/* ── Teléfono (pantallas medianas y chicas) ────────────────────────────── */
+/* ── Pending Changes Bottom Bar (M3 Bottom App Bar / Banner) ──────────────── */
+.ls-cart {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: none;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 20px;
+  background: var(--md-sys-color-surface-container-high, #242D3A);
+  border: 1.5px solid var(--md-sys-color-primary, #F5C438);
+  border-radius: var(--md-sys-shape-corner-full, 9999px);
+  box-shadow: var(--md-sys-elevation-level4, 0 14px 28px rgba(0,0,0,0.44));
+  font-size: 13px;
+  max-width: min(760px, 94vw);
+}
+.ls-cart.show { display: flex; }
+.ls-cart-detail {
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  font-size: 12px;
+}
+
+/* ── Toast / Snackbar (M3 Inverse-Style High-Contrast Snackbar) ───────────── */
+.ls-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 80;
+  padding: 12px 18px;
+  border-radius: var(--md-sys-shape-corner-small, 8px);
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--md-sys-color-surface-container-highest, #2F3948);
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  box-shadow: var(--md-sys-elevation-level3, 0 8px 20px rgba(0,0,0,0.38));
+}
+.ls-toast.ok  { border-left: 4px solid var(--md-sys-color-success, #34D399); }
+.ls-toast.err { border-left: 4px solid var(--md-sys-color-error, #F87171); }
+
+/* ── Progress Log ─────────────────────────────────────────────────────────── */
+.ls-progress {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: var(--md-sys-shape-corner-small, 8px);
+  background: var(--md-sys-color-surface-container-lowest, #090D12);
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  font-size: 12px;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+  max-height: 220px;
+  overflow-y: auto;
+  display: none;
+}
+.ls-progress.show { display: block; }
+.ls-progress div { padding: 2px 0; }
+.ls-progress .ok   { color: var(--md-sys-color-success, #34D399); }
+.ls-progress .wait { color: var(--md-sys-color-on-surface-variant, #94A3B8); }
+.ls-progress .err  { color: var(--md-sys-color-error, #F87171); }
+
+/* ── Tables & Lists ───────────────────────────────────────────────────────── */
+.ls-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.ls-table th, .ls-table td {
+  text-align: left;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+}
+.ls-table th {
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  font-weight: 600;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ls-mono {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.ls-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  border: 1px dashed var(--md-sys-color-outline-variant, #2A3647);
+  border-radius: var(--md-sys-shape-corner-medium, 12px);
+}
+
+/* ── Responsive Layout (Medium & Compact Window Size Classes) ─────────────── */
 @media (max-width: 820px) {
-  /* `align-items: stretch` NO es un detalle: la regla de escritorio dice flex-start, y en
-     columna eso hace que el riel mida lo que miden sus botones juntos (860 px con 7
-     secciones) en vez del ancho de la pantalla — toda la ficha se corría de costado en
-     un teléfono. Se vio midiendo a 390 px (B.98), no leyendo el CSS. */
-  .ls-layout { flex-direction: column; align-items: stretch; }
+  .ls-layout { flex-direction: column; }
   .ls-rail {
-    position: static; width: auto; flex: 1 1 auto; max-height: none; min-width: 0; max-width: 100%;
-    display: flex; gap: 6px; overflow-x: auto; border-right: none;
-    border-bottom: 1px solid var(--navy-border); padding: 8px 10px;
-    -webkit-overflow-scrolling: touch;
+    width: 100%;
+    position: static;
+    max-height: none;
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+    padding: 8px 12px;
+  }
+  .ls-rail button { white-space: nowrap; }
+  .ls-main { padding: 16px 14px 100px; }
+  .ls-kv { grid-template-columns: 110px 1fr; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FICHA COMPLETA — Secciones de Diagnóstico, Actualizaciones y Apps (B.98)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.ls-chip-btn {
+  cursor: pointer;
+  border-color: var(--md-sys-color-primary, #F5C438);
+  background: var(--md-sys-color-primary-container, #584400);
+  color: var(--md-sys-color-on-primary-container, #FFE08B);
+}
+.ls-chip-btn:hover {
+  background: rgba(245, 196, 56, 0.28);
+}
+
+.ls-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* ── Banners & Alerts (M3 Banner Container Roles) ─────────────────────────── */
+.ls-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 13px 16px;
+  border-radius: var(--md-sys-shape-corner-medium, 12px);
+  margin-bottom: 12px;
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  background: var(--md-sys-color-surface-container, #1A222C);
+  font-size: 13px;
+}
+.ls-alert.warn {
+  border-color: rgba(251, 191, 36, 0.42);
+  background: var(--md-sys-color-warning-container, #452B06);
+  color: var(--md-sys-color-on-warning-container, #FDE68A);
+}
+.ls-alert.bad {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: var(--md-sys-color-error-container, #4C141B);
+  color: var(--md-sys-color-on-error-container, #FECACA);
+}
+.ls-alert.ok {
+  border-color: rgba(52, 211, 153, 0.42);
+  background: var(--md-sys-color-success-container, #0F392B);
+  color: var(--md-sys-color-on-success-container, #A7F3D0);
+}
+.ls-alert-body { flex: 1 1 260px; min-width: 0; }
+.ls-alert-body b { display: block; margin-bottom: 2px; }
+.ls-alert-body small { color: var(--md-sys-color-on-surface-variant, #94A3B8); font-size: 12px; }
+
+/* ── Quick Action Bar in Summary ──────────────────────────────────────────── */
+.ls-quick {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+/* ── Filter Chips Bar (M3 8px Small Corner Filter Chips) ──────────────────── */
+.ls-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.ls-chips button {
+  all: unset;
+  cursor: pointer;
+  padding: 5px 12px;
+  border-radius: var(--md-sys-shape-corner-small, 8px);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  background: var(--md-sys-color-surface-container, #1A222C);
+  transition: background-color 140ms, color 140ms, border-color 140ms;
+}
+.ls-chips button:hover {
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  background: var(--md-sys-color-surface-container-high, #242D3A);
+}
+.ls-chips button.on {
+  background: var(--md-sys-color-secondary-container, #283548);
+  color: var(--md-sys-color-on-secondary-container, #D8E3F8);
+  border-color: var(--md-sys-color-secondary, #BCC7DC);
+  font-weight: 700;
+}
+
+/* ── Installed App Rows (`celapps`) ───────────────────────────────────────── */
+.ls-irow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 7px;
+  border-radius: var(--md-sys-shape-corner-medium, 12px);
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  background: var(--md-sys-color-surface-container, #1A222C);
+  transition: border-color 140ms;
+}
+.ls-irow:hover {
+  border-color: var(--md-sys-color-outline, #64748B);
+}
+.ls-irow.has-rest { border-left: 3.5px solid var(--md-sys-color-warning, #FBBF24); }
+.ls-irow.is-hidden { border-left: 3.5px solid var(--md-sys-color-error, #F87171); }
+.ls-irow-meta { flex: 1 1 200px; min-width: 0; }
+.ls-irow-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ls-irow-sub {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ls-irow- acts, .ls-irow-acts {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.ls-tog {
+  appearance: none;
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: var(--md-sys-shape-corner-small, 8px);
+  font-size: 11.5px;
+  font-weight: 600;
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  background: var(--md-sys-color-surface-container-high, #242D3A);
+  color: var(--md-sys-color-on-surface, #E2E8F0);
+  transition: background-color 140ms, border-color 140ms, color 140ms;
+}
+.ls-tog:hover { border-color: var(--md-sys-color-outline, #64748B); }
+.ls-tog:disabled { opacity: 0.45; cursor: wait; }
+.ls-tog.on-red {
+  background: var(--md-sys-color-error-container, #4C141B);
+  border-color: var(--md-sys-color-error, #F87171);
+  color: var(--md-sys-color-on-error-container, #FECACA);
+}
+.ls-tog.on-amber {
+  background: var(--md-sys-color-warning-container, #452B06);
+  border-color: var(--md-sys-color-warning, #FBBF24);
+  color: var(--md-sys-color-on-warning-container, #FDE68A);
+}
+.ls-tog.on-blue {
+  background: var(--md-sys-color-tertiary-container, #004D65);
+  border-color: var(--md-sys-color-tertiary, #67D4FF);
+  color: var(--md-sys-color-on-tertiary-container, #BFE9FF);
+}
+.ls-tog.on-purple {
+  background: #3B1D6E;
+  border-color: #A78BFA;
+  color: #EDE9FE;
+}
+.ls-tog.on-cyan {
+  background: #08384A;
+  border-color: #22D3EE;
+  color: #CFFAFE;
+}
+.ls-tog.upd {
+  background: rgba(52, 211, 153, 0.14);
+  border-color: rgba(52, 211, 153, 0.4);
+  color: var(--md-sys-color-on-success-container, #A7F3D0);
+}
+.ls-tog.upd:hover { background: rgba(52, 211, 153, 0.24); }
+
+/* ── Live Update Tracker (`actualizaciones`) ──────────────────────────────── */
+.ls-upd-box {
+  border: 1.5px solid var(--md-sys-color-outline-variant, #2A3647);
+  border-radius: var(--md-sys-shape-corner-large, 16px);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  background: var(--md-sys-color-surface-container-low, #161D26);
+}
+.ls-upd-box.live {
+  border-color: var(--md-sys-color-primary, #F5C438);
+  background: rgba(245, 196, 56, 0.06);
+}
+.ls-upd-box.ok { border-color: rgba(52, 211, 153, 0.45); }
+.ls-upd-box.bad { border-color: rgba(248, 113, 113, 0.45); }
+
+.ls-upd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.ls-upd-title { font-weight: 700; font-size: 14.5px; }
+.ls-upd-sub { color: var(--md-sys-color-on-surface-variant, #94A3B8); font-size: 12px; }
+
+.ls-bar {
+  height: 8px;
+  border-radius: var(--md-sys-shape-corner-full, 9999px);
+  background: var(--md-sys-color-surface-container-highest, #2F3948);
+  overflow: hidden;
+  margin: 10px 0 6px;
+}
+.ls-bar > div {
+  height: 100%;
+  background: var(--md-sys-color-primary, #F5C438);
+  transition: width 0.35s cubic-bezier(0.2, 0, 0, 1);
+  border-radius: var(--md-sys-shape-corner-full, 9999px);
+}
+.ls-bar.indet > div {
+  width: 35%;
+  animation: ls-bar-slide 1.4s ease-in-out infinite;
+}
+@keyframes ls-bar-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+.ls-steps {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  font-size: 12.5px;
+}
+.ls-steps li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px dashed rgba(148, 163, 184, 0.14);
+}
+.ls-steps li:first-child { border-top: none; }
+.ls-steps .t {
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.ls-steps .d { color: var(--md-sys-color-on-surface-variant, #94A3B8); font-size: 11.5px; }
+
+.ls-seg-wide { display: inline-flex; flex-wrap: wrap; }
+
+/* ── Collapsible Details, Danger Zone & Preformatted JSON ─────────────────── */
+.ls-more summary {
+  cursor: pointer;
+  color: var(--md-sys-color-on-surface-variant, #94A3B8);
+  font-size: 12.5px;
+  user-select: none;
+}
+.ls-more summary:hover { color: var(--md-sys-color-on-surface, #E2E8F0); }
+
+.ls-danger {
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(76, 20, 27, 0.28);
+}
+
+.ls-pre {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--md-sys-shape-corner-small, 8px);
+  background: var(--md-sys-color-surface-container-lowest, #090D12);
+  border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
+  font-size: 11.5px;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Mobile Layout Refinements (320px - 820px) ────────────────────────────── */
+@media (max-width: 820px) {
+  .ls-layout { align-items: stretch; }
+  .ls-rail {
+    position: sticky;
+    top: 0;
+    z-index: 35;
+    width: auto;
+    max-width: 100%;
+    align-self: stretch;
+    background: rgba(22, 29, 38, 0.96);
+    backdrop-filter: blur(10px);
     scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
   }
   .ls-rail::-webkit-scrollbar { display: none; }
-  .ls-rail button { width: auto; white-space: nowrap; flex: 0 0 auto; }
-  .ls-rail .ls-rail-count { display: none; }
-  .ls-main { padding: 16px 14px 130px; }
-  .ls-top { padding: 10px 14px; gap: 10px; }
-  .ls-cart { padding: 10px 14px; gap: 10px; }
+  .ls-top {
+    position: static;
+    padding: 10px 12px;
+    gap: 6px;
+  }
+  .ls-top h1 { font-size: 15px; }
+  .ls-top #c-buscar {
+    order: 10;
+    width: 100% !important;
+    flex: 1 1 100%;
+  }
+  .ls-card { padding: 14px; }
+  .ls-grid { grid-template-columns: 1fr; }
+  .ls-irow { padding: 9px 11px; }
+  .ls-irow-acts { width: 100%; justify-content: flex-start; }
+  .ls-tog { padding: 6px 9px; font-size: 11px; }
+  .ls-approw-head { gap: 6px; }
+  .ls-seg button { padding: 6px 9px; }
+  .ls-cart {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    transform: none;
+    max-width: none;
+    border-radius: var(--md-sys-shape-corner-large, 16px);
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 14px;
+  }
+  .ls-table { display: block; overflow-x: auto; }
 }
 
 @media (max-width: 480px) {
-  .ls-ihead { padding: 8px 10px; gap: 8px; }
-  .ls-ihead .ls-appgrow { flex: 1 1 calc(100% - 48px); }
-  .ls-steptime { flex-basis: 58px; }
-  .ls-ibody .ls-kv { flex-direction: column; gap: 6px; }
-  .ls-ibody .ls-kv span:first-child { max-width: none; }
-  .ls-ibody .ls-kv span:last-child { text-align: left; }
-  .ls-top { padding: 8px 10px; gap: 8px; }
-  .ls-top h1 { font-size: 16px; }
-  .ls-top #c-buscar, .ls-top #d-buscar { width: 100% !important; order: 10; margin-top: 4px; }
-  .ls-main { padding: 12px 8px 140px; }
-  .ls-card { padding: 12px 10px; margin-bottom: 12px; border-radius: 10px; }
-  .ls-apphead { padding: 8px 10px; gap: 8px; }
-  .ls-modes { flex-direction: column; }
-  .ls-mode { flex: 1 1 auto; width: 100%; box-sizing: border-box; }
-  .ls-cart { padding: 10px 12px; gap: 8px; }
-  .ls-cart .ls-cart-detail { flex: 1 1 100%; font-size: 11px; }
-}
-
-@media (max-width: 320px) {
-  body.ls-body { font-size: 11px; }
-  .ls-top h1 { font-size: 14px; }
-  .ls-chip { font-size: 10px; padding: 2px 6px; }
-  .ls-btn { padding: 6px 10px; font-size: 11px; }
-  .ls-btn-sm { padding: 4px 8px; font-size: 10.5px; }
-  .ls-seg button { padding: 5px 8px; font-size: 11px; }
-  .ls-main { padding: 8px 4px 150px; }
+  .ls-main { padding: 12px 10px 110px; }
+  .ls-section > h2 { font-size: 18px; }
+  .ls-kv { grid-template-columns: 1fr; row-gap: 2px; }
+  .ls-kv dd { margin-bottom: 6px; }
+  .ls-polrow { font-size: 12px; }
 }

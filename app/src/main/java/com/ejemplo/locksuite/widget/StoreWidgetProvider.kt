@@ -30,11 +30,8 @@ class StoreWidgetProvider : AppWidgetProvider() {
         ) {
             val views = RemoteViews(context.packageName, R.layout.widget_store)
 
-            // Intent para abrir directamente la Tienda en LoginActivity (funciona en Modo Stealth)
-            val intent = Intent(context, LoginActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                putExtra("OPEN_STORE", true)
-            }
+            // Redirigir a la nueva Tienda Play (la tienda vieja se retiró en favor de Tienda Play)
+            val intent = com.ejemplo.locksuite.ui.playstore.PlayStoreActivity.intent(context)
 
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

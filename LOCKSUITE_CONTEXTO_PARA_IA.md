@@ -2251,6 +2251,25 @@ Pedido del dueño (29/10): *"una tienda de apps que se descargue desde Play Stor
 
 ---
 
+**B.102 — REDISEÑO MATERIAL DESIGN 3 (PANEL WEB + APP ANDROID), RETIRO DE LA TIENDA VIEJA EN FAVOR DE TIENDA PLAY, Y MODO KOSHER ABIERTO POR DEFECTO. [COMPILADO CON GRADLE, UNIT TESTS 100% VERDES, COMMITEADO Y DESPLEGADO EN 0.6.71 (134) EL 1/11/2026]**
+
+Pedido del dueño (1/11):
+1. Rediseñar toda la web y la app con el skill **Material Design 3 UI** (`material-design-3-ui-skill`), sin cambiar funciones ni romper nada.
+2. Retirar la tienda vieja de APKs y quedarse únicamente con **Tienda Play**.
+3. Que **Tienda Play** quede **abierta por defecto en modo `kosher`** (Nivel 1) cuando todavía no se eligió un modo en el equipo.
+4. Asegurar comodidad y diseño adaptativo tanto en celulares con pantalla pequeña (CAT S22 Flip / Qin F21 Pro ~320px / 2.8") como en celulares grandes y PC.
+
+**Qué se cambió:**
+- **Tienda Play abierta en modo `kosher` por defecto (`PlayStoreManager.kt`):** `PlayStoreManager.mode(context)` pasa `PlayStoreCatalog.MODE_KOSHER` como valor por defecto al leer `KEY_MODE` de `SharedPreferences`. Si nunca se guardó un modo en el equipo, arranca en `kosher`; si el administrador elige `cerrada` (o aplica Nivel 5 «Solo llamadas»), se guarda `cerrada` y se respeta. `PlayStoreCatalog.normalizeMode` sigue fallando cerrado ante cadenas desconocidas o corruptas (conserva las 49 pruebas de `PlayStoreCatalogTest` y las 48 de `test_tienda_logic.js`).
+- **Retiro de la tienda vieja en favor de Tienda Play:**
+  - En el celular (`LoginActivity.kt`, `StoreWidgetProvider.kt`): el botón «Tienda» de la pantalla previa al PIN y cualquier intent `OPEN_STORE` (incluidos widgets viejos ya fijados en el inicio) abren directamente `PlayStoreActivity` (Tienda Play).
+  - En el panel web (`index.html`, `celular.html`, `tools/panel_render/test_ficha.js`): en Ajustes Globales se ocultó el formulario legado de APKs (conservando los IDs del DOM para no romper listeners de `app.js`) y se dejó el acceso directo a `🛍️ Tienda Play`; en el riel de la ficha (`celular.html`) se ocultó la pestaña vieja `🏪 Tienda`, quedando únicamente `🛍️ Tienda Play`.
+- **Rediseño Material Design 3 (M3) y adaptabilidad para pantallas chicas (320px) y grandes:**
+  - **Panel Web (`styles.css?v=24`, `panel2.css?v=5`):** sistema completo de tokens M3 Dark Tonal (`--md-sys-color-surface: #0E141B`, `surface-container-low/default/high/highest`, `primary: #F5C438`, `outline-variant: #2A3647`), escalas de forma M3 (`8px` chips, `12px` campos, `16px` tarjetas, `28px` diálogos/sheets, `9999px` botones y píldoras de navegación), estados `:focus-visible`, `prefers-reduced-motion`, y breakpoints para pantallas de `768px`, `600px`, `480px` y `320px` sin desborde horizontal.
+  - **App Android (`ui/theme/LockSuiteTheme.kt`, `values/themes.xml`, `LoginActivity.kt`, `SetupPinActivity.kt`, `DashboardActivity.kt`, `PlayStoreModeGroup.kt`, `PlayStoreActivity.kt`, `AppUpdateActivity.kt`, `KosherSettingsActivity.kt`, `EmergencyActivity.kt`):** paleta tonal M3 unificada con el panel web (`#0E141B` / `#1A222C` / `#F5C438`) y modo compacto automático (`screenWidthDp < 360 || screenHeightDp < 600`) en los teclados de PIN (`58.dp` vs `72.dp` y espaciado reducido para que entren sin recortes en pantallas de 2.8") y listas del Dashboard.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*

@@ -1,10 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
     <style name="Theme.LockSuite" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#0B192C</item>
-        <item name="android:statusBarColor">#0B192C</item>
-        <item name="android:navigationBarColor">#0B192C</item>
-        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#0E141B</item>
+        <item name="android:navigationBarColor">#0E141B</item>
     </style>
 </resources>

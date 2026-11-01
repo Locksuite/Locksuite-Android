@@ -76,7 +76,7 @@ fun PlayStoreModeGroup(refreshKey: Int, onChanged: () -> Unit) {
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
                         .background(
-                            if (selected) Color(0xFFF1C40F).copy(alpha = 0.14f) else Color.Transparent
+                            if (selected) Color(0xFFF5C438).copy(alpha = 0.14f) else Color.Transparent
                         )
                         .clickable { choose() }
                         .padding(horizontal = 4.dp, vertical = 6.dp),
@@ -86,7 +86,7 @@ fun PlayStoreModeGroup(refreshKey: Int, onChanged: () -> Unit) {
                         selected = selected,
                         onClick = { choose() },
                         colors = RadioButtonDefaults.colors(
-                            selectedColor = Color(0xFFF1C40F),
+                            selectedColor = Color(0xFFF5C438),
                             unselectedColor = Color.White.copy(alpha = 0.6f)
                         )
                     )

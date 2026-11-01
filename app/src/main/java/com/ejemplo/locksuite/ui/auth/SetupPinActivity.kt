@@ -79,10 +79,11 @@ fun SetupPinScreen(onPinSet: (String) -> Unit) {
     val subtext = if (isConfirming) "Ingresa el mismo PIN para confirmar" else "El PIN debe tener entre 4 y 16 dígitos"
 
     // Colores Dark-mode Premium
-    val navyDark = Color(0xFF0B192C)
-    val navyMedium = Color(0xFF1E3E62)
-    val accentOrange = Color(0xFFF1C40F)
-    val alertRed = Color(0xFFC0392B)
+    val navyDark = Color(0xFF0E141B)
+    val compacto = androidx.compose.ui.platform.LocalConfiguration.current.let { it.screenWidthDp < 360 || it.screenHeightDp < 600 }
+    val navyMedium = Color(0xFF1A222C)
+    val accentOrange = Color(0xFFF5C438)
+    val alertRed = Color(0xFFF87171)
 
     val scrollState = rememberScrollState()
     val focusRequester = remember { FocusRequester() }
@@ -166,7 +167,7 @@ fun SetupPinScreen(onPinSet: (String) -> Unit) {
             }
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(32.dp)
+        verticalArrangement = Arrangement.spacedBy(if (compacto) 12.dp else 28.dp)
     ) {
         // Cabecera
         Column(
@@ -291,7 +292,7 @@ fun SetupPinScreen(onPinSet: (String) -> Unit) {
                             ),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
-                                .size(72.dp)
+                                .size(if (compacto) 58.dp else 72.dp)
                                 .padding(4.dp)
                         ) {
                             Text(

@@ -191,7 +191,7 @@ fun EmergencyScreen(onPurgeSuccess: () -> Unit) {
 
     val alertRed = Color(0xFFC0392B)
     val alertDarkRed = Color(0xFF7B241C)
-    val accentYellow = Color(0xFFF1C40F)
+    val accentYellow = Color(0xFFF5C438)
 
     val scrollState = rememberScrollState()
 

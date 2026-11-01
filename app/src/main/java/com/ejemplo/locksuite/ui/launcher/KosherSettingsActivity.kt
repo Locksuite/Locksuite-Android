@@ -96,8 +96,8 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
     // Dark Premium Theme
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = Color(0xFFFF9100), // Orange
-            background = Color(0xFF121212),
+            primary = Color(0xFFF5C438), // M3 Gold Primary
+            background = Color(0xFF0E141B),
             surface = Color(0xFF1E1E1E),
             onBackground = Color.White,
             onSurface = Color.White

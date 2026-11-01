@@ -80,7 +80,7 @@ object PlayStoreManager {
 
     /** Modo vigente. Lo que no se reconozca, o no esté guardado, es CERRADA. */
     fun mode(context: Context): String =
-        PlayStoreCatalog.normalizeMode(prefs(context).getString(KEY_MODE, null))
+        PlayStoreCatalog.normalizeMode(prefs(context).getString(KEY_MODE, PlayStoreCatalog.MODE_KOSHER))
 
     fun isOpen(context: Context): Boolean = PlayStoreCatalog.isOpen(mode(context))
 
