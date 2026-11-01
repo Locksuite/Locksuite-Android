@@ -69,6 +69,13 @@ class SetupPinActivity : ComponentActivity() {
 
 @Composable
 fun SetupPinScreen(onPinSet: (String) -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var isDeviceOwner by remember {
+        val dpm = context.getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+        mutableStateOf(dpm.isDeviceOwnerApp(context.packageName))
+    }
+    var showMultimediaDialog by remember { mutableStateOf(false) }
+
     var pin1 by remember { mutableStateOf("") }
     var pin2 by remember { mutableStateOf("") }
     var isConfirming by remember { mutableStateOf(false) }
@@ -306,6 +313,33 @@ fun SetupPinScreen(onPinSet: (String) -> Unit) {
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
+        }
+
+        if (!isDeviceOwner) {
+            OutlinedButton(
+                onClick = { showMultimediaDialog = true },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = accentOrange),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "🚗 Instalación fácil (Multimedia / Sin PC)",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        if (showMultimediaDialog) {
+            com.ejemplo.locksuite.ui.provisioning.MultimediaProvisioningDialog(
+                onDismiss = { showMultimediaDialog = false },
+                onActivated = {
+                    isDeviceOwner = true
+                    showMultimediaDialog = false
+                    Toast.makeText(context, "¡Device Owner activado con éxito!", Toast.LENGTH_LONG).show()
+                }
+            )
         }
     }
 }

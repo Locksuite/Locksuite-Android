@@ -857,23 +857,54 @@ fun PoliciesTabContent(context: Context) {
 
         if (!isDeviceOwner) {
             item {
+                var showMultimediaDialog by remember { mutableStateOf(false) }
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF7B241C)),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(Icons.Default.Info, "Advertencia", tint = Color.White)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            "ADVERTENCIA: La app no está configurada como Device Owner. Configure mediante ADB para activar los bloqueos.",
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Info, "Advertencia", tint = Color.White)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                "ADVERTENCIA: La app no está configurada como Device Owner. Actívelo desde aquí mismo sin PC o mediante ADB.",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                DashboardActivity.isLaunchingInternalFlow = true
+                                showMultimediaDialog = true
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFF5C438),
+                                contentColor = Color(0xFF0E141B)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("🚗 Activar Device Owner sin PC (Multimedia / Auto)", fontWeight = FontWeight.Bold)
+                        }
                     }
+                }
+                if (showMultimediaDialog) {
+                    com.ejemplo.locksuite.ui.provisioning.MultimediaProvisioningDialog(
+                        onDismiss = {
+                            DashboardActivity.isLaunchingInternalFlow = false
+                            showMultimediaDialog = false
+                        },
+                        onActivated = {
+                            DashboardActivity.isLaunchingInternalFlow = false
+                            showMultimediaDialog = false
+                            refreshKey++
+                            Toast.makeText(context, "¡Device Owner activado con éxito!", Toast.LENGTH_LONG).show()
+                        }
+                    )
                 }
             }
         }

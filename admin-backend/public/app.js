@@ -2131,7 +2131,59 @@ function initTheme() {
     if (mobileToggleBtn) mobileToggleBtn.addEventListener("click", handleToggle);
 }
 
+function initInstallGuideModal() {
+    const modal = document.getElementById("install-guide-modal");
+    const openBtn = document.getElementById("help-install-btn");
+    const mobileOpenBtn = document.getElementById("mobile-help-btn");
+    const closeBtn = document.getElementById("install-guide-close-btn");
+    const closeX = document.getElementById("install-guide-close-x");
+    const tabGeneral = document.getElementById("guide-tab-general");
+    const tabMultimedia = document.getElementById("guide-tab-multimedia");
+    const secGeneral = document.getElementById("guide-sec-general");
+    const secMultimedia = document.getElementById("guide-sec-multimedia");
+
+    function openModal(defaultTab) {
+        if (!modal) return;
+        modal.classList.remove("hidden");
+        switchTab(defaultTab || "general");
+    }
+
+    function closeModal() {
+        if (!modal) return;
+        modal.classList.add("hidden");
+    }
+
+    function switchTab(tab) {
+        if (tab === "multimedia") {
+            if (tabMultimedia) tabMultimedia.classList.add("active");
+            if (tabGeneral) tabGeneral.classList.remove("active");
+            if (secMultimedia) secMultimedia.classList.remove("hidden");
+            if (secGeneral) secGeneral.classList.add("hidden");
+        } else {
+            if (tabGeneral) tabGeneral.classList.add("active");
+            if (tabMultimedia) tabMultimedia.classList.remove("active");
+            if (secGeneral) secGeneral.classList.remove("hidden");
+            if (secMultimedia) secMultimedia.classList.add("hidden");
+        }
+    }
+
+    if (openBtn) openBtn.addEventListener("click", () => openModal("general"));
+    if (mobileOpenBtn) mobileOpenBtn.addEventListener("click", () => openModal("general"));
+    if (closeBtn) closeBtn.addEventListener("click", closeModal);
+    if (closeX) closeX.addEventListener("click", closeModal);
+
+    if (tabGeneral) tabGeneral.addEventListener("click", () => switchTab("general"));
+    if (tabMultimedia) tabMultimedia.addEventListener("click", () => switchTab("multimedia"));
+
+    if (modal) {
+        modal.addEventListener("click", (e) => {
+            if (e.target === modal) closeModal();
+        });
+    }
+}
+
 initTheme();
+initInstallGuideModal();
 initDevicesViewSelector();
 
 globalUpdateLocksuiteBtn.addEventListener("click", () => {

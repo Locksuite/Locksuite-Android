@@ -50,12 +50,14 @@
             <h1>LockSuite <span class="accent">Kosher</span></h1>
           </div>
           <div class="header-mobile-controls">
+            <button id="mobile-help-btn" class="header-icon-btn" type="button" title="Guía de instalación">❓</button>
             <button id="mobile-theme-btn" class="header-icon-btn" type="button" title="Cambiar tema">☀️</button>
             <button id="mobile-refresh-btn" class="header-icon-btn" type="button" title="Actualizar">🔄</button>
             <button id="mobile-menu-btn" class="header-icon-btn" type="button" title="Opciones">⋮</button>
           </div>
           <div class="header-actions" id="header-actions-menu">
             <button id="theme-toggle-btn" class="header-btn secondary" type="button" title="Cambiar tema">☀️ Modo Claro</button>
+            <button id="help-install-btn" class="header-btn secondary" type="button" title="Guía de instalación">❓ ¿Cómo instalar?</button>
             <a href="installer/index.html" target="_blank" class="header-btn installer-btn">🔌 Instalador Web</a>
             <button id="global-update-locksuite-btn" class="header-btn update-all-btn" type="button">🔄 Actualizar LockSuite (Todos)</button>
             <button id="refresh-button" class="header-btn secondary" type="button">Actualizar</button>
@@ -1046,6 +1048,81 @@
     </div>
   </div>
 
+  <!-- Modal de Guía de Instalación (General y Multimedia) -->
+  <div id="install-guide-modal" class="modal-overlay hidden">
+    <div class="card modal-card" style="max-width: 650px; width: 95%; max-height: 85vh; display: flex; flex-direction: column; padding: 24px; overflow: hidden;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid var(--md-sys-color-outline-variant, rgba(255,255,255,0.1)); padding-bottom: 10px;">
+        <h2 style="margin: 0; font-size: 18px; display: flex; align-items: center; gap: 8px;">
+          <span>📖 Guía de Instalación LockSuite</span>
+        </h2>
+        <button id="install-guide-close-x" style="background: none; border: none; font-size: 20px; color: var(--text-gray); cursor: pointer; padding: 4px 8px;">✕</button>
+      </div>
+
+      <div style="display: flex; gap: 8px; margin-bottom: 14px;">
+        <button id="guide-tab-general" class="main-nav-btn active" type="button" style="flex: 1; padding: 8px 12px; font-size: 13px; font-weight: bold;">📱 Celulares / General</button>
+        <button id="guide-tab-multimedia" class="main-nav-btn" type="button" style="flex: 1; padding: 8px 12px; font-size: 13px; font-weight: bold;">🚗 Multimedia de Autos (Sin PC)</button>
+      </div>
+
+      <div id="guide-content-scroll" style="flex: 1; overflow-y: auto; padding-right: 6px; font-size: 13px; line-height: 1.5; color: var(--md-sys-color-on-surface, #e2e8f0);">
+        <!-- Sección General -->
+        <div id="guide-sec-general">
+          <div style="background: var(--md-sys-color-surface-container, rgba(255,255,255,0.04)); border-radius: 12px; padding: 14px; margin-bottom: 12px; border: 1px solid var(--md-sys-color-outline-variant, rgba(255,255,255,0.08));">
+            <h3 style="margin-top: 0; margin-bottom: 8px; color: var(--accent-orange, #F5C438); font-size: 15px;">Método 1 (Recomendado): Alta por Código QR</h3>
+            <p style="margin: 0 0 8px 0; color: var(--text-gray);">Para teléfonos nuevos o recién restablecidos de fábrica (sin cuenta de Google configurada aún):</p>
+            <ol style="margin: 0; padding-left: 20px;">
+              <li style="margin-bottom: 6px;">En la pantalla de bienvenida de Android (donde dice <em>«Hola»</em> o <em>«Comencemos»</em>), <strong>toca 6 veces seguidas</strong> en cualquier espacio vacío para abrir la cámara de enrolamiento QR.</li>
+              <li style="margin-bottom: 6px;">Conecta el celular a una red Wi-Fi cuando el asistente lo solicite.</li>
+              <li style="margin-bottom: 6px;">Escanea el código QR que se genera desde este panel (o desde <a href="installer/index.html" target="_blank" style="color: var(--accent-orange, #F5C438); font-weight: bold;">Instalador Web ↗</a>).</li>
+              <li>El sistema descargará LockSuite y lo asignará como <strong>Device Owner</strong> automáticamente. Al iniciar la app, solo crea tu PIN de Administrador.</li>
+            </ol>
+          </div>
+
+          <div style="background: var(--md-sys-color-surface-container, rgba(255,255,255,0.04)); border-radius: 12px; padding: 14px; border: 1px solid var(--md-sys-color-outline-variant, rgba(255,255,255,0.08));">
+            <h3 style="margin-top: 0; margin-bottom: 8px; color: var(--accent-orange, #F5C438); font-size: 15px;">Método 2: Por Cable USB mediante Computadora (ADB)</h3>
+            <p style="margin: 0 0 8px 0; color: var(--text-gray);">Si el equipo no tiene lector QR o prefieres enrolar por cable:</p>
+            <ol style="margin: 0; padding-left: 20px;">
+              <li style="margin-bottom: 6px;">Instala el APK de LockSuite en el dispositivo. Asegúrate de <strong>no tener cuentas</strong> configuradas aún en el celular (Ajustes → Cuentas).</li>
+              <li style="margin-bottom: 6px;">Activa <em>Opciones de desarrollador</em> y enciende <em>Depuración por USB</em>.</li>
+              <li style="margin-bottom: 6px;">Conecta el equipo a la PC y ejecuta en la terminal:
+                <pre style="background: #000; color: #2ecc71; padding: 8px 10px; border-radius: 6px; font-family: monospace; font-size: 12px; overflow-x: auto; margin: 6px 0;">adb shell dpm set-device-owner com.ejemplo.locksuite/com.ejemplo.locksuite.receiver.DeviceAdminReceiver</pre>
+              </li>
+              <li>Abre LockSuite y define el PIN de Administrador.</li>
+            </ol>
+          </div>
+        </div>
+
+        <!-- Sección Multimedia de Autos -->
+        <div id="guide-sec-multimedia" class="hidden">
+          <div style="background: rgba(46, 204, 113, 0.1); border: 1px solid rgba(46, 204, 113, 0.3); border-radius: 12px; padding: 14px; margin-bottom: 12px;">
+            <h3 style="margin-top: 0; margin-bottom: 6px; color: #2ECC71; font-size: 15px;">🚗 Instalación Fácil en Pantallas de Autos (Sin PC y Sin borrar cuentas)</h3>
+            <p style="margin: 0; font-size: 12.5px;">Las pantallas multimedia (TS10, TS18, Topway, FYT, etc.) no tienen puertos USB periféricos para conectar una PC y ya traen cuentas preinstaladas. <strong>No hace falta restablecer la pantalla de fábrica</strong> (hacerlo borra los mandos del volante y la cámara de retroceso).</p>
+          </div>
+
+          <div style="background: var(--md-sys-color-surface-container, rgba(255,255,255,0.04)); border-radius: 12px; padding: 14px; margin-bottom: 12px; border: 1px solid var(--md-sys-color-outline-variant, rgba(255,255,255,0.08));">
+            <h4 style="margin-top: 0; margin-bottom: 8px; color: var(--accent-orange, #F5C438); font-size: 14px;">Paso a Paso en el Auto:</h4>
+            <ol style="margin: 0; padding-left: 20px;">
+              <li style="margin-bottom: 8px;"><strong>Descargar e Instalar el APK:</strong> Pasa el archivo <code>LockSuite.apk</code> a un pendrive USB o descárgalo directamente desde el navegador de la pantalla del auto e instálalo.</li>
+              <li style="margin-bottom: 8px;"><strong>Abrir LockSuite:</strong> Como la app aún no es Device Owner, verás en pantalla un botón destacado: <br><strong style="color: var(--accent-orange, #F5C438);">«🚗 Instalación fácil (Multimedia / Sin PC)»</strong>. Tócalo.</li>
+              <li style="margin-bottom: 8px;"><strong>Opción A — Si la pantalla tiene Root (su):</strong><br>
+                La gran mayoría de las pantallas chinas ya vienen con acceso Root de fábrica. En la ventana que se abre, verás <em>«Acceso Root detectado»</em>. Toca <strong>«⚡ Activar Device Owner Ahora»</strong> y ¡listo en 1 toque!</li>
+              <li style="margin-bottom: 8px;"><strong>Opción B — Si la pantalla no tiene Root:</strong><br>
+                a) Toca <strong>«🔧 Preparar puerto 5555 y abrir Opciones de Desarrollador»</strong>.<br>
+                b) En los ajustes de desarrollador de la pantalla, <strong>APAGA y vuelve a ENCENDER «Depuración por USB»</strong> (o activa «Depuración por red / TCP»).<br>
+                c) Vuelve a LockSuite. Aparecerá el cartel del sistema <em>«¿Permitir depuración por USB?»</em>: marca <strong>«Permitir siempre»</strong> y presiona <strong>Aceptar</strong>.<br>
+                d) LockSuite se activará automáticamente por ADB local.</li>
+              <li><strong>Tus cuentas y mapas quedan a salvo:</strong><br>
+                El motor interno de LockSuite congela los autenticadores de cuentas durante 1 segundo para satisfacer la exigencia de Android y los reactiva de inmediato. No perderás tus cuentas de Google, Waze ni sesiones existentes.</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-actions" style="margin-top: 14px; display: flex; justify-content: flex-end;">
+        <button id="install-guide-close-btn" class="secondary" style="width: 100%; padding: 10px; border-radius: 8px; font-weight: bold; cursor: pointer;">Entendido / Cerrar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Firebase SDK compat: sin build step, se puede editar el panel con solo un editor de texto -->
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
@@ -1061,6 +1138,6 @@
        tienda.html (TiendaLogic.approveRequest). Si faltara, el resto del panel sigue igual y solo
        esos pedidos avisan que no se pueden aprobar desde acá. -->
   <script src="tienda_logic.js?v=2"></script>
-  <script src="app.js?v=44"></script>
+  <script src="app.js?v=45"></script>
 </body>
 </html>

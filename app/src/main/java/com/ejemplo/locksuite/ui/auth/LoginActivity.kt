@@ -158,6 +158,11 @@ fun LoginScreen(
 
     var updateProgress by remember { mutableStateOf<Int?>(null) }
     var storeDownloadingPackage by remember { mutableStateOf<String?>(null) }
+    var isDeviceOwner by remember {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        mutableStateOf(dpm.isDeviceOwnerApp(context.packageName))
+    }
+    var showMultimediaDialog by remember { mutableStateOf(false) }
     var storeProgress by remember { mutableStateOf(0) }
 
     fun updateLockoutState() {
@@ -463,6 +468,35 @@ fun LoginScreen(
                                 if (LocaleManager.getLang() == "he") "עדכן אפליקציה" else if (LocaleManager.getLang() == "en") "Update App" else "Actualizar Aplicación"
                             },
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    if (!isDeviceOwner) {
+                        Button(
+                            onClick = { showMultimediaDialog = true },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF2A3647),
+                                contentColor = accentOrange
+                            ),
+                            modifier = Modifier.fillMaxWidth(0.85f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = if (LocaleManager.getLang() == "he") "🚗 התקנה קלה (מולטימדיה / ללא מחשב)" else if (LocaleManager.getLang() == "en") "🚗 Easy Setup (Car Multimedia / No PC)" else "🚗 Instalación fácil (Multimedia / Sin PC)",
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+
+                    if (showMultimediaDialog) {
+                        com.ejemplo.locksuite.ui.provisioning.MultimediaProvisioningDialog(
+                            onDismiss = { showMultimediaDialog = false },
+                            onActivated = {
+                                isDeviceOwner = true
+                                showMultimediaDialog = false
+                                Toast.makeText(context, "¡Device Owner activado con éxito!", Toast.LENGTH_LONG).show()
+                            }
                         )
                     }
 

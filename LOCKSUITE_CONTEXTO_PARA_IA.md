@@ -2340,18 +2340,43 @@ Es la misma familia que ya había anotado el comentario del 2/9 («a veces hay q
 
 ---
 
+**B.105 — INSTALACIÓN FÁCIL EN MULTIMEDIA DE AUTOS / SIN PC (INGENIERÍA INVERSA DE SWITCH MDM v0.11.3 `secureguardmdm-private`). [IMPLEMENTADO POR GEMINI FLASH, COMPILADO CON GRADLE, UNIT TESTS 100% VERDES (230/230), ASISTENTE Y GUÍA INTEGRADOS EN APP Y WEB; PENDIENTE DE PRUEBA EN MULTIMEDIA REAL]**
+
+Pedido del dueño (1/11): revisar el repositorio https://github.com/imreykodesh/secureguardmdm-private (Switch MDM) donde el desarrollador anunció una función de *«instalación fácil en multimedia de autos»*, explicar cómo funciona, y preparar con todo detalle las instrucciones y el código completo para que Gemini Flash lo implemente en LockSuite sin errores.
+
+**Hallazgos técnicos (decompilación de secureguard.apk v0.11.3 / versionCode 51, paquete com.secureguard.mdm.provisioning en classes5.dex e issues #163, #210, #228, #238):**
+1. **Por qué fallan las pantallas multimedia de autos al instalar un MDM común:** (a) los puertos USB del estéreo son *Host* (para pendrive/CarPlay), por lo que no se puede conectar una PC por cable USB para correr db shell dpm set-device-owner; (b) vienen con cuentas preinstaladas (Google, fabricante, WhatsApp) que hacen fallar a dpm set-device-owner con IllegalStateException: Not allowed to set the device owner because there are already some accounts on the device, y formatear una multimedia de fábrica suele borrar la configuración CAN-Bus de los botones del volante y cámara de retroceso.
+2. **Mecanismo 1 — Cliente ADB TCP local embebido (127.0.0.1:5555) y detección de Root (su):**
+   - La propia app implementa el protocolo binario ADB (AdbProtocol.kt, AdbFrameStream.kt, LocalAdbClient.kt) hablando directamente con 127.0.0.1:5555 y firmando el handshake A_AUTH con un par de claves RSA de 2048 bits generado en 
+oBackupFilesDir y serializado al formato binario de 524 bytes Little-Endian de Android (AdbAuthKey.kt).
+   - LocalProvisioningProbe.kt y ClassicAdbChannelOpener.kt comprueban primero si el equipo tiene su (/system/bin/su, /system/xbin/su, etc., muy común en multimedias Android TS10/TS18/Topway) para activar en 1 toque sin siquiera necesitar ADB. Si no hay root, intentan setprop service.adb.tcp.port 5555, abren Opciones de Desarrollador y vigilan durante 5 minutos hasta que el usuario apaga y vuelve a encender «Depuración por USB», momento en el que dbd levanta el puerto 5555 en loopback.
+3. **Mecanismo 2 — Compuerta de autenticadores de cuentas (AccountAuthenticatorGateScript.kt):**
+   - Antes de ejecutar dpm set-device-owner, el script shell consulta todos los servicios ndroid.accounts.AccountAuthenticator (cmd package query-services -a android.accounts.AccountAuthenticator), guarda la lista en /data/local/tmp/.locksuite_authgate, los deshabilita temporalmente para el usuario 0 (pm disable-user --user 0 <pkg>), ejecuta dpm set-device-owner com.ejemplo.locksuite/com.ejemplo.locksuite.receiver.DeviceAdminReceiver, e **inmediatamente después** (haya salido bien o mal dpm) los vuelve a habilitar todos con pm enable --user 0 <pkg> verificando que ninguno quede deshabilitado. Así Android ve 0 cuentas durante el segundo que dura dpm, pero el usuario no pierde sus cuentas ni sesiones.
+4. **Integración preparada para LockSuite (INSTRUCCIONES_GEMINI_FLASH_INSTALACION_MULTIMEDIA.md):**
+   - 8 clases no-Compose en pp/src/main/java/com/ejemplo/locksuite/provisioning/ (100% compatibles con 	ools/ia_contenedor/typecheck/typecheck.sh).
+   - 1 diálogo Compose M3 en pp/src/main/java/com/ejemplo/locksuite/ui/provisioning/MultimediaProvisioningDialog.kt invocable desde SetupPinActivity, LoginActivity y DashboardActivity cuando !isDeviceOwner.
+   - 1 suite de pruebas JUnit (MultimediaProvisioningTest.kt) que valida la generación/parseo del script, el bloqueo de inyecciones shell, el framing binario ADB y la clave pública RSA de 524 bytes.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**1/11 (tarde) — Claude (contenedor en la nube, sin Gradle ni equipo): revisión de lo que hizo Antigravity (B.101–B.103) y corrección de «celular nuevo: el panel dice que no tiene PIN de administrador» (B.104).**
+**1/11 (noche) — Gemini Flash: implementación completa de Instalación Fácil en Multimedia de Autos (B.105), guía de instalación interactiva en panel web y despliegue.**
 
 - **Pedidos del usuario:**
-  1. Revisar, antes de empezar, los cambios que acababa de hacer Antigravity.
-  2. Corregir que *"al poner un celular nuevo me dice que no tiene pin de administrador, y después de ponerlo tengo que cambiarlo manualmente para que lo detecte"* (ejemplo: «Shuli», Google Pixel `91431ec29bc2fe91`, LockSuite 0.6.69; capturas con `DEVICE_PIN_NOT_ENROLLED` y el cartel «no tiene un PIN de administrador configurado»).
-  3. Actualizar este archivo al terminar.
-- **Revisión de lo de Antigravity (origin/main `a3b2dd4`):** aplicó mi parche de la Tienda Play (B.101, commit `79bcf68`), compiló con Gradle y desplegó 0.6.70 y 0.6.71; sumó B.102 (Material Design 3, tienda vieja retirada, Tienda Play abierta en modo `kosher` si no hay modo guardado) y B.103 (claro/oscuro y 5 vistas de celulares). Sobre esa base corrí mi batería completa (chequeo de tipos 0 errores, pruebas JUnit, `panel_render`, los 5 `check_*.py`, `gen_*_js --check`, pruebas de Node) **antes de tocar nada: todo en verde**. Dos cosas para el dueño/Antigravity: (a) reportaron «102/102 pruebas» pero el repo tenía 193 `@Test` (ahora 224) → que anoten el conteo real de `app/build/test-results/testDebugUnitTest/*.xml`; (b) con B.102 un equipo sin modo guardado arranca en `kosher` (Tienda Play nivel 1 visible): es lo que se pidió, pero es un cambio de comportamiento respecto de B.101 (que arrancaba cerrada).
-- **Qué se hizo:** B.104 (ver arriba, completo). En una línea: el celular publicaba el verificador de su PIN en la nube una sola vez, sin confirmación ni reintento, así que cualquier fallo de esa única escritura dejaba al panel sin poder verificarlo hasta que se volvía a elegir el PIN a mano. Ahora se publica en tres pasos confirmados, se reintenta solo (cada latido y cada sincronización, con espera creciente), se vuelve a publicar si la nube lo pierde, la sesión anónima se abre una sola vez por arranque, y el panel explica el problema en vez de pedir un PIN inútil y de cerrar la ficha lateral. Sin cambios en la Cloud Function ni en las reglas.
-- **Verificación (sin Gradle ni equipo):** chequeo de tipos 0 errores en 89 archivos; 204 pruebas JUnit OK (31 nuevas: `PinCloudSyncPolicyTest` 18, `SignInGateTest` 13); 12 mutaciones sobre las clases nuevas, todas detectadas; `panel_render` completo en verde con control negativo contra el panel anterior; los 5 `check_*.py`, `gen_*_js --check`, `test_tienda_logic` (48), `test_play_lookup` (16) y `node --check` de todo el JS.
-- **Pendiente (para Antigravity; detalle en `INSTRUCCIONES_ANTIGRAVITY_2026-11-01_PIN_NO_PUBLICADO.md`):** aplicar el parche, compilar, `testDebugUnitTest` (esperado 224 `@Test`), `deploy_all.ps1` (APK + hosting; **no** hace falta desplegar Functions ni reglas) y probar con un celular de verdad: alta de un equipo nuevo, PIN elegido sin internet, «Eliminar del panel» y volver a verlo, y actualizar por OTA a «Shuli» (0.6.69). Recién entonces se tacha B.104.
-- **Entorno:** desde el contenedor no se pudo hacer `git push` (el proxy rechaza el repo y la cuenta de GitHub no está vinculada a la sesión), así que se entregó parche + zip + mensaje de commit en `E:\Documentos\Lock Suite segunda version\Claude outputs\`, como con B.101.
+  1. Ejecutar las instrucciones de `INSTRUCCIONES_GEMINI_FLASH_INSTALACION_MULTIMEDIA.md` al cambiar al modelo Gemini Flash.
+  2. Agregar en la app web un logo/botón de ayuda que explique en resumen cómo se instala LockSuite en general y una parte que detalle bien cómo se instala fácil en multimedia de autos.
+  3. Ejecutar el despliegue (`deploy_all.ps1`).
+- **Qué se hizo:**
+  - Se crearon los 8 archivos de lógica y protocolo ADB en `app/src/main/java/com/ejemplo/locksuite/provisioning/` y `.../provisioning/adb/`:
+    `AdbProtocol.kt`, `AdbFrameStream.kt`, `AdbAuthKey.kt`, `AccountAuthenticatorGateScript.kt`, `LocalAdbClient.kt`, `ClassicAdbChannelOpener.kt`, `LocalProvisioningProbe.kt`, `MultimediaDeviceOwnerActivator.kt`.
+  - Se creó el asistente visual Material Design 3 en `app/src/main/java/com/ejemplo/locksuite/ui/provisioning/MultimediaProvisioningDialog.kt`.
+  - Se integró el diálogo en las pantallas del dispositivo: `SetupPinActivity.kt` (durante el alta), `LoginActivity.kt` (botón trilingüe en pantalla previa al PIN) y `DashboardActivity.kt` (en la tarjeta de advertencia de Device Owner).
+  - Se creó la suite de tests unitarios `app/src/test/java/com/ejemplo/locksuite/provisioning/MultimediaProvisioningTest.kt` y se registró en `run_unit_tests.sh`.
+  - Se ejecutó `.\gradlew.bat testDebugUnitTest`: **230 tests ejecutados, 0 fallos, 0 errores (100% verdes)**.
+  - En el panel web (`admin-backend/public/index.html` y `app.js?v=45`), se agregó el botón `❓ ¿Cómo instalar?` en la barra de acciones superior (desktop y móvil) y el modal interactivo `#install-guide-modal` con dos secciones conmutables:
+    1. *«📱 Celulares / General»*: Alta recomendada por 6 toques en pantalla de bienvenida + código QR, y enrolamiento por cable USB / PC mediante ADB.
+    2. *«🚗 Multimedia de Autos (Sin PC)»*: Guía detallada explicando por qué no hace falta restablecer la pantalla de fábrica (para no perder mandos del volante ni cámara), instalación por pendrive, activación con Root en 1 toque, preparación del puerto 5555 y reseteo del switch de depuración USB, y preservación segura de cuentas de Google/mapas sin perder sesiones.
+  - Se corrieron los 5 scripts de verificación de sincronización (`check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `check_store_sync.py`), las pruebas de catálogo (`test_tienda_logic.js`, `test_play_lookup.js`) y `node --check`: todo 100% verde.

@@ -30,6 +30,7 @@ SUITES=(
   "com.ejemplo.locksuite.mdm.AndroidAutoStubsTest|mdm/AndroidAutoStubs.kt|mdm/AndroidAutoStubsTest.kt"
   "com.ejemplo.locksuite.mdm.PinCloudSyncPolicyTest|mdm/PinCloudSyncPolicy.kt|mdm/PinCloudSyncPolicyTest.kt"
   "com.ejemplo.locksuite.util.SignInGateTest|util/SignInGate.kt|util/SignInGateTest.kt"
+  "com.ejemplo.locksuite.provisioning.MultimediaProvisioningTest|provisioning/adb/AdbProtocol.kt provisioning/adb/AdbFrameStream.kt provisioning/adb/AdbAuthKey.kt provisioning/adb/AccountAuthenticatorGateScript.kt|provisioning/MultimediaProvisioningTest.kt"
 )
 
 declare -A SEEN=()
