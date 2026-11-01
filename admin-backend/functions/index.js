@@ -1,6 +1,7 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
+const playLookup = require("./play_lookup");
 
 const FUNCTION_OPTIONS = {
   region: "us-central1",
@@ -67,6 +68,17 @@ const ALLOWED_COMMANDS = new Set([
   // panel lo manda dentro del mismo flujo de aprobacion que si cambia politicas y
   // pedir el PIN una sola vez para todo el flujo es lo correcto.
   "SYNC_APP_REQUESTS",
+  // ── TIENDA PLAY (29/10/2026, B.101) — ver app/mdm/PlayStoreManager.kt ──
+  // La tienda instala desde Google Play OFICIAL con la pantalla tapada (el mismo flujo
+  // de UPDATE_APP). Son dos comandos y ninguno lleva la lista de apps:
+  //   SET_PLAY_STORE_MODE -> el modo de ESTE equipo (cerrada/kosher/trabajo/lite). Viaja
+  //                          en `storeMode` y se valida aca abajo.
+  //   SYNC_PLAY_STORE     -> avisa que hay que releer el catalogo global
+  //                          (globalSettings/playStore/apps) y los extras de este equipo
+  //                          (devices/<id>/playStoreExtras). El catalogo no viaja por FCM:
+  //                          el data tiene tope de ~4 KB (misma leccion que SYNC_WHITELIST).
+  // Los dos EXIGEN PIN como el resto: abrir la tienda cambia que puede instalar el usuario.
+  "SET_PLAY_STORE_MODE", "SYNC_PLAY_STORE",
   // ── DETECTOR DE NAVEGADORES EMBEBIDOS (10/9/2026, B.60) ──
   // Ver app/mdm/EmbeddedBrowserDetector.kt. Son DOS interruptores separados a
   // proposito: encender el detector no alcanza para que bloquee. DISABLE_IAB_SIMULATION
@@ -243,7 +255,11 @@ const ACTION_COMMANDS = new Set([
   // semana apagado) ya no tiene sentido ejecutarla sola. Vence en un día como el resto.
   "UNINSTALL_LOCKSUITE",
   "SYNC_WHITELIST", "SYNC_APP_REQUESTS", "CLEAR_WHITELIST_AUDIT", "CLEAR_IAB_AUDIT",
+  // "Releé la tienda": el equipo lee el catálogo VIGENTE, no el de cuando se mandó.
+  "SYNC_PLAY_STORE",
 ]);
+// Modos de la Tienda Play (app/mdm/PlayStoreCatalog.kt, MODES). Ver SET_PLAY_STORE_MODE.
+const PLAY_STORE_MODES = new Set(["cerrada", "kosher", "trabajo", "lite"]);
 const MAILBOX_TTL_ACTION_MS = 24 * 60 * 60 * 1000;
 const MAILBOX_TTL_STATE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -358,7 +374,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
 
     const {
       deviceId, command, packages, devicePin, rememberDevice, newPin,
-      enabled, presetJson, profileId, level, graceMs, graceTarget, route
+      enabled, presetJson, profileId, level, graceMs, graceTarget, route, storeMode
     } = req.body || {};
 
     if (!deviceId || typeof deviceId !== "string") {
@@ -458,6 +474,18 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
         return;
       }
       payload.enabled = String(enabled);
+    } else if (command === "SET_PLAY_STORE_MODE") {
+      // La lista esta escrita a mano aca por la misma razon que LEVELS: la Function no
+      // puede leer el Kotlin, y un modo que el celular no reconozca lo CIERRA (falla
+      // cerrado: PlayStoreCatalog.normalizeMode). Mejor rechazarlo aca con la causa que
+      // dejar un celular con la tienda cerrada sin explicacion. Si se agrega un modo en
+      // PlayStoreCatalog.kt hay que agregarlo aca tambien (tools/check_profile_sync.py
+      // lo verifica).
+      if (typeof storeMode !== "string" || !PLAY_STORE_MODES.has(storeMode)) {
+        res.status(400).json({ error: `Modo de la Tienda Play desconocido: ${storeMode}` });
+        return;
+      }
+      payload.storeMode = storeMode;
     } else if (command === "APPLY_PRESET_PROFILE") {
       if (typeof presetJson !== "string" || presetJson.length === 0) {
         res.status(400).json({ error: "Falta el perfil a aplicar." });
@@ -477,7 +505,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       // el celular no reconozca se descarta alla sin decir nada. Si se agrega un
       // nivel en EnrollmentProfiles.kt hay que agregarlo aca tambien, y
       // tools/check_profile_sync.py lo verifica.
-      const LEVELS = new Set(["kosher_estricto", "trabajo", "base_minima", "gracia"]);
+      const LEVELS = new Set(["kosher_estricto", "trabajo", "base_minima", "gracia", "solo_llamadas", "lite"]);
       if (typeof level !== "string" || !LEVELS.has(level)) {
         res.status(400).json({ error: `Nivel de perfil desconocido: ${level}` });
         return;
@@ -502,7 +530,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
         // El perfil de cierre no puede ser la gracia misma: se reabriria sola para
         // siempre. Es el mismo tipo de rulo que GracePeriodManager evita al limpiar
         // el estado ANTES de aplicar el perfil destino.
-        const CIERRES = new Set(["kosher_estricto", "trabajo", "base_minima"]);
+        const CIERRES = new Set(["kosher_estricto", "trabajo", "base_minima", "solo_llamadas", "lite"]);
         const destino = typeof graceTarget === "string" ? graceTarget : "kosher_estricto";
         if (!CIERRES.has(destino)) {
           res.status(400).json({ error: `Perfil de cierre invalido: ${destino}` });
@@ -664,6 +692,52 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     res.json({ success: true, commandId, queued, delivered: true, channel: "fcm" });
   } catch (e) {
     console.error("sendCommandV3 error:", e);
+    const status = e.status || 500;
+    res.status(status).json({ error: e.message || "Error interno del servidor." });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TIENDA PLAY (29/10/2026, B.101) — "Verificar en Play".
+//
+// El panel manda hasta 40 paquetes y recibe, por cada uno, si Google Play lo tiene
+// (found / missing / unknown), con su nombre e ícono públicos. Solo para administradores
+// autorizados, igual que sendCommandV8. No escribe nada en la base: el panel decide qué
+// hace con la respuesta. Ver play_lookup.js para qué significa cada estado — "missing" NO
+// es una prueba de que la app no exista, y por eso el panel no la borra sola.
+// ─────────────────────────────────────────────────────────────────────────────
+exports.checkPlayApps = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 }, async (req, res) => {
+  Object.entries(CORS_HEADERS).forEach(([k, v]) => res.set(k, v));
+  if (req.method === "OPTIONS") {
+    res.status(204).send("");
+    return;
+  }
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Método no permitido" });
+    return;
+  }
+  try {
+    const authHeader = req.headers.authorization || "";
+    if (!authHeader.startsWith("Bearer ")) {
+      res.status(401).json({ error: "No autorizado: falta token de autenticación." });
+      return;
+    }
+    const decoded = await admin.auth().verifyIdToken(authHeader.slice(7));
+    await checkAdminByUid(decoded.uid, decoded);
+
+    const { packages } = req.body || {};
+    if (!Array.isArray(packages) || packages.length === 0) {
+      res.status(400).json({ error: "Falta la lista de paquetes." });
+      return;
+    }
+    if (typeof fetch !== "function") {
+      res.status(501).json({ error: "Este entorno no tiene fetch (hace falta Node 18 o más)." });
+      return;
+    }
+    const results = await playLookup.lookupMany(packages, fetch);
+    res.json({ success: true, results });
+  } catch (e) {
+    console.error("checkPlayApps error:", e);
     const status = e.status || 500;
     res.status(status).json({ error: e.message || "Error interno del servidor." });
   }

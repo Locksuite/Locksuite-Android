@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Ficha del celular — LockSuite</title>
   <link rel="stylesheet" href="styles.css?v=23" />
-  <link rel="stylesheet" href="panel2.css?v=3" />
+  <link rel="stylesheet" href="panel2.css?v=4" />
 </head>
 <body class="ls-body">
 
@@ -55,6 +55,7 @@
       <button data-sec="actualizaciones">⬆️ Actualizaciones <span class="ls-rail-count" id="cnt-upd"></span></button>
       <button data-sec="dns">🌐 DNS</button>
       <button data-sec="tienda">🏪 Tienda</button>
+      <button data-sec="tiendaplay">🛍️ Tienda Play <span class="ls-rail-count" id="cnt-tp"></span></button>
       <button data-sec="acciones">⚙️ Acciones</button>
       <button data-sec="diag">🩺 Diagnóstico</button>
     </nav>
@@ -193,6 +194,10 @@
         <h2>Políticas</h2>
         <p class="ls-lead">Los interruptores del sistema. Se marcan acá y se mandan todos juntos con
           el botón de abajo, en vez de esperar la confirmación del celular uno por uno.</p>
+        <!-- 29/10/2026 (B.101): el modo de la Tienda Play es una política de 4 valores (cerrada /
+             kosher / trabajo / lite), no un interruptor; por eso va aparte, arriba. El mismo
+             selector está en la sección «Tienda Play». -->
+        <div class="ls-card" id="c-pol-tienda"></div>
         <div class="ls-card">
           <div class="ls-row" style="margin-bottom:12px">
             <input class="ls-input" id="c-pol-buscar" placeholder="Buscar política…" style="flex:1 1 240px" />
@@ -310,6 +315,45 @@
         </div>
       </section>
 
+      <!-- ── TIENDA PLAY (B.101) ───────────────────────────────────────── -->
+      <section class="ls-section" data-sec="tiendaplay">
+        <h2>Tienda Play</h2>
+        <p class="ls-lead">Apps de Google Play que este celular puede instalar <b>sin poder evadir el filtro</b>:
+          al tocar «Instalar» la pantalla se tapa y Play trabaja por debajo, igual que en «Actualizar app».
+          El catálogo es <b>global</b> y se edita en <a href="tienda.html" target="_blank" rel="noopener">Tienda Play ↗</a>;
+          acá se elige el <b>modo</b> de este celular, se agregan apps <b>solo para él</b> y se resuelven sus pedidos.</p>
+        <div class="ls-card">
+          <h3>Modo de este celular</h3>
+          <div id="c-tp-modo"></div>
+        </div>
+        <div class="ls-card">
+          <h3>Lo que ve este celular</h3>
+          <div id="c-tp-vista"></div>
+        </div>
+        <div class="ls-card">
+          <h3>Apps extra solo para este celular</h3>
+          <p class="ls-hint">Se suman a las del modo, sin importar el nivel, y le ganan a la entrada global del
+            mismo paquete: «Bloqueada» acá esconde una app global solo de este usuario; «Habilitada» acá
+            aprueba una que en el catálogo está «a pedido». Con la tienda cerrada no hay tienda, tenga extras o no.</p>
+          <div id="c-tp-extras"></div>
+          <div class="ls-row" style="margin-top:12px">
+            <input class="ls-input" id="c-tp-nuevo" placeholder="com.paquete.de.la.app" style="flex:1 1 240px" />
+            <button class="ls-btn ls-btn-sm" id="c-tp-agregar">+ Agregar</button>
+          </div>
+          <div class="ls-row" style="margin-top:12px">
+            <button class="ls-btn ls-btn-primary" id="c-tp-guardar" disabled>Guardar y avisar al celular</button>
+            <button class="ls-btn" id="c-tp-descartar" disabled>Descartar</button>
+            <span class="ls-hint" id="c-tp-estado" style="margin:0"></span>
+          </div>
+        </div>
+        <div class="ls-card">
+          <h3>Pedidos de la Tienda Play</h3>
+          <p class="ls-hint">Apps «a pedido» que el usuario pidió con el botón «Pedir». Aprobar una la deja
+            habilitada solo para este celular.</p>
+          <div id="c-tp-pedidos"></div>
+        </div>
+      </section>
+
       <!-- ── ACCIONES ──────────────────────────────────────────────────── -->
       <section class="ls-section" data-sec="acciones">
         <h2>Acciones</h2>
@@ -386,7 +430,8 @@
   <script src="firebase-config.js"></script>
   <script src="catalog.js?v=2"></script>
   <script src="policies.js?v=1"></script>
-  <script src="comun.js?v=3"></script>
-  <script src="celular.js?v=7"></script>
+  <script src="comun.js?v=4"></script>
+  <script src="tienda_logic.js?v=2"></script>
+  <script src="celular.js?v=8"></script>
 </body>
 </html>

@@ -24,6 +24,7 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         try {
             com.ejemplo.locksuite.util.CommandMailbox.drainAsync(applicationContext, "FCM descartó mensajes")
             com.ejemplo.locksuite.util.FirebaseDeviceSync.pullWhitelistConfigAsync(applicationContext)
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.pullPlayStoreConfigAsync(applicationContext)
         } catch (e: Exception) {
             e.printStackTrace()
         }

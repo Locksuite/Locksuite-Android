@@ -12,13 +12,13 @@ mkdir -p "$DEST"
 PUB="$RAIZ/admin-backend/public"
 cp "$PUB"/*.html "$PUB"/*.js "$PUB"/*.css "$DEST"/
 cp -r "$PUB/images" "$DEST"/ 2>/dev/null || true
-cp "$AQUI"/fake-firebase.js "$AQUI"/fake-function.js "$AQUI"/test_panel.js "$AQUI"/test_ficha.js "$DEST"/
+cp "$AQUI"/fake-firebase.js "$AQUI"/fake-function.js "$AQUI"/test_panel.js "$AQUI"/test_ficha.js "$AQUI"/test_tienda.js "$DEST"/
 # El firebase-config.js real apunta al proyecto de verdad: acá se reemplaza.
 echo "firebase.initializeApp({});" > "$DEST/firebase-config.js"
 python3 - "$DEST" <<'PY'
 import re, sys, os
 d = sys.argv[1]
-for f in ("index.html", "celular.html", "dominios.html"):
+for f in ("index.html", "celular.html", "dominios.html", "tienda.html"):
     p = os.path.join(d, f)
     s = open(p, encoding="utf-8").read()
     # Sin los SDK de gstatic (no hay red); en su lugar, el Firebase falso.
@@ -34,3 +34,5 @@ echo "== Barra lateral (index.html + app.js)"
 node test_panel.js
 echo "== Ficha completa (celular.html + comun.js + celular.js)"
 node test_ficha.js
+echo "== Tienda Play (tienda.html + tienda_logic.js + tienda.js)"
+node test_tienda.js

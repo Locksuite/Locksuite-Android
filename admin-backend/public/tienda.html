@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Tienda Play — LockSuite</title>
+  <link rel="stylesheet" href="styles.css?v=23" />
+  <link rel="stylesheet" href="panel2.css?v=4" />
+  <style>
+    /* Solo lo que esta página necesita y panel2.css no trae. */
+    .tp-tier { margin: 22px 0 8px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .tp-tier h2 { margin: 0; font-size: 15px; }
+    .tp-tier small { color: var(--text-muted); font-size: 12px; }
+    .tp-icon {
+      width: 40px; height: 40px; border-radius: 10px; flex: 0 0 40px; object-fit: cover;
+      background: var(--navy-light); color: var(--accent); font-weight: 800; font-size: 18px;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+    }
+    .tp-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding-top: 12px; }
+    .tp-fields label { display: block; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
+    .tp-fields .ls-input, .tp-fields .ls-select, .tp-fields textarea { width: 100%; }
+    .tp-fields textarea {
+      min-height: 64px; resize: vertical; font-family: monospace; font-size: 12px;
+      background: var(--navy-dark); color: var(--text-light); border: 1px solid var(--navy-light);
+      border-radius: 8px; padding: 8px 10px;
+    }
+    .tp-wide { grid-column: 1 / -1; }
+    .tp-warn { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; font-size: 12.5px; line-height: 1.5;
+      background: rgba(245,158,11,.12); color: var(--warning-yellow); }
+    .tp-modes { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+    .tp-mode { background: var(--navy-dark); border: 1px solid var(--navy-border); border-radius: 10px; padding: 10px 14px; min-width: 150px; }
+    .tp-mode b { display: block; font-size: 13px; }
+    .tp-mode small { color: var(--text-gray); font-size: 12px; }
+    .tp-skipped { font-size: 12.5px; color: var(--text-gray); margin: 6px 0 0; line-height: 1.6; }
+    .tp-skipped code { color: var(--text-light); }
+    .ls-approw .tp-toggle { background: none; border: none; color: var(--accent-cyan); cursor: pointer; font-size: 12px; padding: 4px 6px; }
+    @media (max-width: 720px) { .ls-main { padding-left: 12px !important; padding-right: 12px !important; } }
+  </style>
+</head>
+<body class="ls-body">
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       TIENDA PLAY — catálogo GLOBAL (29/10/2026, B.101).
+
+       Pedido del dueño: una tienda de apps que se instala desde el Google Play
+       OFICIAL pero sin que el usuario pueda evadir el filtro (el mismo mecanismo de
+       "actualizar apps": pantalla tapada, Play por debajo, solo ese paquete).
+       Acá se arma la lista que rige para TODOS los equipos, en 3 niveles acumulativos
+       (1 Kosher ⊂ 2 Trabajo ⊂ 3 Lite).
+
+       Segundo pedido (30/10/2026): que por defecto aparezcan las apps que ya están en
+       la tienda vieja de LockSuite (las que hay en Play) y poder habilitar, bloquear,
+       dejar «solo a pedido» o eliminar cada una desde acá.
+       ══════════════════════════════════════════════════════════════════════ -->
+
+  <header class="ls-top">
+    <div>
+      <h1>Tienda Play</h1>
+      <div class="ls-sub">Configuración GLOBAL — rige para toda la flota</div>
+    </div>
+    <span class="ls-chip warn" id="t-pend">cargando…</span>
+    <div class="ls-top-spacer"></div>
+    <input class="ls-input" id="t-buscar" type="search" placeholder="Buscar app o paquete…" style="width:min(320px,42vw)" />
+    <a class="ls-btn ls-btn-sm" href="index.html">← Panel</a>
+  </header>
+
+  <div class="ls-layout">
+    <main class="ls-main" style="padding-left:24px">
+
+      <div class="ls-card" style="border-left:4px solid var(--accent)">
+        <h3>Cómo funciona</h3>
+        <p class="ls-hint" style="margin:0">
+          La Tienda Play lista las apps que vos permitís. Al tocar <b>Instalar</b>, el celular abre
+          Google Play OFICIAL y la instala con la pantalla tapada (el mismo mecanismo que «Actualizar
+          app»): el usuario nunca ve Play ni elige qué instalar, así que no hay forma de evadir el
+          filtro. Cada celular tiene un <b>modo</b> (Políticas, o lo fija el perfil automático) que
+          decide hasta qué nivel ve:
+          <b>Kosher</b> = nivel 1 · <b>Trabajo</b> = niveles 1 y 2 · <b>Lite</b> = niveles 1, 2 y 3 ·
+          <b>Cerrada</b> = no hay tienda. Una app se carga <i>una vez</i>, en el nivel más bajo en el
+          que tiene que aparecer.
+        </p>
+        <p class="ls-hint" style="margin:10px 0 0">
+          Cada app tiene un <b>estado</b>:
+          <span class="ls-chip ok">Habilitada</span> se muestra con «Instalar» ·
+          <span class="ls-chip warn">A pedido</span> se muestra con «Pedir» y solo se puede instalar
+          si aprobás el pedido de ESE usuario (en 🔔 Pedidos) ·
+          <span class="ls-chip bad">Bloqueada</span> no se muestra ni se instala (y si la tienda ya
+          la instaló, el celular la pausa). <b>Eliminar</b> la saca de la lista.
+          El <b>acceso</b> decide qué pasa con la app ya instalada: completa, sin web (aparece como
+          «Sin web» en Aplicaciones) o con dominios permitidos / prohibidos propios.
+        </p>
+      </div>
+
+      <div class="ls-card" id="t-seed" style="display:none; border-left:4px solid var(--accent-cyan)">
+        <h3>Lista inicial: las apps de la tienda vieja</h3>
+        <p class="ls-hint" style="margin:0" id="t-seed-text"></p>
+        <div class="tp-skipped" id="t-skipped"></div>
+      </div>
+
+      <div class="ls-card">
+        <h3>Qué ve cada modo</h3>
+        <div class="tp-modes" id="t-resumen"></div>
+        <p class="ls-hint" style="margin:10px 0 0" id="t-resumen-nota"></p>
+      </div>
+
+      <div class="ls-card">
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center">
+          <select class="ls-select" id="t-f-nivel">
+            <option value="todos">Todos los niveles</option>
+            <option value="1">Nivel 1 — Kosher</option>
+            <option value="2">Nivel 2 — Trabajo</option>
+            <option value="3">Nivel 3 — Lite</option>
+          </select>
+          <select class="ls-select" id="t-f-estado">
+            <option value="todos">Todos los estados</option>
+            <option value="enabled">Solo habilitadas</option>
+            <option value="request">Solo a pedido</option>
+            <option value="blocked">Solo bloqueadas</option>
+            <option value="nopaly">Solo las que no aparecen en Play</option>
+          </select>
+          <button class="ls-btn ls-btn-sm" id="t-agregar">+ Agregar una app</button>
+          <button class="ls-btn ls-btn-sm" id="t-vieja">↩ Traer de la tienda vieja</button>
+          <button class="ls-btn ls-btn-sm" id="t-verificar">🔎 Verificar en Play</button>
+          <button class="ls-btn ls-btn-sm ls-btn-danger" id="t-quitar-noplay" style="display:none"></button>
+          <div class="ls-top-spacer"></div>
+          <button class="ls-btn ls-btn-primary" id="t-enviar">📤 Enviar a todos los celulares</button>
+        </div>
+        <p class="ls-hint" style="margin:10px 0 0" id="t-verif-estado"></p>
+      </div>
+
+      <div id="t-apps"></div>
+
+      <div class="ls-card" id="t-envio-card" style="display:none">
+        <h3>Envío</h3>
+        <div class="ls-progress" id="t-envio"></div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Barra de cambios sin guardar -->
+  <div class="ls-cart" id="t-cart">
+    <b id="t-cart-n">Cambios sin guardar</b>
+    <span class="ls-cart-detail" id="t-cart-detalle"></span>
+    <button class="ls-btn" id="t-descartar">Descartar</button>
+    <button class="ls-btn ls-btn-primary" id="t-guardar">Guardar</button>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="catalog.js?v=2"></script>
+  <script src="comun.js?v=4"></script>
+  <script src="tienda_logic.js?v=2"></script>
+  <script src="tienda.js?v=1"></script>
+</body>
+</html>

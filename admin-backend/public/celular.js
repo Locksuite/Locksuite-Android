@@ -102,6 +102,8 @@
     allowedPackages: [],   // globalSettings/allowedPackages (tienda)
     storeApps: {},         // storeApps
     presets: {},           // presets guardados
+    tpGlobal: [],          // globalSettings/playStore/apps como filas (TiendaLogic.rowsFromSaved)
+    tp: { trabajo: null }, // apps extra de este celular que se están editando (null = nada sin guardar)
     installed: [],         // apps instaladas reportadas por el equipo (solo paquetes)
     instaladas: {},        // paquete -> datos que reporta el equipo (devices/<id>/apps)
     // Carrito
@@ -1129,7 +1131,14 @@
       desc: "Solo el piso anti-manipulación.", aviso: "" },
     { id: "gracia", nombre: "Nivel 4 — Período de gracia",
       desc: "Cierra lo claramente no kosher y deja lo dudoso abierto por un plazo. Mientras tanto, anota qué usa esta persona para completar el catálogo.",
-      aviso: "Al vencer, se cierra solo. El plazo lo aguantan dos relojes, así que atrasar la hora del equipo no lo estira." }
+      aviso: "Al vencer, se cierra solo (aplica el Nivel 1) y la Tienda Play queda en modo Kosher. El plazo lo aguantan dos relojes, así que atrasar la hora del equipo no lo estira." },
+    // 29/10/2026 (B.101). Los números 5 y 6 NO siguen el orden: se agregaron después y los viejos no se renumeran.
+    { id: "solo_llamadas", nombre: "Nivel 5 — Solo llamadas",
+      desc: "Las protecciones del Nivel 1, con la Tienda Play CERRADA: no se puede instalar nada desde la tienda.",
+      aviso: "⚠️ Como el Nivel 1, bloquea el cambio de cuentas y de idioma: aplicalo DESPUÉS de agregar la cuenta de Google y fijar el idioma." },
+    { id: "lite", nombre: "Nivel 6 — Lite",
+      desc: "Las protecciones del Nivel 2 (Trabajo), con la Tienda Play abierta COMPLETA (niveles 1, 2 y 3).",
+      aviso: "Bloquea el cambio de idioma del sistema: dejá el equipo en el idioma definitivo antes de aplicarlo." }
   ];
 
   function pintarPerfiles() {
@@ -1185,7 +1194,7 @@
       "<h3>⏳ Período de gracia activo</h3>" +
       '<p class="ls-hint">Faltan <b>' + h + " h " + m + " min</b>" +
       (hasta ? " (vence " + LS.fecha(hasta) + ")" : "") + ". " +
-      "Al vencer se aplica el perfil de cierre y la Tienda se cierra.</p>" +
+      "Mientras dura, la Tienda Play está abierta completa; al vencer se aplica el perfil de cierre (por omisión el Nivel 1) y la Tienda Play queda en modo Kosher.</p>" +
       '<button class="ls-btn" id="c-gracia-cancelar">Cancelar el vencimiento</button></div>';
     $("c-gracia-cancelar").addEventListener("click", async function () {
       if (!confirm("¿Cancelar el vencimiento?\n\nEl equipo se queda como está ahora, sin cerrar.")) return;
@@ -2017,7 +2026,11 @@
   });
 
   function pintarPedidos() {
-    const pedidos = campo("appRequests", {}) || {};
+    // Los pedidos de la Tienda Play (`store:"play"`) se resuelven en SU sección: aprobarlos acá los
+    // permitiría en el Filtro de apps, que no es lo que se pidió (ver «Tienda Play»).
+    const todos = campo("appRequests", {}) || {};
+    const pedidos = {};
+    Object.keys(todos).forEach((k) => { if (!todos[k] || todos[k].store !== "play") pedidos[k] = todos[k]; });
     if (!cambio("pedidos", pedidos)) return;
     const keys = Object.keys(pedidos);
     if (!keys.length) {
@@ -2075,6 +2088,380 @@
   });
 
   /* ═════════════════════════════════════════════════════════════════════════
+   * TIENDA PLAY (29/10/2026, B.101)
+   *
+   * Lo POR USUARIO de la Tienda Play. El catálogo (qué apps hay, en qué nivel, con qué
+   * acceso y en qué estado) es GLOBAL y se edita en tienda.html; acá solo hay tres cosas
+   * de ESTE celular:
+   *
+   *   1. El MODO: cerrada / kosher / trabajo / lite → comando SET_PLAY_STORE_MODE. Un perfil
+   *      automático también lo fija (Nivel 1 → kosher, 2 → trabajo, 4 → lite mientras dura,
+   *      5 → cerrada, 6 → lite); lo que se elija acá rige hasta que se aplique otro perfil.
+   *   2. Las apps EXTRA de este celular (`devices/<id>/playStoreExtras`): se suman a las del
+   *      modo sin importar el nivel y le ganan a la entrada global del mismo paquete.
+   *   3. Los PEDIDOS de las apps «a pedido» (`devices/<id>/appRequests/*` con `store:"play"`).
+   *      Aprobar uno = guardar un extra HABILITADO de esa app (TiendaLogic.approveRequest),
+   *      nunca permitirla en el catálogo global ni en `allowedPackages`: sería habilitarla
+   *      para toda la flota.
+   *
+   * La vista «Lo que ve este celular» se CALCULA en el panel con el mismo criterio que
+   * `PlayStoreCatalog.listed` (TiendaLogic.listedFor, con su banco de pruebas) usando el
+   * modo que el celular INFORMA (`info.playStore.mode`); no es lo que el celular tiene
+   * "en este instante", y por eso lleva el aviso de cuándo leyó su catálogo.
+   * ═══════════════════════════════════════════════════════════════════════ */
+  const TL = window.TiendaLogic;
+  const MODOS_TIENDA = [
+    { id: "cerrada", nombre: "Cerrada", desc: "no hay tienda" },
+    { id: "kosher", nombre: "Kosher", desc: "nivel 1" },
+    { id: "trabajo", nombre: "Trabajo", desc: "niveles 1 y 2" },
+    { id: "lite", nombre: "Lite", desc: "niveles 1, 2 y 3" }
+  ];
+  const ESTADOS_TIENDA = [["enabled", "Habilitada"], ["request", "A pedido"], ["blocked", "Bloqueada"]];
+  const ACCESOS_TIENDA = [["full", "Completa"], ["noweb", "Sin web"], ["domains", "Dominios propios"]];
+
+  /** El modo que INFORMA el celular (`info.playStore.mode`), o null si todavía no informó ninguno. */
+  function modoTienda() {
+    const ps = campo("playStore", null);
+    return ps && typeof ps.mode === "string" ? TL.normalizeMode(ps.mode) : null;
+  }
+  const extrasGuardados = () => TL.rowsFromSaved(S.device.playStoreExtras, { extra: true });
+  const extrasEnPantalla = () => S.tp.trabajo || extrasGuardados();
+  const extrasSucios = () => !!S.tp.trabajo && TL.signature(S.tp.trabajo) !== TL.signature(extrasGuardados());
+
+  /** El estado de la tienda que el celular publica en su nodo (`info.playStore`). */
+  function infoTienda() {
+    const ps = campo("playStore", null);
+    return ps && typeof ps === "object" ? ps : {};
+  }
+  const listaDe = (x) => (Array.isArray(x) ? x : (x && typeof x === "object" ? Object.keys(x).map((k) => x[k]) : []));
+
+  function pintarModoTienda() {
+    const modo = modoTienda();
+    const ps = infoTienda();
+    if (!cambio("tp-modo", [modo, ps.updatedAt || 0, nombreDispositivo()])) return;
+    const botones = MODOS_TIENDA.map((m) =>
+      '<button data-tp-modo="' + m.id + '" class="' + (modo === m.id ? (m.id === "cerrada" ? "on-block" : "on-allow") : "") +
+      '" title="' + esc(m.desc) + '">' + esc(m.nombre) + "</button>").join("");
+    const actual = MODOS_TIENDA.find((m) => m.id === modo);
+    const html =
+      '<div class="ls-seg">' + botones + "</div>" +
+      '<p class="ls-hint" style="margin:10px 0 0">' + (actual
+        ? "Modo actual: <b>" + esc(actual.nombre) + "</b> (" + esc(actual.desc) + ")" +
+          (ps.updatedAt ? " · el celular leyó su catálogo " + esc(LS.fecha(ps.updatedAt)) : "") + "."
+        : "Este celular todavía no informó el modo de su Tienda Play (LockSuite anterior a la Tienda Play, " +
+          "o no sincronizó desde que se actualizó).") + "</p>" +
+      '<p class="ls-hint" style="margin:6px 0 0">Los perfiles automáticos (Niveles 1, 2, 4, 5 y 6) también fijan el modo: ' +
+      "lo que elijas acá rige hasta que se aplique otro perfil. Cambiar el modo no desinstala nada; las apps que " +
+      "dejen de estar ofrecidas se <b>pausan</b>.</p>";
+    $("c-tp-modo").innerHTML = html;
+    $("c-pol-tienda").innerHTML = "<h3>🛍️ Tienda Play</h3>" + html;
+  }
+
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-tp-modo]");
+    if (!b) return;
+    const m = MODOS_TIENDA.find((x) => x.id === b.dataset.tpModo);
+    if (!m) return;
+    if (!confirm("¿Poner la Tienda Play de " + nombreDispositivo() + " en modo «" + m.nombre + "» (" + m.desc + ")?\n\n" +
+      "Cambia lo que la tienda ofrece. Lo ya instalado no se desinstala: las apps que dejen de estar " +
+      "ofrecidas se pausan, y vuelven solas si se vuelven a ofrecer.")) return;
+    b.disabled = true;
+    const r = await LS.sendCommand(deviceId, "SET_PLAY_STORE_MODE", null, { storeMode: m.id }, opc({ timeoutMs: 20000 }));
+    b.disabled = false;
+    LS.toast(...LS.resultado(r, "Modo de la Tienda Play cambiado a «" + m.nombre + "»."));
+  });
+
+  /* ── Lo que ve este celular ───────────────────────────────────────────── */
+  function pintarVistaTienda() {
+    const modo = modoTienda();
+    const ps = infoTienda();
+    const extras = extrasGuardados();
+    if (!cambio("tp-vista", [modo, S.tpGlobal, extras, ps.installedByStore || null, ps.paused || null, S.installed,
+      S.appPolicy, S.globalDecisions])) return;
+    const cont = $("c-tp-vista");
+    if (modo === null) {
+      $("cnt-tp").textContent = "";
+      cont.innerHTML = '<p class="ls-empty">Este celular todavía no informó el modo de su Tienda Play, así que no se puede calcular qué ve.</p>';
+      return;
+    }
+    if (modo === "cerrada") {
+      $("cnt-tp").textContent = "0";
+      cont.innerHTML = '<p class="ls-empty">Tienda cerrada: este celular no tiene Tienda Play (tenga extras o no).</p>';
+      return;
+    }
+    const lista = TL.listedFor(modo, S.tpGlobal, extras);
+    const porLaTienda = new Set(listaDe(ps.installedByStore));
+    const pausadas = new Set(listaDe(ps.paused));
+    const instaladas = new Set(S.installed);
+    const extraPkgs = new Set(extras.map((x) => x.pkg));
+    // Lo que la lista blanca prohíbe NO se ofrece, aunque esté en el catálogo (igual que en el celular).
+    const prohibida = (pkg) => estadoDe(pkg) === "block";
+    const instalables = lista.filter((r) => r.status === "enabled" && !prohibida(r.pkg)).length;
+    const pedibles = lista.filter((r) => r.status === "request" && !prohibida(r.pkg)).length;
+    $("cnt-tp").textContent = String(instalables + pedibles);
+    if (!lista.length) {
+      cont.innerHTML = '<p class="ls-empty">Con el modo ' + esc(modo) + ' no hay ninguna app para mostrar. ' +
+        'Cargalas en <a href="tienda.html" target="_blank" rel="noopener">Tienda Play ↗</a>.</p>';
+      return;
+    }
+    cont.innerHTML =
+      '<p class="ls-hint" style="margin:0 0 10px">Con el modo <b>' + esc(modo) + "</b> la tienda de este celular muestra <b>" +
+      (instalables + pedibles) + "</b> apps: " + instalables + " para instalar y " + pedibles + " «a pedido».</p>" +
+      '<div class="ls-tablewrap"><table class="ls-table"><thead><tr><th>App</th><th>En la tienda</th><th>Origen</th><th>Acceso</th><th>En el celular</th></tr></thead><tbody>' +
+      lista.map((r) => {
+        const bloqueaFiltro = prohibida(r.pkg);
+        const enLaTienda = bloqueaFiltro
+          ? '<span class="ls-chip bad" title="Está prohibida en Filtro de apps: la tienda no la ofrece">prohibida en el filtro</span>'
+          : r.status === "enabled" ? '<span class="ls-chip ok">Instalar</span>' : '<span class="ls-chip warn">Pedir</span>';
+        const origen = extraPkgs.has(r.pkg) ? '<span class="ls-chip warn">extra de este celular</span>' : '<span class="ls-chip">nivel ' + r.tier + "</span>";
+        const acceso = r.access === "noweb" ? '<span class="ls-chip warn">sin web</span>'
+          : r.access === "domains" ? '<span class="ls-chip warn">dominios propios</span>' : '<span class="ls-chip">completa</span>';
+        const enCel = pausadas.has(r.pkg) ? '<span class="ls-chip warn">pausada</span>'
+          : porLaTienda.has(r.pkg) ? '<span class="ls-chip ok">instalada por la tienda</span>'
+          : instaladas.has(r.pkg) ? '<span class="ls-chip">instalada</span>'
+          : '<span style="color:var(--text-muted)">no instalada</span>';
+        return "<tr><td><b>" + esc(r.label) + '</b><br><span class="ls-apppkg">' + esc(r.pkg) + "</span></td><td>" +
+          enLaTienda + "</td><td>" + origen + "</td><td>" + acceso + "</td><td>" + enCel + "</td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
+
+  /* ── Apps extra de este celular ───────────────────────────────────────── */
+  function pintarExtrasTienda() {
+    const guardadas = extrasGuardados();
+    const filas = extrasEnPantalla();
+    const sucio = extrasSucios();
+    const estado = $("c-tp-estado");
+    $("c-tp-guardar").disabled = !sucio;
+    $("c-tp-descartar").disabled = !sucio;
+    estado.textContent = sucio ? "Hay cambios sin guardar." : "";
+    if (!cambio("tp-extras", [guardadas, S.tp.trabajo, S.tpGlobal])) return;
+    const cont = $("c-tp-extras");
+    if (!filas.length) {
+      cont.innerHTML = '<p class="ls-empty">Este celular no tiene apps extra.</p>';
+      return;
+    }
+    cont.innerHTML = filas.map((r) => {
+      const g = S.tpGlobal.find((x) => x.pkg === r.pkg);
+      const chips = [];
+      chips.push(g ? '<span class="ls-chip" title="Este extra reemplaza a la entrada del catálogo global">pisa la global (' +
+        esc((ESTADOS_TIENDA.find((x) => x[0] === g.status) || ["", g.status])[1]) + ")</span>"
+        : '<span class="ls-chip">no está en el catálogo global</span>');
+      if (!guardadas.some((x) => x.pkg === r.pkg)) chips.push('<span class="ls-chip warn">sin guardar</span>');
+      const opts = (lista, v) => lista.map((o) => '<option value="' + o[0] + '"' + (o[0] === v ? " selected" : "") + ">" + o[1] + "</option>").join("");
+      return '<div class="ls-approw st-' + (r.status === "enabled" ? "allow" : r.status === "blocked" ? "block" : "req") + '" data-tp-pkg="' + esc(r.pkg) + '">' +
+        '<div class="ls-apphead"><div class="ls-appgrow">' +
+        '<div class="ls-appname">' + esc(r.label) + "</div>" +
+        '<div class="ls-apppkg">' + esc(r.pkg) + "</div>" +
+        '<div class="ls-chiprow">' + chips.join("") + "</div></div>" +
+        '<select class="ls-select" data-tp-f="status" title="Estado en este celular">' + opts(ESTADOS_TIENDA, r.status) + "</select>" +
+        '<select class="ls-select" data-tp-f="access" title="Acceso">' + opts(ACCESOS_TIENDA, r.access) + "</select>" +
+        '<button class="ls-btn ls-btn-sm ls-btn-danger" data-tp-del="1">Eliminar</button></div>' +
+        '<div class="ls-appbody"><div class="ls-row" style="align-items:flex-start; gap:12px; flex-wrap:wrap">' +
+        '<div style="flex:1 1 220px"><div class="ls-domtitle">Nombre que ve el usuario</div>' +
+        '<input class="ls-input" data-tp-f="label" maxlength="60" value="' + esc(r.label) + '" style="width:100%" /></div>' +
+        (r.access === "domains"
+          ? '<div style="flex:1 1 220px"><div class="ls-domtitle">Permitidos (uno por renglón)</div>' +
+            '<textarea class="ls-input" data-tp-f="allow" rows="3" style="width:100%; font-family:monospace">' + esc(r.allow.join("\n")) + "</textarea></div>" +
+            '<div style="flex:1 1 220px"><div class="ls-domtitle">Prohibidos (uno por renglón)</div>' +
+            '<textarea class="ls-input" data-tp-f="block" rows="3" style="width:100%; font-family:monospace">' + esc(r.block.join("\n")) + "</textarea></div>"
+          : "") +
+        "</div></div></div>";
+    }).join("");
+  }
+
+  /** Toda edición de los extras parte de una COPIA de lo guardado: el celular reescribe su nodo seguido. */
+  function editarExtras(fn) {
+    if (!S.tp.trabajo) {
+      S.tp.trabajo = extrasGuardados().map((r) => Object.assign({}, r, { allow: r.allow.slice(), block: r.block.slice() }));
+    }
+    fn(S.tp.trabajo);
+    pintarExtrasTienda();
+  }
+
+  $("c-tp-extras").addEventListener("change", (e) => {
+    const campoEl = e.target.closest("[data-tp-f]");
+    const fila = e.target.closest("[data-tp-pkg]");
+    if (!campoEl || !fila) return;
+    const pkg = fila.dataset.tpPkg;
+    const f = campoEl.dataset.tpF;
+    editarExtras((filas) => {
+      const r = filas.find((x) => x.pkg === pkg);
+      if (!r) return;
+      if (f === "label") { r.label = TL.cleanLabel(campoEl.value, r.pkg); r.labelSet = true; }
+      else if (f === "status") r.status = TL.parseStatus(campoEl.value) || r.status;
+      else if (f === "access") r.access = TL.parseAccess(campoEl.value) || r.access;
+      else if (f === "allow" || f === "block") {
+        const res = TL.cleanDomains(TL.splitDomainText(campoEl.value));
+        r[f] = res.domains;
+        if (res.rejected.length) LS.toast("No se entendió como dominio: " + res.rejected.slice(0, 5).join(", ") + ". Se descartó.", "warn");
+      }
+    });
+  });
+
+  $("c-tp-extras").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-tp-del]");
+    const fila = e.target.closest("[data-tp-pkg]");
+    if (!b || !fila) return;
+    editarExtras((filas) => {
+      const i = filas.findIndex((x) => x.pkg === fila.dataset.tpPkg);
+      if (i >= 0) filas.splice(i, 1);
+    });
+  });
+
+  $("c-tp-agregar").addEventListener("click", () => {
+    const pkg = $("c-tp-nuevo").value.trim();
+    if (!pkg) return;
+    if (!TL.isValidPackage(pkg)) { LS.toast("Ese no parece un nombre de paquete válido.", "error"); return; }
+    if (TL.isNeverOffered(pkg)) { LS.toast("Esa app no se puede ofrecer en la tienda (es del sistema, de Google Play o de LockSuite).", "error"); return; }
+    if (extrasEnPantalla().some((x) => x.pkg === pkg)) { LS.toast("Esa app ya está entre los extras.", "warn"); return; }
+    const g = S.tpGlobal.find((x) => x.pkg === pkg);
+    editarExtras((filas) => {
+      // Si la app ya está en el catálogo global, el extra arranca copiándola (nombre, acceso, dominios): lo
+      // único que se quiere cambiar casi siempre es el estado. Si no, entra habilitada con acceso completo.
+      filas.push(TL.makeRow(g
+        ? { pkg: pkg, label: g.label, labelSet: true, tier: 0, access: g.access, status: g.status === "blocked" ? "enabled" : g.status,
+            allow: g.allow, block: g.block, iconUrl: g.iconUrl, origin: "new" }
+        : { pkg: pkg, tier: 0, access: "full", status: "enabled", origin: "new" }));
+      filas.sort(TL.byLabel);
+    });
+    $("c-tp-nuevo").value = "";
+    if (!g) completarDesdePlay(pkg);
+  });
+
+  /**
+   * Una app agregada solo por su paquete se llamaría «Music» (lo último del paquete). Se le pregunta a
+   * Google Play —por la Cloud Function, igual que «Verificar en Play» de la pantalla global— su nombre
+   * real y su ícono. Mejor esfuerzo: si falla, el nombre se escribe a mano. Nunca pisa un nombre que
+   * alguien ya escribió (`labelSet`), y si entretanto se descartó la edición no hace nada.
+   */
+  async function completarDesdePlay(pkg) {
+    try {
+      const res = await LS.checkPlayApps([pkg]);
+      const fila = S.tp.trabajo && S.tp.trabajo.find((x) => x.pkg === pkg);
+      if (!fila) return;
+      TL.applyPlayCheck([fila], res);
+      pintarExtrasTienda();
+    } catch (_) { /* sin Play el nombre se escribe a mano */ }
+  }
+
+  $("c-tp-descartar").addEventListener("click", () => {
+    if (!confirm("¿Descartar los cambios de las apps extra sin guardar?")) return;
+    S.tp.trabajo = null;
+    pintarExtrasTienda();
+  });
+
+  $("c-tp-guardar").addEventListener("click", async function () {
+    if (!extrasSucios()) return;
+    const p = TL.buildPayload(S.tp.trabajo, { extra: true });
+    if (p.problems.length) {
+      const lista = p.problems.slice(0, 10).map((x) => "• " + x).join("\n") +
+        (p.problems.length > 10 ? "\n… y " + (p.problems.length - 10) + " más" : "");
+      if (!confirm("Antes de guardar:\n\n" + lista + "\n\n¿Guardar igual?")) return;
+    }
+    this.disabled = true;
+    try {
+      await LS.db.ref("devices/" + deviceId + "/playStoreExtras").set(Object.keys(p.apps).length ? p.apps : null);
+    } catch (err) {
+      LS.toast("No se pudo guardar: " + err.message, "error");
+      this.disabled = false;
+      return;
+    }
+    S.tp.trabajo = null;
+    pintarExtrasTienda();
+    const r = await LS.sendCommand(deviceId, "SYNC_PLAY_STORE", null, null, opc({ timeoutMs: 20000 }));
+    LS.toast(...LS.resultado(r, "Guardado y aplicado en el celular."));
+  });
+
+  /* ── Pedidos de la Tienda Play ────────────────────────────────────────── */
+  const esPedidoPlay = (p) => !!p && p.store === "play";
+
+  function pintarPedidosTienda() {
+    const todos = campo("appRequests", {}) || {};
+    if (!cambio("tp-pedidos", [todos, S.tpGlobal])) return;
+    const keys = Object.keys(todos).filter((k) => esPedidoPlay(todos[k]));
+    if (!keys.length) {
+      $("c-tp-pedidos").innerHTML = '<p class="ls-empty">Sin pedidos de la Tienda Play.</p>';
+      return;
+    }
+    keys.sort((a, b) => (((todos[a] || {}).status === "pending" ? 0 : 1) - ((todos[b] || {}).status === "pending" ? 0 : 1)) ||
+      (((todos[a] || {}).requestedAt || 0) - ((todos[b] || {}).requestedAt || 0)));
+    $("c-tp-pedidos").innerHTML = keys.map((k) => {
+      const p = todos[k] || {};
+      const pkg = p.packageName || LS.keyPkg(k);
+      const pendiente = (p.status || "pending") === "pending";
+      const etiqueta = p.status === "approved" ? '<span class="ls-chip ok">aprobada</span>'
+        : p.status === "rejected" ? '<span class="ls-chip bad">rechazada</span>' : '<span class="ls-chip warn">esperando</span>';
+      const g = S.tpGlobal.find((x) => x.pkg === pkg);
+      return '<div class="ls-polrow"><label><b>' + esc(p.label || pkg) + "</b> " + etiqueta + "<br>" +
+        '<span class="ls-apppkg">' + esc(pkg) + "</span>" +
+        (g ? "" : ' · <span style="color:var(--warning-yellow)">ya no está en el catálogo global</span>') +
+        (p.requestedAt ? " · " + esc(LS.fecha(p.requestedAt)) : "") +
+        (p.note ? '<br><i>«' + esc(p.note) + "»</i>" : "") + "</label>" +
+        (pendiente
+          ? '<span><button class="ls-btn ls-btn-sm" data-tp-aprobar="' + esc(k) + '">Aprobar</button> ' +
+            '<button class="ls-btn ls-btn-sm ls-btn-danger" data-tp-rechazar="' + esc(k) + '">Rechazar</button></span>'
+          : "") + "</div>";
+    }).join("");
+  }
+
+  $("c-tp-pedidos").addEventListener("click", async (e) => {
+    const ap = e.target.closest("[data-tp-aprobar]");
+    const re = e.target.closest("[data-tp-rechazar]");
+    const key = ap ? ap.dataset.tpAprobar : re ? re.dataset.tpRechazar : null;
+    if (!key) return;
+    const p = (campo("appRequests", {}) || {})[key];
+    if (!esPedidoPlay(p)) return;
+    const pkg = p.packageName || LS.keyPkg(key);
+    const btn = ap || re;
+    if (re) {
+      btn.disabled = true;
+      try {
+        await LS.db.ref("devices/" + deviceId + "/appRequests/" + key).update({ status: "rejected", resolvedAt: Date.now(), notified: false });
+        const r = await LS.sendCommand(deviceId, "SYNC_APP_REQUESTS", null, null, opc());
+        LS.toast(...LS.resultado(r, "Pedido rechazado y avisado al celular."));
+      } catch (err) { LS.toast("No se pudo: " + err.message, "error"); }
+      btn.disabled = false;
+      return;
+    }
+    if (extrasSucios()) {
+      LS.toast("Hay cambios sin guardar en las apps extra: guardalos o descartalos antes de aprobar un pedido.", "warn");
+      return;
+    }
+    const g = S.tpGlobal.find((x) => x.pkg === pkg);
+    if (g && g.status === "blocked" &&
+      !confirm("«" + (p.label || pkg) + "» está BLOQUEADA en el catálogo global. Aprobarla la habilita solo para " + nombreDispositivo() + ". ¿Seguir?")) return;
+    const filas = TL.approveRequest(extrasGuardados(), S.tpGlobal, pkg, p.label);
+    const pay = TL.buildPayload(filas, { extra: true });
+    if (!pay.apps[LS.pkgKey(pkg)]) {
+      LS.toast("No se pudo aprobar: " + (pay.problems[0] || "paquete inválido") + " (el pedido queda como estaba).", "error");
+      return;
+    }
+    btn.disabled = true;
+    try {
+      // Primero el extra (que es lo que hace instalable la app) y recién después se marca el pedido:
+      // si esto falla, el pedido sigue pendiente y no queda "aprobado" sin efecto.
+      await LS.db.ref("devices/" + deviceId + "/playStoreExtras").set(pay.apps);
+      await LS.db.ref("devices/" + deviceId + "/appRequests/" + key).update({ status: "approved", resolvedAt: Date.now(), notified: false });
+      const r1 = await LS.sendCommand(deviceId, "SYNC_PLAY_STORE", null, null, opc({ timeoutMs: 20000 }));
+      const r2 = await LS.sendCommand(deviceId, "SYNC_APP_REQUESTS", null, null, opc());
+      const ok = r1.ok && r2.ok && !r1.pendiente && !r2.pendiente;
+      LS.toast(ok ? "«" + (p.label || pkg) + "» aprobada para " + nombreDispositivo() + "."
+        : "Aprobada y guardada. El celular todavía no confirmó: la aplica cuando se conecte. " +
+          (!r1.ok ? (r1.reason || r1.status) : !r2.ok ? (r2.reason || r2.status) : ""), ok ? "ok" : "warn");
+    } catch (err) {
+      LS.toast("No se pudo aprobar: " + err.message, "error");
+    }
+    btn.disabled = false;
+  });
+
+  function pintarTiendaPlay() {
+    pintarModoTienda();
+    pintarVistaTienda();
+    pintarExtrasTienda();
+    pintarPedidosTienda();
+  }
+
+  /* ═════════════════════════════════════════════════════════════════════════
    * ACCIONES
    * ═══════════════════════════════════════════════════════════════════════ */
   /**
@@ -2094,6 +2481,7 @@
   const ACCIONES = [
     ["SYNC_WHITELIST", "Sincronizar apps y dominios", false],
     ["SYNC_APP_REQUESTS", "Sincronizar pedidos de apps", false],
+    ["SYNC_PLAY_STORE", "Sincronizar la Tienda Play", false],
     ["UPDATE_LOCKSUITE", "Actualizar LockSuite (OTA)", false],
     ["LOCK_DEVICE", "Bloquear la pantalla ahora", false],
     ["UNSUSPEND_ALL_APPS", "Desbloquear todas las apps", true],
@@ -2418,6 +2806,7 @@
     pintarDns();
     pintarTienda();
     pintarPedidos();
+    pintarTiendaPlay();
     pintarAcciones();
     pintarDiagnostico();
     pintarCarrito();
@@ -2458,6 +2847,11 @@
     LS.db.ref("presets").on("value", (snap) => {
       S.presets = snap.val() || {};
       pintarPresets();
+    });
+    // Tienda Play (B.101): el catálogo global, para calcular qué ve este celular y aprobar pedidos.
+    LS.db.ref("globalSettings/playStore/apps").on("value", (snap) => {
+      S.tpGlobal = TL.rowsFromSaved(snap.val());
+      pintarTiendaPlay();
     });
   });
 })();

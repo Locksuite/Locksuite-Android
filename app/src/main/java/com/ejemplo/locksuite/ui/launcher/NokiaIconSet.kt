@@ -72,6 +72,12 @@ object NokiaIconSet {
      * menú principal, que es lo que el dueño pidió explícitamente que cambiara.
      */
     private val REGLAS: List<Regla> = listOf(
+        // ── La Tienda Play de LockSuite (B.101). Va primera: su paquete es ficticio y no debe
+        //    caer en ninguna regla genérica por casualidad. ──
+        Regla(
+            listOf("com.ejemplo.locksuite.playstore"),
+            NokiaIcon("Tienda", Icons.Filled.ShoppingCart, VERDE)
+        ),
         // ── Las del menú clásico ──
         Regla(
             listOf("dialer", "incallui", "telecom", "phone", "telefono", "teléfono", "llamada", "marcador", "טלפון", "חיוג"),

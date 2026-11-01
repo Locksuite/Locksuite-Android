@@ -67,6 +67,21 @@ object EnrollmentProfiles {
     const val LEVEL_GRACE = "gracia"
 
     /**
+     * Nivel 5 — "Solo llamadas" (29/10/2026, B.101). Pedido del dueño: un nivel automático
+     * que CIERRA la Tienda Play. Hoy lleva las mismas protecciones que el Nivel 1; lo único
+     * que lo distingue es la tienda (cerrada, no kosher). Si más adelante tiene que hacer
+     * algo más (por ejemplo ocultar todo salvo el teléfono), se agrega acá, en sus propios
+     * mapas, sin tocar los del Nivel 1.
+     */
+    const val LEVEL_CALLS_ONLY = "solo_llamadas"
+
+    /**
+     * Nivel 6 — "Lite" (29/10/2026, B.101). Pedido del dueño: abre la Tienda Play COMPLETA
+     * (nivel 3 del catálogo: Kosher + Trabajo + Lite). Las protecciones son las del Nivel 2.
+     */
+    const val LEVEL_LITE = "lite"
+
+    /**
      * @param id            Clave estable. Viaja por FCM y se guarda en preferencias.
      * @param label         Nombre visible en la app y en el panel.
      * @param summary       Una línea: qué deja hacer y qué no.
@@ -75,6 +90,10 @@ object EnrollmentProfiles {
      * @param restrictions  Restricciones `DISALLOW_*` (constantes reales de `UserManager`).
      * @param switches      El resto de los interruptores, con las claves EXACTAS que lee
      *                      `PolicyManager.importPolicyPresetJson()`.
+     * @param storeMode     Modo de la Tienda Play que fija el perfil (`cerrada`, `kosher`,
+     *                      `trabajo` o `lite`; ver `PlayStoreCatalog`). `null` = el perfil no
+     *                      toca la tienda ("clave ausente = no se toca"). Viaja en la clave
+     *                      `playStoreMode` y la lee `importPolicyPresetJson`.
      */
     data class MasterProfile(
         val id: String,
@@ -82,7 +101,8 @@ object EnrollmentProfiles {
         val summary: String,
         val warning: String?,
         val restrictions: Map<String, Boolean>,
-        val switches: Map<String, Boolean>
+        val switches: Map<String, Boolean>,
+        val storeMode: String? = null
     ) {
         /**
          * Las restricciones de este perfil que NO se pueden aplicar durante el
@@ -372,18 +392,41 @@ object EnrollmentProfiles {
     )
 
     /**
-     * Los tres perfiles, en el orden en que se muestran.
+     * Los perfiles, en el orden en que se muestran.
      *
      * El orden es de más cerrado a más abierto a propósito: el caso frecuente —dar de
-     * alta un equipo kosher— es el primero, y el que hay que pensar dos veces es el
-     * último.
+     * alta un equipo kosher— está arriba, y el que hay que pensar dos veces está abajo.
+     * Los números del nombre ("Nivel 5", "Nivel 6") son los que usa el dueño y NO siguen
+     * este orden: se agregaron después y los viejos no se renumeran.
+     *
+     * **Modo de la Tienda Play de cada uno (B.101):**
+     *  · Nivel 1 Estricto → `kosher` · Nivel 2 Trabajo → `trabajo` · Nivel 5 Solo llamadas
+     *    → `cerrada` · Nivel 6 Lite → `lite`.
+     *  · Nivel 4 Gracia → `lite` mientras dure (toda la tienda); al vencer se aplica el
+     *    perfil de cierre —por omisión el Nivel 1— y la tienda queda en `kosher`.
+     *  · Nivel 3 Base mínima → `null`: es un perfil de diagnóstico y no decide sobre la
+     *    tienda (clave ausente = no se toca).
      */
     val ALL: List<MasterProfile> = listOf(
+        MasterProfile(
+            id = LEVEL_CALLS_ONLY,
+            label = "Nivel 5 — Solo llamadas",
+            summary = "Las mismas protecciones del Nivel 1, con la Tienda Play CERRADA: " +
+                "no se puede instalar nada desde la tienda.",
+            // Usa las restricciones del Nivel 1, así que tiene el mismo riesgo de alta.
+            warning = "Bloquea agregar y quitar cuentas de Google, y bloquea el cambio de " +
+                "idioma. Aplicalo DESPUÉS de haber agregado la cuenta de Google y de haber " +
+                "dejado el equipo en el idioma definitivo.",
+            restrictions = STRICT_RESTRICTIONS,
+            switches = STRICT_SWITCHES,
+            storeMode = PlayStoreCatalog.MODE_CLOSED
+        ),
         MasterProfile(
             id = LEVEL_STRICT,
             label = "Nivel 1 — Kosher estricto",
             summary = "Llamadas, mensajes, bancos y las apps permitidas. Sin navegador, " +
-                "sin tienda, sin estados de WhatsApp, sin ofertas, con launcher kosher.",
+                "sin estados de WhatsApp, sin ofertas, con launcher kosher. La Tienda " +
+                "Play queda en modo kosher (solo las pocas apps del nivel 1).",
             // El aviso es la parte más importante de esta entrada. Un perfil de alta que
             // se aplica en el momento equivocado deja un equipo que no se puede dar de
             // alta, y el instalador no tendría cómo saber por qué.
@@ -391,24 +434,39 @@ object EnrollmentProfiles {
                 "idioma. Aplicalo DESPUÉS de haber agregado la cuenta de Google y de haber " +
                 "dejado el equipo en el idioma definitivo.",
             restrictions = STRICT_RESTRICTIONS,
-            switches = STRICT_SWITCHES
+            switches = STRICT_SWITCHES,
+            storeMode = PlayStoreCatalog.MODE_KOSHER
         ),
         MasterProfile(
             id = LEVEL_WORK,
             label = "Nivel 2 — Trabajo",
             summary = "Todo lo del Nivel 1 salvo el launcher kosher, y deja agregar " +
-                "cuentas de correo y manejar las apps del equipo.",
+                "cuentas de correo y manejar las apps del equipo. La Tienda Play queda " +
+                "en modo trabajo (niveles 1 y 2).",
             warning = "Bloquea el cambio de idioma del sistema: dejá el equipo en el " +
                 "idioma definitivo antes de aplicarlo.",
             restrictions = WORK_RESTRICTIONS,
-            switches = WORK_SWITCHES
+            switches = WORK_SWITCHES,
+            storeMode = PlayStoreCatalog.MODE_WORK
+        ),
+        MasterProfile(
+            id = LEVEL_LITE,
+            label = "Nivel 6 — Lite",
+            summary = "Las mismas protecciones del Nivel 2 (Trabajo), con la Tienda Play " +
+                "abierta COMPLETA: los niveles 1, 2 y 3 del catálogo.",
+            warning = "Bloquea el cambio de idioma del sistema: dejá el equipo en el " +
+                "idioma definitivo antes de aplicarlo.",
+            restrictions = WORK_RESTRICTIONS,
+            switches = WORK_SWITCHES,
+            storeMode = PlayStoreCatalog.MODE_LITE
         ),
         MasterProfile(
             id = LEVEL_GRACE,
             label = "Nivel 4 — Período de gracia",
             summary = "Bloquea todo lo claramente no kosher y deja lo dudoso a criterio " +
-                "del usuario, con la tienda abierta. Al vencer el plazo se cierra solo " +
-                "aplicando el Nivel 1.",
+                "del usuario, con la tienda abierta (la Tienda Play completa). Al vencer " +
+                "el plazo se cierra solo aplicando el Nivel 1, que deja la tienda en modo " +
+                "kosher.",
             // Los dos avisos que importan: que el equipo queda MÁS abierto de lo normal
             // mientras dure, y qué se gana a cambio — porque si el administrador no sabe
             // que la auditoría se está llenando, no la va a mirar y se pierde la mitad del
@@ -418,20 +476,23 @@ object EnrollmentProfiles {
                 "de verdad — miralos en la pestaña Lista blanca antes de cerrar. " +
                 "El plazo se elige al aplicarlo.",
             restrictions = GRACE_RESTRICTIONS,
-            switches = GRACE_SWITCHES
+            switches = GRACE_SWITCHES,
+            storeMode = PlayStoreCatalog.MODE_LITE
         ),
         MasterProfile(
             id = LEVEL_BASE,
             label = "Nivel 3 — Base mínima",
             summary = "Solo el piso anti-manipulación: no se puede formatear, ni entrar " +
-                "en modo seguro, ni desinstalar LockSuite. Ningún filtro de contenido.",
+                "en modo seguro, ni desinstalar LockSuite. Ningún filtro de contenido. " +
+                "No toca la Tienda Play.",
             // Este es el único de los tres que AFLOJA. Decirlo en el aviso y no en la
             // descripción: la confirmación es lo único que la persona lee seguro.
             warning = "Este perfil APAGA los filtros de contenido (anuncios, GIFs, estados " +
                 "de WhatsApp, ofertas, cuenta de Google, launcher kosher). Usalo para " +
                 "diagnosticar, no para entregar un equipo.",
             restrictions = BASE_RESTRICTIONS,
-            switches = BASE_SWITCHES
+            switches = BASE_SWITCHES,
+            storeMode = null
         )
     )
 
@@ -466,6 +527,10 @@ object EnrollmentProfiles {
         for ((key, value) in profile.switches) {
             data.put(key, value)
         }
+
+        // Tienda Play (B.101). Solo se escribe si el perfil decide sobre la tienda: sin la
+        // clave, el importador no la toca. Es TEXTO (el modo), no un booleano.
+        profile.storeMode?.let { data.put("playStoreMode", it) }
 
         // Nunca se manda un array vacío: Realtime Database los descarta y la clave
         // desaparece, que fue exactamente el bug de B.28 (el perfil firmado y el perfil

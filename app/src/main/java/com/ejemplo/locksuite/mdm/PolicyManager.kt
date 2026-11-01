@@ -610,7 +610,14 @@ class PolicyManager(private val context: Context) {
         } catch (_: Exception) {
             emptySet()
         }
-        return (allowed + dialerPkgs + extraEssential + porActualizacion).toTypedArray()
+        // 29/10/2026 (B.101): las apps que la Tienda Play ofrece e instaló. Sin esto, con el
+        // kiosco encendido, una app recién instalada desde la tienda no se podría abrir.
+        val deLaTienda = try {
+            PlayStoreManager.kioskPackages(context)
+        } catch (_: Exception) {
+            emptySet()
+        }
+        return (allowed + dialerPkgs + extraEssential + porActualizacion + deLaTienda).toTypedArray()
     }
 
     fun setKioskLockTaskEnabled(enable: Boolean): Boolean {
@@ -1771,6 +1778,10 @@ class PolicyManager(private val context: Context) {
         dataObj.put("nokiaKeypadMode", isNokiaKeypadMode())
         dataObj.put("nokiaTouchEnabled", isNokiaTouchEnabled())
         dataObj.put("blockPopularNonKosher", isBlockPopularNonKosherEnabled())
+        // 29/10/2026 (B.101) — modo de la Tienda Play (cerrada/kosher/trabajo/lite). Texto,
+        // no booleano: son cuatro modos. Los paquetes extra y el catálogo NO viajan en el
+        // perfil (el catálogo es global y vive en Firebase; los extras son de cada equipo).
+        dataObj.put("playStoreMode", PlayStoreManager.mode(context))
 
         val perAppNetArr = org.json.JSONArray()
         getPerAppInternetBlockedPackages().forEach { perAppNetArr.put(it) }
@@ -1956,6 +1967,13 @@ class PolicyManager(private val context: Context) {
             setNokiaKeypadMode(dataObj.optBoolean("nokiaKeypadMode", isNokiaKeypadMode()))
             setNokiaTouchEnabled(dataObj.optBoolean("nokiaTouchEnabled", isNokiaTouchEnabled()))
             setBlockPopularNonKosher(dataObj.optBoolean("blockPopularNonKosher", isBlockPopularNonKosherEnabled()))
+
+            // 29/10/2026 (B.101) — Tienda Play. Clave AUSENTE o con un valor que no se
+            // reconoce = no se toca (un perfil guardado antes de la tienda no la abre ni la
+            // cierra). Va ANTES de la lista blanca de abajo: el modo cambia lo que la tienda
+            // aporta al DNS, y `setWhitelistModeEnabled` recarga el filtro con el modo nuevo
+            // ya aplicado.
+            PlayStoreManager.applyProfileMode(context, dataObj.optString("playStoreMode", ""))
 
             // 9/9/2026 — la lista blanca (B.53). Igual que el resto: el valor por omisión
             // es el ACTUAL, así que un perfil viejo no mueve a un equipo de "simulación" a
@@ -2762,6 +2780,17 @@ class PolicyManager(private val context: Context) {
             }
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+
+        // ── Tienda Play (B.101): pausar lo que la tienda instaló y ya no ofrece ──
+        //
+        // Mismo motivo que la lista blanca de arriba: una pausa (suspensión) que algo
+        // deshizo —un reinicio, una restauración, el administrador— tiene que volver sola.
+        // También deja "sin web" las apps con ese acceso y rearma la lista del kiosco.
+        try {
+            PlayStoreManager.reconcile(context)
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "Tienda Play: reconcile falló: ${e.message}")
         }
 
         // Aplicar FRP si está activado.

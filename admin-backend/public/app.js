@@ -2319,7 +2319,7 @@ const MASTER_PROFILES = [
         id: "kosher_estricto",
         label: "Nivel 1 — Kosher estricto",
         icon: "🕍",
-        summary: "Llamadas, mensajes, bancos y las apps permitidas. Sin navegador, sin tienda, sin estados de WhatsApp, sin ofertas, con launcher kosher.",
+        summary: "Llamadas, mensajes, bancos y las apps permitidas. Sin navegador, sin estados de WhatsApp, sin ofertas, con launcher kosher. La Tienda Play queda en modo Kosher (solo las pocas apps del nivel 1).",
         warning: "Bloquea agregar y quitar cuentas de Google, y bloquea el cambio de idioma. Aplicalo DESPUÉS de haber agregado la cuenta de Google y de haber dejado el equipo en el idioma definitivo.",
         tone: "strict"
     },
@@ -2327,7 +2327,7 @@ const MASTER_PROFILES = [
         id: "trabajo",
         label: "Nivel 2 — Trabajo",
         icon: "💼",
-        summary: "Todo lo del Nivel 1 salvo el launcher kosher, y deja agregar cuentas de correo y manejar las apps del equipo.",
+        summary: "Todo lo del Nivel 1 salvo el launcher kosher, y deja agregar cuentas de correo y manejar las apps del equipo. La Tienda Play pasa a modo Trabajo (niveles 1 y 2).",
         warning: "Bloquea el cambio de idioma del sistema: dejá el equipo en el idioma definitivo antes de aplicarlo.",
         tone: "work"
     },
@@ -2335,11 +2335,30 @@ const MASTER_PROFILES = [
         id: "gracia",
         label: "Nivel 4 — Período de gracia",
         icon: "⏳",
-        summary: "Bloquea todo lo claramente no kosher y deja lo dudoso a criterio del usuario, con la tienda abierta. Al vencer el plazo se cierra solo.",
+        summary: "Bloquea todo lo claramente no kosher y deja lo dudoso a criterio del usuario, con la Tienda Play abierta completa. Al vencer el plazo se cierra solo aplicando el nivel elegido (por omisión el Nivel 1, que deja la Tienda Play en modo Kosher).",
         warning: "Mientras dure, el equipo queda más abierto: puede instalar apps y usar su lanzador normal. A cambio, LockSuite va anotando qué dominios usa de verdad — miralos en la pestaña Lista blanca antes de que cierre.",
         tone: "grace",
         // El único nivel que pide un dato más al aplicarlo. Ver GracePeriodManager.
         needsDuration: true
+    },
+    // 29/10/2026 (B.101). Los números 5 y 6 NO siguen el orden de las tarjetas: se agregaron después y los
+    // viejos no se renumeran. La definición real (restricciones, interruptores, modo de la Tienda Play)
+    // vive en EnrollmentProfiles.kt; acá solo el id y los textos (ver check_profile_sync.py).
+    {
+        id: "solo_llamadas",
+        label: "Nivel 5 — Solo llamadas",
+        icon: "📞",
+        summary: "Las mismas protecciones del Nivel 1, con la Tienda Play CERRADA: no se puede instalar nada desde la tienda.",
+        warning: "Bloquea agregar y quitar cuentas de Google, y bloquea el cambio de idioma. Aplicalo DESPUÉS de haber agregado la cuenta de Google y de haber dejado el equipo en el idioma definitivo.",
+        tone: "strict"
+    },
+    {
+        id: "lite",
+        label: "Nivel 6 — Lite",
+        icon: "🛍️",
+        summary: "Las mismas protecciones del Nivel 2 (Trabajo), con la Tienda Play abierta COMPLETA: los niveles 1, 2 y 3 del catálogo.",
+        warning: "Bloquea el cambio de idioma del sistema: dejá el equipo en el idioma definitivo antes de aplicarlo.",
+        tone: "work"
     },
     {
         id: "base_minima",
@@ -4037,7 +4056,9 @@ function renderQrLevels() {
     // Los mismos ids que EnrollmentProfiles.kt. check_profile_sync.py compara las listas.
     [["kosher_estricto", "Nivel 1 — Kosher estricto"],
      ["trabajo", "Nivel 2 — Trabajo"],
-     ["base_minima", "Nivel 3 — Base mínima"]].forEach(([id, etiqueta]) => {
+     ["base_minima", "Nivel 3 — Base mínima"],
+     ["solo_llamadas", "Nivel 5 — Solo llamadas"],
+     ["lite", "Nivel 6 — Lite"]].forEach(([id, etiqueta]) => {
         const o = document.createElement("option");
         o.value = id; o.textContent = etiqueta;
         qrLevelSelect.appendChild(o);
@@ -4305,6 +4326,9 @@ function collectAppRequests() {
                 packageName: p.packageName || clave.replace(/_/g, "."),
                 label: p.label || p.packageName || clave,
                 note: p.note || "",
+                // 29/10/2026 (B.101): "play" = pedido de la Tienda Play (app «a pedido»). Se aprueba
+                // distinto: como paquete extra de ESE equipo, no permitiéndola para toda la flota.
+                store: p.store === "play" ? "play" : "",
                 status: p.status || "pending",
                 requestedAt: p.requestedAt || 0,
                 resolvedAt: p.resolvedAt || 0
@@ -4370,7 +4394,15 @@ function renderAppRequests() {
         // administrador. El paquete ya viene validado desde el equipo, pero el panel no
         // puede confiar en eso: la validación vive en el otro lado de la red.
         card.querySelector("strong").textContent = p.label;
-        card.querySelectorAll("div")[1].textContent = p.packageName;
+        if (p.store === "play") {
+            const tag = document.createElement("span");
+            tag.style.cssText = "margin-left:8px; font-size:10px; font-weight:bold; padding:2px 6px; border-radius:6px; background:rgba(241,196,15,0.16); color:var(--accent); white-space:nowrap;";
+            tag.textContent = "🛍️ Tienda Play";
+            card.querySelector("strong").appendChild(tag);
+        }
+        // ⚠️ 31/10/2026 (B.101): era `[1]`, que es el <div> que CONTIENE al <strong>: asignarle
+        // textContent borraba el nombre de la app y dejaba solo el paquete. El del paquete es `[2]`.
+        card.querySelectorAll("div")[2].textContent = p.packageName;
         card.querySelector(".js-dev").textContent = p.deviceName;
         card.querySelector(".js-note").textContent = p.note ? "«" + p.note + "»" : "";
 
@@ -4413,9 +4445,44 @@ function renderAppRequests() {
  * queda igual guardado en la base y `SYNC_WHITELIST` se reintenta desde el botón de
  * la lista blanca. Lo que NO puede pasar es que falle en silencio (B.42).
  */
+/**
+ * APROBAR un pedido de la Tienda Play (29/10/2026, B.101): la app queda HABILITADA solo para ese
+ * celular, como paquete extra suyo (`devices/<id>/playStoreExtras`). NO se llama a
+ * `setWhitelistDecision`: eso la permitiría en el catálogo y en `allowedPackages` de TODA la flota,
+ * que es lo contrario de «solo a pedido». El extra copia lo que el dueño ya decidió en el catálogo
+ * (acceso «sin web», dominios…): ver TiendaLogic.approveRequest, que tiene su banco de pruebas.
+ *
+ * El orden importa: primero el extra (lo que hace instalable la app), después el pedido marcado
+ * como aprobado, y recién al final los comandos. Si algo falla antes de marcarlo, el pedido sigue
+ * pendiente en vez de quedar "aprobado" sin efecto.
+ * @returns {Promise<boolean>} false si no se pudo aprobar (el pedido queda como estaba).
+ */
+async function approvePlayStoreRequest(p) {
+    const TL = window.TiendaLogic;
+    if (!TL) { setRequestsStatus("Falta tienda_logic.js: no se puede aprobar un pedido de la Tienda Play.", true); return false; }
+    const [globalSnap, extrasSnap] = await Promise.all([
+        database.ref("globalSettings/playStore/apps").once("value"),
+        database.ref("devices/" + p.deviceId + "/playStoreExtras").once("value")
+    ]);
+    const global = TL.rowsFromSaved(globalSnap.val());
+    const g = global.find(r => r.pkg === p.packageName);
+    if (g && g.status === "blocked" && !confirm("«" + p.label + "» está BLOQUEADA en el catálogo de la Tienda Play. Aprobarla la habilita solo para " + p.deviceName + ". ¿Seguir?")) return false;
+    const filas = TL.approveRequest(TL.rowsFromSaved(extrasSnap.val(), { extra: true }), global, p.packageName, p.label);
+    const pay = TL.buildPayload(filas, { extra: true });
+    if (!pay.apps[TL.pkgKey(p.packageName)]) {
+        setRequestsStatus("No se pudo aprobar: " + (pay.problems[0] || "paquete inválido") + " (el pedido queda como estaba).", true);
+        return false;
+    }
+    await database.ref("devices/" + p.deviceId + "/playStoreExtras").set(pay.apps);
+    return true;
+}
+
 async function resolveAppRequest(p, aprobar, btn) {
     if (btn) btn.disabled = true;
     try {
+        if (aprobar && p.store === "play") {
+            if (!(await approvePlayStoreRequest(p))) return;
+        }
         const ref = database.ref("devices/" + p.deviceId + "/appRequests/" + p.key);
         await ref.update({
             status: aprobar ? "approved" : "rejected",
@@ -4425,7 +4492,19 @@ async function resolveAppRequest(p, aprobar, btn) {
             notified: false
         });
 
-        if (aprobar) {
+        if (aprobar && p.store === "play") {
+            // Pedido de la Tienda Play: el extra ya está guardado (arriba). Falta que el celular lo lea
+            // y avisarle al usuario. No hay nada que des-suspender: la app todavía no se instaló.
+            const fallidos = [];
+            try { await runCommandOnDevice(p.deviceId, "SYNC_PLAY_STORE"); } catch (e) { fallidos.push("SYNC_PLAY_STORE"); }
+            try { await runCommandOnDevice(p.deviceId, "SYNC_APP_REQUESTS"); } catch (e) { fallidos.push("SYNC_APP_REQUESTS"); }
+            if (fallidos.length) {
+                setRequestsStatus("Aprobada y guardada, pero el celular no contestó a: " +
+                    fallidos.join(", ") + ". Se aplica cuando vuelva a estar en línea.", true);
+            } else {
+                setRequestsStatus("«" + p.label + "» aprobada para " + p.deviceName + " (solo para ese celular).");
+            }
+        } else if (aprobar) {
             // 1) Las tres cosas de «Permitir» (catálogo de dominios + tienda).
             await setWhitelistDecision(p.packageName, "allow");
             // 2) Que el catálogo llegue a ESE equipo.

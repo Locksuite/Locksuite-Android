@@ -148,9 +148,16 @@ class PackageReceiver : BroadcastReceiver() {
                 val wlDecision = try {
                     com.ejemplo.locksuite.mdm.WhitelistManager(context).allDecisions()[packageName]
                 } catch (_: Exception) { null }
+                // B.101 (29/10/2026): lo que la Tienda Play ofrece ahora no se desinstala. El
+                // flujo de instalación ya deja pasar a su paquete por `updating_package`; esto
+                // cubre el hueco entre que la sesión de instalación termina y el flujo cierra.
+                val offeredByStore = try {
+                    com.ejemplo.locksuite.mdm.PlayStoreManager.isAllowedByStore(context, packageName)
+                } catch (_: Exception) { false }
 
                 val isAllowed = allowed.contains(packageName) ||
                     wlDecision == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_ALLOW ||
+                    offeredByStore ||
                     packageName == context.packageName ||
                     packageName == updatingPkg ||
                     recentlyUpdated ||
@@ -168,6 +175,20 @@ class PackageReceiver : BroadcastReceiver() {
                     }
                     return
                 }
+            }
+        }
+
+        // B.101: la Tienda Play anota qué instaló (y suelta lo que se desinstaló). Una
+        // actualización (isReplacing) no cuenta: es la misma app.
+        if (!isReplacing) {
+            try {
+                if (action == Intent.ACTION_PACKAGE_ADDED) {
+                    com.ejemplo.locksuite.mdm.PlayStoreManager.onPackageAdded(context, packageName)
+                } else if (action == Intent.ACTION_PACKAGE_REMOVED) {
+                    com.ejemplo.locksuite.mdm.PlayStoreManager.onPackageRemoved(context, packageName)
+                }
+            } catch (e: Exception) {
+                Log.w("PackageReceiver", "Tienda Play: no se pudo registrar el cambio de $packageName: ${e.message}")
             }
         }
 

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Tienda Play (B.101) — "widget" que se ve como el ícono de una app.
+
+    A diferencia de los otros widgets de LockSuite (tarjeta oscura con borde, círculo,
+    título y subtítulo), este NO tiene fondo ni borde: solo el recuadro de color con la bolsa
+    y el nombre debajo con sombra, igual que cualquier ícono del lanzador. El nombre lo
+    escribe PlayStoreWidgetProvider en el idioma del equipo.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_ps_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="4dp">
+
+    <ImageView
+        android:id="@+id/widget_ps_icon"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:src="@drawable/ic_play_store_tile"
+        android:contentDescription="@string/widget_play_store_label" />
+
+    <TextView
+        android:id="@+id/widget_ps_label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/widget_play_store_label"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:shadowColor="#99000000"
+        android:shadowDx="0"
+        android:shadowDy="1"
+        android:shadowRadius="3" />
+
+</LinearLayout>

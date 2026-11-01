@@ -738,6 +738,36 @@ class CommandProcessor(private val context: Context) {
                     }
                     true
                 }
+                // ── TIENDA PLAY (29/10/2026, B.101) — ver mdm/PlayStoreManager.kt ──
+                //
+                // SYNC_PLAY_STORE solo AVISA: el catálogo y los paquetes extra viven en
+                // `globalSettings/playStore` y `devices/<id>/playStoreExtras` (el tope de
+                // 3.000 bytes del FCM no deja mandar una lista; misma regla que SYNC_WHITELIST).
+                // SET_PLAY_STORE_MODE sí lleva el valor (`storeMode`), que la Function ya
+                // validó contra la lista de modos. Si aun así llega uno que acá no se
+                // reconoce, se RECHAZA: un dato roto no puede cerrar ni abrir la tienda.
+                "SYNC_PLAY_STORE" -> {
+                    val idToAck = commandId
+                    commandId = null
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val ok = com.ejemplo.locksuite.util.FirebaseDeviceSync
+                            .pullPlayStoreConfig(applicationContext)
+                        sendCommandAck(
+                            idToAck, "SYNC_PLAY_STORE", ok,
+                            if (ok) null else "No se pudo leer la configuración de la Tienda Play"
+                        )
+                    }
+                    true
+                }
+                "SET_PLAY_STORE_MODE" -> {
+                    val storeMode = data["storeMode"]
+                    if (com.ejemplo.locksuite.mdm.PlayStoreCatalog.modeFromProfile(storeMode) == null) {
+                        commandErrorReason = "Modo de la Tienda Play desconocido: $storeMode"
+                        false
+                    } else {
+                        com.ejemplo.locksuite.mdm.PlayStoreManager.setMode(context, storeMode)
+                    }
+                }
                 // ── SOLICITUDES DE APPS (10/9/2026, B.59) ──
                 //
                 // Lo manda el panel después de aprobar o rechazar un pedido. El equipo

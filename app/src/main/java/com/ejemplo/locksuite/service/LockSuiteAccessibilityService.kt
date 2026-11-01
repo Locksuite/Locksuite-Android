@@ -3289,6 +3289,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         evidence: String?
     ): Triple<String, String, String>? {
         val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+        // B.101: el mismo flujo también instala (Tienda Play): "instalar" o "actualizar".
+        val verbo = UpdateFlowManager.verb(ctx)
         val ev = if (evidence.isNullOrBlank()) "" else " [$evidence]"
         return when (diagnosis) {
             PlayButtonFinder.Diagnosis.NO_SPACE -> {
@@ -3296,13 +3298,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 val libres = if (space.freeMb == Long.MAX_VALUE) "?" else space.freeMb.toString()
                 Triple(
                     UpdateFlowManager.RESULT_NO_SPACE,
-                    "No hay espacio para actualizar $label. Quedan $libres MB libres. Liberá espacio y volvé a intentar.",
+                    "No hay espacio para $verbo $label. Quedan $libres MB libres. Liberá espacio y volvé a intentar.",
                     "Play Store informó falta de espacio (libres=${libres}MB)$ev"
                 )
             }
             PlayButtonFinder.Diagnosis.NEED_SIGN_IN -> Triple(
                 UpdateFlowManager.RESULT_NEEDS_ACCOUNT,
-                "Google Play pide iniciar sesión. Este equipo no tiene una cuenta de Google configurada, así que no puede actualizar por la tienda.",
+                "Google Play pide iniciar sesión. Este equipo no tiene una cuenta de Google configurada, así que no puede $verbo por la tienda.",
                 "Play Store pidió iniciar sesión$ev"
             )
             PlayButtonFinder.Diagnosis.NOT_COMPATIBLE -> Triple(
@@ -3356,7 +3358,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
             UpdateFlowManager.finish(
                 ctx, UpdateFlowManager.RESULT_NO_SPACE,
-                "No hay espacio para actualizar $label. Quedan ${space.freeMb} MB libres y hacen falta ${space.neededMb} MB.",
+                "No hay espacio para ${UpdateFlowManager.verb(ctx)} $label. Quedan ${space.freeMb} MB libres y hacen falta ${space.neededMb} MB.",
                 "Espacio insuficiente medido al cerrar: libres=${space.freeMb}MB, necesarios=${space.neededMb}MB"
             )
             return
@@ -3402,7 +3404,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // ── 1. ¿Ya se instaló? Señal concluyente, no depende de la pantalla ──
         if (UpdateFlowManager.targetAlreadyUpdated(ctx)) {
             UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING,
-                "✓ Actualización completada.")
+                if (UpdateFlowManager.isInstallMode(ctx)) "✓ Instalación completada." else "✓ Actualización completada.")
             UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UPDATED, null)
             return
         }
@@ -3461,7 +3463,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
 
             val progressText = if (pct >= 0) "Descargando... $pct%" else
-                (UpdateFlowManager.currentDetail(ctx) ?: "Descargando actualización...")
+                (UpdateFlowManager.currentDetail(ctx)
+                    ?: if (UpdateFlowManager.isInstallMode(ctx)) "Descargando la app..." else "Descargando actualización...")
             UpdateFlowManager.setStage(
                 ctx, UpdateFlowManager.STAGE_DOWNLOADING, progressText,
                 progress = if (pct >= 0) pct else null
@@ -3490,9 +3493,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                     "El celular está bloqueado: espero a que lo desbloqueen para seguir con Google Play " +
                         "(la pantalla no se tapa, para que se pueda desbloquear)."
                 )
+                val gerundio = if (UpdateFlowManager.isInstallMode(ctx)) "Instalando" else "Actualizando"
                 UpdateFlowManager.notifyUser(
-                    ctx, "Actualizando $label",
-                    "Desbloqueá el celular para que LockSuite termine de actualizar $label.", null, ongoing = true
+                    ctx, "$gerundio $label",
+                    "Desbloqueá el celular para que LockSuite termine de ${UpdateFlowManager.verb(ctx)} $label.", null, ongoing = true
                 )
             }
             UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_UNLOCK)
@@ -3664,7 +3668,17 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // Va antes de cualquier clic: en la pantalla de "sin espacio" el único
         // botón grande abre el administrador de almacenamiento del sistema, y
         // apretarlo saca al usuario de la tienda con la pantalla todavía tapada.
-        if (scan.diagnosis != PlayButtonFinder.Diagnosis.NONE) {
+        //
+        // B.101 — en una INSTALACIÓN, si la ficha muestra un "Instalar" claro y todavía no
+        // se apretó nada, un texto corto suelto ("sign in", "not found", "something went
+        // wrong") es casi seguro un comentario de otro usuario más abajo en la ficha, no
+        // una pantalla de error: en una app nueva se ven opiniones y en una actualización
+        // casi no. Una pantalla de error de verdad no tiene el botón Instalar en el
+        // encabezado, y lo que aparece DESPUÉS de apretar (sin espacio, sin cuenta) se
+        // sigue diagnosticando igual.
+        val fichaNormalConInstalar = UpdateFlowManager.isInstallMode(ctx) &&
+            hasDefiniteUpdate && updateSessionCandidatesTried == 0
+        if (scan.diagnosis != PlayButtonFinder.Diagnosis.NONE && !fichaNormalConInstalar) {
             val diag = diagnosisResult(ctx, updatingPkg, scan.diagnosis, scan.diagnosisEvidence)
             if (diag != null) {
                 Log.w(TAG, "Play Store: ${scan.diagnosis} para $updatingPkg (${scan.diagnosisEvidence})")
@@ -3770,7 +3784,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 updateSessionScrolls++
                 updateSessionLastScrollAt = now
                 UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
-                    "Buscando actualización...")
+                    if (UpdateFlowManager.isInstallMode(ctx)) "Buscando el botón Instalar..." else "Buscando actualización...")
                 try {
                     scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
                     Log.i(TAG, "Desplazando la ficha ($updateSessionScrolls/$MAX_UPDATE_SCROLLS) para encontrar el botón")
@@ -3793,6 +3807,19 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             updateSessionRenderedAt > 0L && renderedFor > UPDATE_UP_TO_DATE_GRACE_MS
         ) {
             val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+            if (UpdateFlowManager.isInstallMode(ctx)) {
+                // B.101 — instalando: si la ficha dice "Abrir", Google Play cree que la app
+                // YA está instalada. Si el sistema también la ve instalada, el paso 1 ya
+                // habría cerrado el flujo con éxito; si llegamos acá, el sistema NO la ve
+                // (por ejemplo, está oculta por una regla del administrador). Eso no es un
+                // éxito ni una app "al día": se dice lo que pasa.
+                Log.w(TAG, "Instalando $updatingPkg: Google Play muestra 'Abrir' pero el sistema no ve el paquete")
+                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+                UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_ERROR,
+                    "Google Play dice que $label ya está instalada, pero el sistema no la encuentra (puede estar oculta por una regla).",
+                    "Ficha con 'Abrir' y paquete no visible para el sistema")
+                return
+            }
             Log.i(TAG, "App $updatingPkg ya está al día (botón Abrir visible, sin Actualizar)")
             UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
             UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UP_TO_DATE,
@@ -3817,7 +3844,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             finishUpdateWithBestReason(
                 ctx, updatingPkg, scan,
                 UpdateFlowManager.RESULT_NOT_AVAILABLE,
-                "No se encontró el botón de actualizar de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} en Google Play.",
+                if (UpdateFlowManager.isInstallMode(ctx))
+                    "No se encontró el botón Instalar de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} en Google Play."
+                else
+                    "No se encontró el botón de actualizar de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} en Google Play.",
                 "Ficha dibujada (${scan.renderedNodes} nodos con texto) sin candidatos reconocibles"
             )
             return
@@ -3829,14 +3859,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             finishUpdateWithBestReason(
                 ctx, updatingPkg, scan,
                 UpdateFlowManager.RESULT_ERROR,
-                "No se pudo actualizar ${UpdateFlowManager.appLabel(ctx, updatingPkg)}.",
+                "No se pudo ${UpdateFlowManager.verb(ctx)} ${UpdateFlowManager.appLabel(ctx, updatingPkg)}.",
                 "Estancado ${UPDATE_STALL_MS / 1000}s tras probar $updateSessionCandidatesTried candidatos"
             )
             return
         }
 
         UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
-            "Buscando actualización...")
+            if (UpdateFlowManager.isInstallMode(ctx)) "Buscando el botón Instalar..." else "Buscando actualización...")
     }
 
     /**

@@ -78,6 +78,15 @@ object AppRequestManager {
     const val RECHAZADA = "rejected"
 
     /**
+     * Marca de un pedido que salió de la TIENDA PLAY (B.101, "Solo a pedido") y no de la
+     * tienda vieja de APKs. Viaja en el campo `store` del nodo del pedido. Sin marca =
+     * tienda vieja, exactamente como hasta ahora. El panel la usa para decidir QUÉ hace
+     * "Aprobar": en la tienda vieja agrega el paquete a `allowedPackages`; en la Tienda
+     * Play lo habilita en ese equipo (`devices/<id>/playStoreExtras`).
+     */
+    const val FUENTE_PLAY = "play"
+
+    /**
      * Por qué se aceptó o no un pedido. **Todos los "no" traen motivo**: la pantalla
      * escribe uno distinto para cada uno. Ver modo de falla 3 del encabezado.
      */
@@ -100,14 +109,17 @@ object AppRequestManager {
         val estado: String = PENDIENTE,
         val pedidaEnMs: Long = 0L,
         val resueltaEnMs: Long = 0L,
-        val avisada: Boolean = false
+        val avisada: Boolean = false,
+        /** [FUENTE_PLAY] si salió de la Tienda Play; vacío si salió de la tienda vieja. */
+        val fuente: String = ""
     )
 
     /** Lo que hay que mostrarle al usuario cuando el administrador ya contestó. */
     data class Aviso(
         val packageName: String,
         val label: String,
-        val aprobada: Boolean
+        val aprobada: Boolean,
+        val fuente: String = ""
     )
 
     /**
@@ -216,17 +228,51 @@ object AppRequestManager {
     }
 
     /**
+     * Pedidos de la TIENDA PLAY que ya no deben tapar un pedido nuevo (B.101).
+     *
+     * [decidir] trata un pedido APROBADA como "ya pedida": en la tienda vieja una aprobación
+     * sin catálogo todavía es un SYNC que no llegó. En la Tienda Play una aprobación es un
+     * permiso POR EQUIPO que el administrador puede quitar más tarde (la app vuelve a
+     * "solo a pedido"); sin este filtro, un pedido aprobado hace semanas dejaría el botón
+     * "Pedir" trabado para siempre con el cartel "ya la pediste, esperá respuesta".
+     *
+     * Se descartan únicamente las aprobaciones de la Tienda Play resueltas hace
+     * [ESPERA_REPEDIDO_MS] o más. Las recientes siguen valiendo (el SYNC puede estar en
+     * camino) y una sin fecha de resolución (`resueltaEnMs` en 0: dato viejo o incompleto)
+     * también: ante un dato ausente se falla del lado restrictivo, como en [decidir].
+     * Los pedidos de la tienda vieja no se tocan.
+     */
+    fun sinAprobacionesViejasDePlay(existentes: Collection<Solicitud>, ahoraMs: Long): List<Solicitud> =
+        existentes.filterNot {
+            it.fuente == FUENTE_PLAY &&
+                it.estado == APROBADA &&
+                it.resueltaEnMs > 0L &&
+                ahoraMs - it.resueltaEnMs >= ESPERA_REPEDIDO_MS
+        }
+
+    /**
      * Cuerpo del nodo a escribir. Pura: no toca el reloj ni la red, el llamador pasa
      * `ahoraMs`. Así la prueba puede fijar el tiempo.
      */
-    fun cuerpo(paquete: String, etiqueta: String, nota: String?, ahoraMs: Long): Map<String, Any> =
-        mapOf(
+    fun cuerpo(
+        paquete: String,
+        etiqueta: String,
+        nota: String?,
+        ahoraMs: Long,
+        fuente: String? = null
+    ): Map<String, Any> {
+        val base = mapOf<String, Any>(
             "packageName" to paquete,
             "label" to (etiqueta.trim().ifEmpty { paquete }),
             "requestedAt" to ahoraMs,
             "note" to normalizarNota(nota),
             "status" to PENDIENTE
         )
+        // Solo se escribe la marca de la Tienda Play. El pedido de la tienda vieja no la
+        // lleva, y como el nodo se REEMPLAZA entero, un pedido nuevo de la tienda vieja
+        // borra cualquier marca que hubiera dejado uno anterior del mismo paquete.
+        return if (fuente == FUENTE_PLAY) base + ("store" to FUENTE_PLAY) else base
+    }
 
     /**
      * Qué avisos hay que mostrarle al usuario: los pedidos ya resueltos que todavía
@@ -244,9 +290,46 @@ object AppRequestManager {
                 Aviso(
                     packageName = it.packageName,
                     label = it.label.ifEmpty { it.packageName },
-                    aprobada = it.estado == APROBADA
+                    aprobada = it.estado == APROBADA,
+                    fuente = it.fuente
                 )
             }
+
+    /**
+     * Título y texto del aviso que se le muestra al usuario cuando el administrador
+     * contestó, en el idioma del equipo. Vive acá (y no en la notificación) por la misma
+     * razón que [motivo]: el banco de pruebas afirma que ningún caso se queda sin texto.
+     * Devuelve (título, texto). El texto de una aprobación nombra la tienda de donde salió
+     * el pedido, porque "instalala desde la Tienda" no dice cuál de las dos.
+     */
+    fun textoAviso(aviso: Aviso, idioma: String): Pair<String, String> {
+        val play = aviso.fuente == FUENTE_PLAY
+        return if (aviso.aprobada) {
+            val titulo = when (idioma) {
+                "he" -> "✅ ${aviso.label}: אושרה"
+                "en" -> "✅ ${aviso.label}: approved"
+                else -> "✅ ${aviso.label}: aprobada"
+            }
+            val texto = when (idioma) {
+                "he" -> if (play) "אפשר להתקין אותה מחנות Play של LockSuite." else "אפשר להתקין אותה מהחנות של LockSuite."
+                "en" -> if (play) "You can now install it from the Play Shop." else "You can now install it from the LockSuite Store."
+                else -> if (play) "Ya podés instalarla desde la Tienda Play." else "Ya podés instalarla desde la Tienda de LockSuite."
+            }
+            titulo to texto
+        } else {
+            val titulo = when (idioma) {
+                "he" -> "❌ ${aviso.label}: נדחתה"
+                "en" -> "❌ ${aviso.label}: declined"
+                else -> "❌ ${aviso.label}: rechazada"
+            }
+            val texto = when (idioma) {
+                "he" -> "המנהל לא אישר את הבקשה."
+                "en" -> "Your administrator did not approve this request."
+                else -> "El administrador no aprobó este pedido."
+            }
+            titulo to texto
+        }
+    }
 
     /**
      * Texto del motivo, en el idioma del equipo. Vive acá y no en la pantalla para

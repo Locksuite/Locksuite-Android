@@ -16,6 +16,7 @@ import android.os.StatFs
 import android.os.SystemClock
 import android.os.UserManager
 import android.util.Log
+import com.ejemplo.locksuite.mdm.PlayStoreManager
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.mdm.UpdateRoutePlanner
 import com.ejemplo.locksuite.mdm.UpdateStepLog
@@ -121,6 +122,33 @@ object UpdateFlowManager {
     const val KEY_BASE_VERSION_NAME = "update_flow_base_version_name"
     /** Versión con la que quedó la app al cerrar el último flujo. */
     const val KEY_VERSION_AFTER = "update_flow_version_after"
+
+    // ── 29/10/2026 (B.101): EL MISMO FLUJO, PARA INSTALAR DESDE LA TIENDA PLAY ──
+    //
+    // Pedido del dueño: la Tienda Play instala una app NUEVA por Google Play "con la
+    // pantalla tapada, con el mismo sistema exacto de actualización". Por eso no hay un
+    // segundo flujo: es este, con un MODO. Lo único que cambia con MODE_INSTALL:
+    //   • el paquete NO tiene que estar instalado al arrancar (y "ya está instalado" es
+    //     el éxito, en lugar de "cambió el versionCode");
+    //   • va siempre por Google Play (la copia de la Tienda de LockSuite sirve para
+    //     actualizar lo que ya está, no para instalar apps nuevas);
+    //   • los textos dicen "instalar" en vez de "actualizar".
+    // Todo lo demás —pantalla negra, restricciones levantadas SOLO para ese paquete,
+    // vigilancia de la Accesibilidad, watchdog de 10 minutos, cierre único en finish()—
+    // es literalmente el mismo código.
+    /** Modo del flujo abierto: [MODE_UPDATE] (por omisión, también si la clave falta) o [MODE_INSTALL]. */
+    const val KEY_MODE = "update_flow_mode"
+    /** Modo del último flujo cerrado (para que el panel diga "instalación" y no "actualización"). */
+    const val KEY_LAST_MODE = "update_flow_last_mode"
+    /**
+     * Nombre para mostrar de la app que se está instalando. Una app que todavía no está
+     * instalada no tiene etiqueta en el sistema: `appLabel` devolvía el nombre del paquete
+     * ("com.waze") en la pantalla negra. Se anota junto con el paquete al que pertenece.
+     */
+    const val KEY_LABEL = "update_flow_label"
+    const val KEY_LABEL_PKG = "update_flow_label_pkg"
+    const val MODE_UPDATE = "update"
+    const val MODE_INSTALL = "install"
 
     // ── Rutas ──
     const val ROUTE_PLAY_STORE = UpdateRoutePlanner.ROUTE_PLAY_STORE
@@ -340,6 +368,16 @@ object UpdateFlowManager {
      */
     fun currentRoute(context: Context): String =
         PrefsHelper.getMdmPrefs(context).getString(KEY_ROUTE, ROUTE_PLAY_STORE) ?: ROUTE_PLAY_STORE
+
+    /**
+     * ¿El flujo abierto es una INSTALACIÓN de la Tienda Play (B.101)? Una clave ausente es
+     * una actualización: es lo que dejan los flujos arrancados por una versión anterior.
+     */
+    fun isInstallMode(context: Context): Boolean =
+        PrefsHelper.getMdmPrefs(context).getString(KEY_MODE, MODE_UPDATE) == MODE_INSTALL
+
+    /** "instalar" o "actualizar" según el flujo abierto (B.101), para armar mensajes. */
+    fun verb(context: Context): String = if (isInstallMode(context)) "instalar" else "actualizar"
 
     /**
      * ¿Hay un flujo POR GOOGLE PLAY en curso? Es lo único que habilita lo que toca la
@@ -568,7 +606,11 @@ object UpdateFlowManager {
             context.packageManager.getApplicationInfo(packageName, 0)
         ).toString()
     } catch (e: Exception) {
-        packageName
+        // B.101: una app que todavía no está instalada no tiene etiqueta en el sistema; la
+        // Tienda Play anota el nombre que muestra su lista junto con el paquete.
+        val p = PrefsHelper.getMdmPrefs(context)
+        val saved = p.getString(KEY_LABEL, null)
+        if (!saved.isNullOrBlank() && p.getString(KEY_LABEL_PKG, null) == packageName) saved else packageName
     }
 
     fun versionCodeOf(context: Context, packageName: String): Long = try {
@@ -635,15 +677,33 @@ object UpdateFlowManager {
      */
     fun targetAlreadyUpdated(context: Context): Boolean {
         val pkg = currentPackage(context) ?: return false
+        // B.101: en una INSTALACIÓN no hay versión de partida que comparar: el éxito es
+        // que el paquete ahora exista. Mismo criterio de siempre —lo que mide el sistema,
+        // no lo que dice la pantalla de Play Store—, con otra pregunta.
+        if (isInstallMode(context)) return versionCodeOf(context, pkg) >= 0L
         val base = PrefsHelper.getMdmPrefs(context).getLong(KEY_BASE_VERSION, -1L)
         if (base < 0L) return false
         val now = versionCodeOf(context, pkg)
         return now >= 0L && now != base
     }
 
-    /** Texto que ve el usuario en la pantalla negra para cada etapa. */
-    fun stageLabel(stage: String?, detail: String?): String {
+    /**
+     * Texto que ve el usuario en la pantalla negra para cada etapa.
+     *
+     * @param install true en una instalación de la Tienda Play (B.101): cambian solo las
+     *   etapas que nombran la actualización.
+     */
+    fun stageLabel(stage: String?, detail: String?, install: Boolean = false): String {
         if (!detail.isNullOrBlank()) return detail
+        if (install) {
+            when (stage) {
+                STAGE_PREPARING -> return "Preparando la instalación..."
+                STAGE_WAITING_UNLOCK -> return "Desbloqueá el celular para continuar la instalación"
+                STAGE_LOOKING_BUTTON -> return "Buscando el botón Instalar..."
+                STAGE_DOWNLOADING -> return "Descargando la app..."
+                else -> {}
+            }
+        }
         return when (stage) {
             STAGE_PREPARING -> "Preparando la actualización..."
             STAGE_CHOOSING_ROUTE -> "Buscando la mejor forma de actualizar..."
@@ -802,10 +862,40 @@ object UpdateFlowManager {
         source: String,
         cancelable: Boolean,
         routePref: String = UpdateRoutePlanner.PREF_AUTO
+    ): String? = startFlow(context, packageName, source, cancelable, routePref, MODE_UPDATE, null)
+
+    /**
+     * 29/10/2026 (B.101) — INSTALAR una app NUEVA por Google Play con este mismo flujo
+     * (lo llama `PlayStoreManager.install`, que ya comprobó que la app está permitida).
+     *
+     * Siempre por Google Play (la copia de la Tienda de LockSuite solo actualiza lo que ya
+     * está instalado) y con la pantalla tapada desde el primer segundo. Devuelve null si
+     * arrancó y un mensaje listo para mostrar si no.
+     *
+     * @param label el nombre que muestra la lista de la tienda: la pantalla negra dice
+     *   "Instalando Waze" aunque Waze todavía no exista en el equipo.
+     */
+    fun startInstall(
+        context: Context,
+        packageName: String,
+        label: String,
+        source: String = SOURCE_LOCAL
+    ): String? = startFlow(context, packageName, source, true, UpdateRoutePlanner.PREF_PLAY, MODE_INSTALL, label)
+
+    private fun startFlow(
+        context: Context,
+        packageName: String,
+        source: String,
+        cancelable: Boolean,
+        routePref: String,
+        mode: String,
+        displayLabel: String?
     ): String? {
         val ctx = context.applicationContext
         val policyManager = PolicyManager(ctx)
-        val pref = UpdateRoutePlanner.normalizePref(routePref)
+        val install = mode == MODE_INSTALL
+        // Instalar nunca pasa por la copia de la Tienda de LockSuite: fuerza Google Play.
+        val pref = if (install) UpdateRoutePlanner.PREF_PLAY else UpdateRoutePlanner.normalizePref(routePref)
 
         if (packageName.isBlank()) return "No se indico ninguna aplicacion."
 
@@ -817,10 +907,11 @@ object UpdateFlowManager {
         // marca de instalación prendida, y uno muerto no tiene que trabar los pedidos nuevos.
         if (hasLiveFlow(ctx)) {
             val other = currentPackage(ctx)
+            val enCurso = if (isInstallMode(ctx)) "una instalacion" else "una actualizacion"
             return if (other == packageName) {
-                "Ya hay una actualizacion en curso para esta aplicacion."
+                "Ya hay $enCurso en curso para esta aplicacion."
             } else {
-                "Ya hay una actualizacion en curso (${appLabel(ctx, other ?: "")}). Espera a que termine o cancelala."
+                "Ya hay $enCurso en curso (${appLabel(ctx, other ?: "")}). Espera a que termine o cancelala."
             }
         }
 
@@ -842,7 +933,17 @@ object UpdateFlowManager {
         } catch (e: Exception) {
             false
         }
-        if (!installed) return "La aplicacion $packageName no esta instalada en este equipo."
+        if (install) {
+            if (installed) return "La aplicacion $packageName ya esta instalada en este equipo."
+            // B.101 — RED DE SEGURIDAD: aunque `PlayStoreManager.install` ya lo comprobó, un
+            // paquete que la tienda no ofrece AHORA no se instala por acá nunca. Esta función
+            // es pública y el flujo de instalación es justo lo que destapa Google Play.
+            if (!PlayStoreManager.isOffered(ctx, packageName)) {
+                return "La aplicacion $packageName no esta disponible en la tienda de este equipo."
+            }
+        } else if (!installed) {
+            return "La aplicacion $packageName no esta instalada en este equipo."
+        }
 
         // ── Verificaciones previas (3/9/2026) ──
         //
@@ -860,11 +961,16 @@ object UpdateFlowManager {
         if (pref == UpdateRoutePlanner.PREF_PLAY && playProblem != null) return playProblem
 
         val prefs = PrefsHelper.getMdmPrefs(ctx)
-        val label = appLabel(ctx, packageName)
+        val label = if (install) (displayLabel?.trim().takeUnless { it.isNullOrEmpty() } ?: packageName)
+        else appLabel(ctx, packageName)
+        // Para una app que todavía no está instalada estas tres dan -1 / "" / "" (no hay
+        // nada que medir): están a propósito, el éxito de una instalación es otra pregunta
+        // (ver targetAlreadyUpdated).
         val baseVc = versionCodeOf(ctx, packageName)
         val baseVn = versionNameOf(ctx, packageName)
         val installer = installerOf(ctx, packageName)
         val origen = if (source == SOURCE_LOCAL) "desde el celular" else "desde el panel"
+        val pedido = if (install) "instalar $label (Tienda Play)" else "actualizar $label (versión $baseVn)"
 
         // 2. Espacio libre. Esta es la que aparecio en el CAT S22 Flip del 3/9: el
         //    equipo estaba sin lugar, Play Store creaba la sesion de instalacion y
@@ -880,10 +986,10 @@ object UpdateFlowManager {
             // B.97: que el rechazo también quede en el registro paso a paso, así la
             // ficha del panel muestra qué pasó con el último pedido aunque no arrancó.
             prefs.edit().putString(KEY_STEPS, "").apply()
-            step(ctx, UpdateStepLog.INFO, "Pedido $origen: actualizar $label (versión $baseVn).", evenIfIdle = true)
+            step(ctx, UpdateStepLog.INFO, "Pedido $origen: $pedido.", evenIfIdle = true)
             step(ctx, UpdateStepLog.ERROR, "No se arrancó: $reason", evenIfIdle = true)
-            recordResult(ctx, RESULT_NO_SPACE, packageName, reason)
-            Log.w(TAG, "Actualizacion de $packageName rechazada por espacio: $reason")
+            recordResult(ctx, RESULT_NO_SPACE, packageName, reason, mode)
+            Log.w(TAG, "Flujo ($mode) de $packageName rechazado por espacio: $reason")
             return reason
         }
 
@@ -897,6 +1003,9 @@ object UpdateFlowManager {
 
         prefs.edit()
             .putString(KEY_PKG, packageName)
+            .putString(KEY_MODE, mode)
+            .putString(KEY_LABEL, if (install) label else "")
+            .putString(KEY_LABEL_PKG, if (install) packageName else "")
             // B.97: la marca de instalación NO se prende acá. La prende el camino que la
             // necesita, cuando la necesita: beginPlayStoreRoute() para Google Play, y
             // SelfUpdater por los segundos que dura la instalación silenciosa. Mientras se
@@ -924,9 +1033,14 @@ object UpdateFlowManager {
         LockSuiteAccessibilityService.instance?.invalidateFlagsCache()
         LockSuiteAccessibilityService.instance?.overlayManager?.clearBlockingSteps()
 
-        step(ctx, UpdateStepLog.INFO,
-            "Pedido $origen: actualizar $label (versión $baseVn, código $baseVc). La instaló: ${installerLabel(ctx, installer)}.")
-        if (installer.isNotBlank() && installer != PKG_PLAY_STORE) {
+        if (install) {
+            step(ctx, UpdateStepLog.INFO,
+                "Pedido $origen: $pedido. Se instala por Google Play, con la pantalla tapada.")
+        } else {
+            step(ctx, UpdateStepLog.INFO,
+                "Pedido $origen: actualizar $label (versión $baseVn, código $baseVc). La instaló: ${installerLabel(ctx, installer)}.")
+        }
+        if (!install && installer.isNotBlank() && installer != PKG_PLAY_STORE) {
             step(ctx, UpdateStepLog.WARN,
                 "Ojo: a esta app no la instaló Google Play. Si su firma no es la de la versión de Google Play, " +
                     "Play Store no va a poder actualizarla (Android no deja reemplazar una app firmada por otro).")
@@ -937,10 +1051,13 @@ object UpdateFlowManager {
 
         armWatchdog(ctx)
         syncToPanel(ctx, force = true)
-        Log.i(TAG, "Flujo de actualizacion iniciado para $packageName (origen=$source, ruta pedida=$pref)")
+        Log.i(TAG, "Flujo de ${if (install) "instalacion" else "actualizacion"} iniciado para $packageName (origen=$source, ruta pedida=$pref)")
 
         if (pref == UpdateRoutePlanner.PREF_PLAY) {
-            return beginPlayStoreRoute(ctx, packageName, "Elegido por el administrador.")
+            return beginPlayStoreRoute(
+                ctx, packageName,
+                if (install) "Instalación desde la Tienda Play." else "Elegido por el administrador."
+            )
         }
 
         // Automático o Tienda: hay que mirar la Tienda de LockSuite, y eso es red. Se
@@ -1182,8 +1299,9 @@ object UpdateFlowManager {
         if (effectiveDetail == null) editor.remove(KEY_DETAIL) else editor.putString(KEY_DETAIL, effectiveDetail)
         editor.apply()
 
+        val instalando = isInstallMode(ctx)
         LockSuiteAccessibilityService.instance?.overlayManager?.let { om ->
-            om.updateBlockingMessage(null, stageLabel(stage, effectiveDetail))
+            om.updateBlockingMessage(null, stageLabel(stage, effectiveDetail, instalando))
             // La barra con el porcentaje real en la pantalla negra (si no se sabe, la ruedita).
             om.updateBlockingProgress(if (newProgress >= 0) newProgress else null)
         }
@@ -1195,7 +1313,7 @@ object UpdateFlowManager {
         // mientras la ficha se dibuja, y eso llenaría el registro de idas y vueltas
         // empujando afuera lo que importa (qué apretó).
         if (prevStage != stage && stage != STAGE_IDLE) {
-            val etiqueta = stageLabel(stage, null).removeSuffix("...").removeSuffix("…")
+            val etiqueta = stageLabel(stage, null, instalando).removeSuffix("...").removeSuffix("…")
             val recientes = UpdateStepLog.decode(prefs.getString(KEY_STEPS, null)).takeLast(4).map { it.msg }
             if (etiqueta !in recientes) step(ctx, UpdateStepLog.INFO, etiqueta)
         }
@@ -1226,9 +1344,10 @@ object UpdateFlowManager {
             return
         }
         val effectiveDetail = detail ?: currentDetail(ctx)
+        val instalando = isInstallMode(ctx)
         service.overlayManager.showBlockingMessageOverlay(
-            title = "Actualizando ${appLabel(ctx, packageName)}",
-            subtitle = stageLabel(stage, effectiveDetail),
+            title = (if (instalando) "Instalando " else "Actualizando ") + appLabel(ctx, packageName),
+            subtitle = stageLabel(stage, effectiveDetail, instalando),
             cancelable = cancelable,
             onCancel = { requestCancel(ctx) }
         )
@@ -1253,7 +1372,7 @@ object UpdateFlowManager {
             return
         }
         step(ctx, UpdateStepLog.WARN, "Cancelada por el usuario o el administrador.")
-        finish(ctx, RESULT_CANCELLED, "Actualización cancelada.")
+        finish(ctx, RESULT_CANCELLED, if (isInstallMode(ctx)) "Instalación cancelada." else "Actualización cancelada.")
     }
 
     /**
@@ -1356,6 +1475,8 @@ object UpdateFlowManager {
 
         // B.97: lo que hace falta saber del flujo ANTES de borrarlo.
         val route = currentRoute(ctx)
+        // B.101: el modo se borra más abajo junto con el paquete; todo lo que sigue usa esta copia.
+        val installMode = isInstallMode(ctx)
         val stageAlCerrar = prefs.getString(KEY_STAGE, STAGE_IDLE)
         // Un cierre por TIEMPO dice dónde se quedó (antes era siempre "tardó demasiado").
         val effectiveReason = reason ?: message
@@ -1375,10 +1496,14 @@ object UpdateFlowManager {
                 else -> UpdateStepLog.ERROR
             }
             val texto = when (result) {
-                RESULT_UPDATED -> "Listo: actualizada" + (if (versionDespues.isNotEmpty()) " a la versión $versionDespues." else ".")
-                RESULT_UP_TO_DATE -> "Listo: la app ya estaba en la última versión."
+                RESULT_UPDATED ->
+                    if (installMode) "Listo: instalada" + (if (versionDespues.isNotEmpty()) " (versión $versionDespues)." else ".")
+                    else "Listo: actualizada" + (if (versionDespues.isNotEmpty()) " a la versión $versionDespues." else ".")
+                RESULT_UP_TO_DATE ->
+                    if (installMode) "Listo: la app ya estaba instalada." else "Listo: la app ya estaba en la última versión."
                 RESULT_CANCELLED -> "Cancelada."
-                else -> "Terminó sin actualizar ($result)" + (if (!effectiveReason.isNullOrBlank()) ": $effectiveReason" else ".")
+                else -> "Terminó sin ${if (installMode) "instalar" else "actualizar"} ($result)" +
+                    (if (!effectiveReason.isNullOrBlank()) ": $effectiveReason" else ".")
             }
             step(ctx, kind, texto, evenIfIdle = true)
         }
@@ -1393,6 +1518,7 @@ object UpdateFlowManager {
 
         val cierre = prefs.edit()
             .remove(KEY_PKG)
+            .remove(KEY_MODE)
             .putBoolean(KEY_IN_PROGRESS, false)
             .putString(KEY_STAGE, STAGE_IDLE)
             .remove(KEY_DETAIL)
@@ -1404,12 +1530,24 @@ object UpdateFlowManager {
         // panel perdía el motivo de la última actualización de verdad.
         if (!pkg.isNullOrBlank()) {
             cierre.putString(KEY_VERSION_AFTER, versionDespues)
+                .putString(KEY_LAST_MODE, if (installMode) MODE_INSTALL else MODE_UPDATE)
                 .putString(KEY_LAST_RESULT, result)
                 .putString(KEY_LAST_RESULT_PKG, pkg)
                 .putString(KEY_LAST_RESULT_REASON, effectiveReason ?: "")
                 .putLong(KEY_LAST_RESULT_AT, System.currentTimeMillis())
         }
         cierre.apply()
+
+        // B.101: una instalación de la Tienda Play que terminó bien: la tienda anota qué
+        // instaló (para poder pausarlo si la tienda se cierra) y aplica el "sin web" de esa
+        // app. Va ANTES de refrescar el kiosco: la app recién instalada entra a su lista.
+        if (installMode && !pkg.isNullOrBlank()) {
+            try {
+                PlayStoreManager.afterInstallFlow(ctx, pkg, result)
+            } catch (e: Exception) {
+                Log.w(TAG, "No se pudo registrar la instalación de la Tienda Play: ${e.message}")
+            }
+        }
 
         // B.99: si Google Play había entrado a la lista del kiosco por esta actualización,
         // sale ahora (el flujo ya figura cerrado, así que la lista se arma sin ella).
@@ -1425,7 +1563,22 @@ object UpdateFlowManager {
         service?.resetUpdateSession()
 
         val label = if (!pkg.isNullOrBlank()) appLabel(ctx, pkg) else "App"
-        val finalNotice = when (result) {
+        val finalNotice = if (installMode) when (result) {
+            // B.101: una instalación. UP_TO_DATE no debería llegar (no se arranca si ya está
+            // instalada), pero si llega se dice la verdad.
+            RESULT_UP_TO_DATE -> message ?: "$label ya estaba instalada."
+            RESULT_UPDATED -> message ?: "✓ $label instalada."
+            RESULT_CANCELLED -> message ?: "Instalación cancelada."
+            RESULT_ERROR -> message ?: "No se pudo completar la instalación."
+            RESULT_TIMEOUT -> message ?: effectiveReason ?: "La instalación tardó demasiado y se canceló."
+            RESULT_NO_SPACE -> message ?: "No hay espacio suficiente para instalar $label."
+            RESULT_NEEDS_ACCOUNT -> message
+                ?: "Google Play pide iniciar sesión: este equipo no tiene una cuenta de Google configurada."
+            RESULT_NOT_AVAILABLE -> message
+                ?: "Google Play no ofrece $label para este equipo."
+            RESULT_STORE_ERROR -> message ?: "Google Play devolvió un error. Probá de nuevo más tarde."
+            else -> message
+        } else when (result) {
             RESULT_UP_TO_DATE -> message ?: "$label ya está actualizada."
             RESULT_UPDATED -> message ?: "✓ Actualización completada con éxito."
             RESULT_CANCELLED -> message ?: "Actualización cancelada."
@@ -1640,12 +1793,19 @@ object UpdateFlowManager {
      * "no hay espacio" desde el panel se veia solo como un comando fallido, sin
      * que quedara registro de por que.
      */
-    fun recordResult(context: Context, result: String, packageName: String?, reason: String?) {
+    fun recordResult(
+        context: Context,
+        result: String,
+        packageName: String?,
+        reason: String?,
+        mode: String = MODE_UPDATE
+    ) {
         val ctx = context.applicationContext
         PrefsHelper.getMdmPrefs(ctx).edit()
             .putString(KEY_LAST_RESULT, result)
             .putString(KEY_LAST_RESULT_PKG, packageName ?: "")
             .putString(KEY_LAST_RESULT_REASON, reason ?: "")
+            .putString(KEY_LAST_MODE, mode)
             .putLong(KEY_LAST_RESULT_AT, System.currentTimeMillis())
             .apply()
         syncToPanel(ctx, force = true)

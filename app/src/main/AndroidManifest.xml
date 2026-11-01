@@ -351,6 +351,29 @@
                 android:resource="@xml/google_verify_widget_info" />
         </receiver>
 
+        <!-- TIENDA PLAY (B.101): la pantalla con las apps que el administrador permitió. Solo la
+             abre LockSuite (el widget, el lanzador kosher, el modo teclas): exported="false".
+             singleTop: tocar el ícono otra vez trae la pantalla que ya está abierta. -->
+        <activity
+            android:name=".ui.playstore.PlayStoreActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.LockSuite" />
+
+        <!-- TIENDA PLAY WIDGET (B.101): "widget" de una celda que se ve como el ícono de una app.
+             Se apaga/enciende solo según el modo (PlayStoreManager.notifyChanged → refreshAll). -->
+        <receiver
+            android:name=".widget.PlayStoreWidgetProvider"
+            android:label="Tienda Play"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/play_store_widget_info" />
+        </receiver>
+
         <!-- GOOGLE VERIFICATION ACTIVITY (Microvisor Confinado de Verificaciones de Google - B.92)
              ⚠️ (22/10) En Android 12+ estos intent-filter NO reciben el link de la cámara del
              sistema: un link web va al navegador predeterminado salvo que la app esté aprobada

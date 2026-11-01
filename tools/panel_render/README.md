@@ -60,6 +60,28 @@ No necesita red ni credenciales: nunca toca el Firebase de verdad.
   860-1274 px en un teléfono).
 - Un equipo con LockSuite anterior a B.97 avisa que actualiza solo por Google Play.
 
+`test_tienda.js` **(29/10/2026, B.101)** — la **Tienda Play**: la página global
+(`tienda.html` + `tienda_logic.js` + `tienda.js`) y la sección del celular en la ficha
+(`celular.html` + `celular.js`), más la pestaña 🔔 Pedidos de `index.html`. Escenarios:
+
+- **A** — primera vez (nada guardado): la lista nace de la Tienda vieja (`storeApps`; solo
+  «habilitada» lo que ya estaba en `allowedPackages`, el resto «a pedido»), se verifica
+  contra Google Play (función falsa), los estados Habilitada / A pedido / Bloqueada /
+  Eliminar, Detalles (nombre, nivel, acceso, dominios), Guardar escribe
+  `globalSettings/playStore` y «Enviar a todos» manda `SYNC_PLAY_STORE` (y se niega a
+  mandar antes de guardar).
+- **B** — lista ya guardada + «↩ Traer de la tienda vieja» (agrega solo lo que falta).
+- **C** — la función de Play caída: la lista sigue sirviendo, nunca se marca nada como
+  «no aparece» por un error.
+- **D** — lista vacía + «Agregar una app» por nombre de paquete (valida y consulta Play).
+- **E** — a 390 px de ancho no se desborda nada de costado.
+- **F** — la sección **Tienda Play** de la ficha: modo (`SET_PLAY_STORE_MODE`), qué ve el
+  usuario en ese modo, paquetes extra del equipo, pedidos «a pedido» (Aprobar / Rechazar),
+  y los niveles automáticos 5 (Solo llamadas) y 6 (Lite).
+- **G** — 🔔 Pedidos de `index.html`: un pedido de la Tienda Play se aprueba habilitándolo
+  SOLO en ese equipo (`devices/<id>/playStoreExtras`), nunca en `allowedPackages` (que
+  abriría la app a toda la flota); un pedido de la tienda vieja sigue igual que siempre.
+
 ## Control negativo
 
 Copiar el `app.js` viejo (`git show <commit>:admin-backend/public/app.js`) a la carpeta

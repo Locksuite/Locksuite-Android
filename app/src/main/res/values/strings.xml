@@ -7,4 +7,10 @@
          el dashboard del Knox Partner Program y reemplazar el placeholder de abajo.
          Ver KnoxHardening.kt para el resto de los pasos de integracion. -->
     <string name="knox_license_key" translatable="false">TU_LICENCIA_KPE_STANDARD_ACA</string>
+
+    <!-- Tienda Play (B.101): nombre que ve el usuario en el selector de widgets y debajo del
+         ícono. El texto de debajo del ícono lo reemplaza PlayStoreWidgetProvider por el del
+         idioma elegido en LockSuite (es / en / he). -->
+    <string name="widget_play_store_label">Tienda</string>
+    <string name="widget_play_store_description">Abre la Tienda Play: las apps que tu administrador permitió, para instalar desde Google Play.</string>
 </resources>

@@ -169,6 +169,15 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+            // 29/10/2026 (B.101) — LO MISMO PARA LA TIENDA PLAY. Su catálogo (global y de
+            // este equipo) también es estado que solo llegaba por un FCM `SYNC_PLAY_STORE`:
+            // si se perdía, el usuario seguía viendo la tienda vieja hasta el próximo
+            // cambio. Releerlo es idempotente (reemplaza los mapas y reconcilia).
+            try {
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.pullPlayStoreConfig(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         // 22/9/2026 — BUZÓN DE COMANDOS, en TODAS las vueltas.

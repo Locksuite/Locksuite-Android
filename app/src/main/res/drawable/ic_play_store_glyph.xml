@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Bolsa de compras con una flecha de descarga (B.101, Tienda Play).
+    Dibujo propio y genérico: NO es el logo de Google Play.
+    Sale blanca sobre el recuadro de color de ic_play_store_tile; la flecha es del verde
+    oscuro de la marca (se ve sobre el cuerpo blanco de la bolsa).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Cuerpo de la bolsa -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M5.2,8.2 H18.8 L19.9,19.6 A1.6,1.6 0 0 1 18.3,21.4 H5.7 A1.6,1.6 0 0 1 4.1,19.6 Z" />
+    <!-- Asa -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineCap="round"
+        android:pathData="M8.6,8.2 V7 A3.4,3.4 0 0 1 15.4,7 V8.2" />
+    <!-- Flecha hacia abajo (instalar) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#0F766E"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M12,11.4 V17 M9.4,14.6 L12,17.2 L14.6,14.6" />
+</vector>

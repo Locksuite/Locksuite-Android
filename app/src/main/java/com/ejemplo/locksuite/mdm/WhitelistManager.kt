@@ -724,8 +724,59 @@ class WhitelistManager(private val context: Context) {
      * personalizada puede abrir por accidente algo que BLOCK_ALWAYS cierra.
      */
     fun reload() {
-        val rules = buildRules(allDecisions(), customApps().associateBy { it.packageName }, isSharedCdnAllowed())
-        publish(DomainRuleTrie.build(rules), isEnabled(), isSimulation())
+        publish(DomainRuleTrie.build(currentRules()), isEnabled(), isSimulation())
+    }
+
+    /**
+     * Las reglas que rigen AHORA: decisiones (global + este equipo) y apps personalizadas
+     * del panel, más lo que aporta la Tienda Play (B.101). Es el ÚNICO lugar que arma esa
+     * entrada, y lo usan `reload()` y `ruleCount()`: antes eran dos cuentas en paralelo y
+     * ya se habían desincronizado una vez (ver `ruleCount`).
+     */
+    private fun currentRules(): Map<String, RuleType> {
+        val (decisions, custom) = withPlayStore(allDecisions(), customApps().associateBy { it.packageName })
+        return buildRules(decisions, custom, isSharedCdnAllowed())
+    }
+
+    /**
+     * ★ 29/10/2026 (B.101) — LO QUE LA TIENDA PLAY SUMA A LA LISTA BLANCA.
+     *
+     * Una app que la tienda ofrece cuenta como PERMITIDA (se abren los dominios que el
+     * catálogo de fábrica o el panel conocen de ella), y una de acceso "dominios" suma sus
+     * propias listas como si fuera una app personalizada del panel. Solo se SUMA:
+     *  - nunca se pisa un "Prohibir" (global o de este equipo): la tienda no ofrece esa app
+     *    (ver `PlayStoreManager.offered`) y, por si llegara a cambiar, acá tampoco se abre;
+     *  - nunca se agrega nada con la tienda cerrada (no aporta apps ofrecidas);
+     *  - los dominios `block` de la tienda van por el mismo camino que los del panel, o sea
+     *    que se cierran aunque el modo lista blanca esté apagado y le ganan a los permisos.
+     */
+    private fun withPlayStore(
+        decisions: Map<String, String>,
+        custom: Map<String, CustomApp>
+    ): Pair<Map<String, String>, Map<String, CustomApp>> {
+        val contribution = try {
+            PlayStoreManager.whitelistContribution(context)
+        } catch (e: Exception) {
+            android.util.Log.w("WhitelistManager", "Tienda Play: no se pudo leer su aporte: ${e.message}")
+            return decisions to custom
+        }
+        if (contribution.allowedPackages.isEmpty()) return decisions to custom
+
+        val mergedDecisions = LinkedHashMap(decisions)
+        for (pkg in contribution.allowedPackages) {
+            if (mergedDecisions[pkg] != STATE_BLOCK) mergedDecisions[pkg] = STATE_ALLOW
+        }
+        val mergedCustom = LinkedHashMap(custom)
+        for ((pkg, lists) in contribution.domainLists) {
+            if (decisions[pkg] == STATE_BLOCK) continue
+            val prev = mergedCustom[pkg]
+            mergedCustom[pkg] = if (prev == null) {
+                CustomApp(packageName = pkg, label = pkg, allow = lists.allow, block = lists.block)
+            } else {
+                prev.copy(allow = prev.allow + lists.allow, block = prev.block + lists.block)
+            }
+        }
+        return mergedDecisions to mergedCustom
     }
 
     /**
@@ -737,6 +788,5 @@ class WhitelistManager(private val context: Context) {
      * kosher, así que el panel habría mostrado menos reglas de las que rigen. Es barato
      * (decenas de entradas) y por construcción no puede volver a diferir.
      */
-    fun ruleCount(): Int =
-        buildRules(allDecisions(), customApps().associateBy { it.packageName }, isSharedCdnAllowed()).size
+    fun ruleCount(): Int = currentRules().size
 }

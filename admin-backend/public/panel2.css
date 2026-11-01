@@ -158,6 +158,8 @@
 .ls-approw.st-allow { border-left: 3px solid var(--success-green); }
 .ls-approw.st-block { border-left: 3px solid var(--alert-red); }
 .ls-approw.st-unset { border-left: 3px solid var(--text-muted); }
+/* Tienda Play (B.101): «a pedido» */
+.ls-approw.st-req { border-left: 3px solid var(--warning-yellow); }
 .ls-approw.pending { box-shadow: inset 0 0 0 1px var(--accent); }
 
 .ls-apphead { display: flex; align-items: center; gap: 12px; padding: 10px 12px; flex-wrap: wrap; }
@@ -176,6 +178,7 @@
 .ls-seg button.on-allow { background: var(--success-green); color: #0B192C; }
 .ls-seg button.on-block { background: var(--alert-red); color: #fff; }
 .ls-seg button.on-unset { background: var(--navy-light); color: var(--text-light); }
+.ls-seg button.on-req { background: var(--warning-yellow); color: #0B192C; }
 
 .ls-appbody { padding: 0 12px 12px; border-top: 1px solid var(--navy-border); }
 .ls-domlist { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }

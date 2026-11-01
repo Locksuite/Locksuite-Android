@@ -5,6 +5,19 @@
   window.__fnMode = "fcm_old";
   window.__calls = [];
   window.fetch = async (url, opts) => {
+    // Tienda Play (B.101): «Verificar en Play». `window.__playTable` dice qué contesta Play por
+    // paquete ({status, title, iconUrl}); lo que no está en la tabla se contesta como «missing».
+    // `window.__playMode = "down"` imita una función no desplegada (HTTP 404).
+    if (String(url).includes("checkplayapps")) {
+      const body = JSON.parse(opts.body);
+      window.__checkCalls = (window.__checkCalls || []).concat([body]);
+      if (window.__playMode === "down") {
+        return new Response(JSON.stringify({ error: "Not Found" }), { status: 404, headers: { "Content-Type": "application/json" } });
+      }
+      const table = window.__playTable || {};
+      const results = body.packages.map((pk) => Object.assign({ packageName: pk, status: "missing" }, table[pk] || {}));
+      return new Response(JSON.stringify({ success: true, results }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
     if (String(url).includes("sendcommandv8")) {
       const body = JSON.parse(opts.body);
       const cid = "c" + Math.random().toString(36).slice(2, 8);

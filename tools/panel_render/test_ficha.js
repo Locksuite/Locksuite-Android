@@ -83,8 +83,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // Todas las secciones existen y se abren desde el riel.
   const secciones = await p.evaluate(() => [...document.querySelectorAll('#c-rail button')].map(x => x.dataset.sec));
-  ok(['resumen', 'rapida', 'celapps', 'apps', 'politicas', 'actualizaciones', 'dns', 'tienda', 'acciones', 'diag']
-    .every(s => secciones.includes(s)), 'riel con las 10 secciones: ' + secciones.join(','));
+  ok(['resumen', 'rapida', 'celapps', 'apps', 'politicas', 'actualizaciones', 'dns', 'tienda', 'tiendaplay', 'acciones', 'diag']
+    .every(s => secciones.includes(s)), 'riel con todas las secciones (incluida Tienda Play): ' + secciones.join(','));
   for (const s of secciones) {
     await p.click('#c-rail button[data-sec="' + s + '"]');
     const visible = await p.evaluate((s) => { const el = document.querySelector('.ls-section[data-sec="' + s + '"]'); return !!el && el.offsetHeight > 0; }, s);

@@ -66,6 +66,11 @@
                vea como tal: lo que se toca ahí rige para toda la flota. -->
           <a id="main-tab-dominios" class="main-nav-btn" href="dominios.html" target="_blank"
              rel="noopener" style="text-decoration:none">🌐 Dominios por app ↗</a>
+          <!-- 29/10/2026 (B.101): la Tienda Play — apps de Google Play que se instalan con la
+               pantalla tapada (mismo mecanismo que «Actualizar app»). Catálogo GLOBAL en 3
+               niveles; también es una página aparte por la misma razón que Dominios. -->
+          <a id="main-tab-tienda" class="main-nav-btn" href="tienda.html" target="_blank"
+             rel="noopener" style="text-decoration:none">🛍️ Tienda Play ↗</a>
           <!-- B.59 — Pedidos de apps. El contador va en la propia pestaña y no en una
                campanita aparte: la barra de pestañas está siempre visible, así que el
                número se ve desde cualquier pantalla del panel sin agregar un elemento
@@ -1004,6 +1009,10 @@
        comando pendiente (marca «⏳ pendiente»). Es el mismo archivo generado que ya usa
        la ficha nueva; si faltara, la barra funciona igual, solo sin esa marca. -->
   <script src="policies.js?v=1"></script>
-  <script src="app.js?v=42"></script>
+  <!-- 29/10/2026 (B.101): aprobar un pedido de la Tienda Play usa la lógica pura de la pantalla
+       tienda.html (TiendaLogic.approveRequest). Si faltara, el resto del panel sigue igual y solo
+       esos pedidos avisan que no se pueden aprobar desde acá. -->
+  <script src="tienda_logic.js?v=2"></script>
+  <script src="app.js?v=43"></script>
 </body>
 </html>

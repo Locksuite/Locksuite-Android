@@ -268,6 +268,10 @@ class KosherLauncherActivity : ComponentActivity() {
                     null
                 )
             )
+            // Tienda Play (B.101): una entrada más del menú mientras la tienda esté abierta.
+            if (com.ejemplo.locksuite.mdm.PlayStoreManager.isOpen(this)) {
+                lista.add(PlayStoreTile.item(this))
+            }
             lista.sortedBy { NokiaIconSet.para(it.packageName, it.label).label.lowercase() }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -620,6 +624,12 @@ fun LauncherScreen(
             )
         )
 
+        // Tienda Play (B.101): un ícono más de la grilla mientras la tienda esté abierta en
+        // este equipo. El lanzador kosher propio no aloja widgets, así que ésta es su puerta.
+        if (com.ejemplo.locksuite.mdm.PlayStoreManager.isOpen(context)) {
+            list.add(PlayStoreTile.item(context))
+        }
+
         // Ordenar según prioridad solicitada por el usuario:
         // Grupo 1: Galería, Archivos, Música, Grabadora
         // Grupo 2: Calendario, Calculadora, Reloj, Notas
@@ -631,6 +641,9 @@ fun LauncherScreen(
             if (pkg == "com.ejemplo.locksuite.settings" || lbl == "Ajustes" || 
                 pkg.contains("bluetooth") || lbl.lowercase().contains("bluetooth")) {
                 return 4
+            }
+            if (item.packageName == PlayStoreTile.PACKAGE) {
+                return 2
             }
             if (lbl == "Galería" || lbl == "Archivos" || lbl == "Música" || lbl == "Grabadora") {
                 return 1

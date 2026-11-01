@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Ícono de la Tienda Play (B.101): recuadro redondeado verde con la bolsa adentro.
+    Está pensado para verse como el ícono de una APP, no como un widget: sin tarjeta, sin
+    borde y sin subtítulo (ver widget_play_store.xml).
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="315"
+                android:startColor="#34D399"
+                android:endColor="#0F766E" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+    <item
+        android:drawable="@drawable/ic_play_store_glyph"
+        android:left="12dp"
+        android:top="12dp"
+        android:right="12dp"
+        android:bottom="12dp" />
+</layer-list>

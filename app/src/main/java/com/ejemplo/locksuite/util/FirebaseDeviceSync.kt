@@ -313,7 +313,7 @@ object FirebaseDeviceSync {
                 "running" to running,
                 "packageName" to pkg,
                 "stage" to stage,
-                "statusText" to UpdateFlowManager.stageLabel(stage, detail),
+                "statusText" to UpdateFlowManager.stageLabel(stage, detail, UpdateFlowManager.isInstallMode(context)),
                 "source" to (prefs.getString(UpdateFlowManager.KEY_SOURCE, "") ?: ""),
                 "cancelable" to prefs.getBoolean(UpdateFlowManager.KEY_CANCELABLE, true),
                 "startedAt" to prefs.getLong(UpdateFlowManager.KEY_STARTED_AT, 0L),
@@ -339,7 +339,14 @@ object FirebaseDeviceSync {
                 "versionBefore" to (if (baseVc >= 0L) "$baseVn ($baseVc)" else baseVn),
                 "versionAfter" to (prefs.getString(UpdateFlowManager.KEY_VERSION_AFTER, "") ?: ""),
                 "keyguardLocked" to (running && UpdateFlowManager.isKeyguardLocked(context)),
-                "stepsCount" to UpdateStepLog.decode(stepsRaw).size
+                "stepsCount" to UpdateStepLog.decode(stepsRaw).size,
+                // ── 29/10/2026 (B.101): el mismo flujo también instala (Tienda Play) ──
+                // "update" o "install". Sin esto el panel diría "Actualizando Waze" de una
+                // instalación, y "Actualización: éxito" de la última.
+                "mode" to (prefs.getString(UpdateFlowManager.KEY_MODE, UpdateFlowManager.MODE_UPDATE)
+                    ?: UpdateFlowManager.MODE_UPDATE),
+                "lastMode" to (prefs.getString(UpdateFlowManager.KEY_LAST_MODE, UpdateFlowManager.MODE_UPDATE)
+                    ?: UpdateFlowManager.MODE_UPDATE)
             )
             val payload = mutableMapOf<String, Any>(
                 "updateFlow" to flow,
@@ -821,6 +828,10 @@ object FirebaseDeviceSync {
                     "whitelistSimulation" to policyManager.isWhitelistSimulation(),
                     "whitelistSharedCdn" to policyManager.isWhitelistSharedCdnAllowed(),
 
+                    // Tienda Play (B.101): modo, cuántas apps se ofrecen y qué instaló la
+                    // tienda. Son datos chicos y viajan con el resto del estado.
+                    "playStore" to com.ejemplo.locksuite.mdm.PlayStoreManager.statusForSync(context),
+
                     // ── Reglas DNS de este equipo (10/9/2026) ──
                     //
                     // Se publican para que el panel pueda MOSTRARLAS. Antes solo se veían
@@ -1152,6 +1163,99 @@ object FirebaseDeviceSync {
     }
 
     /**
+     * Lee la configuración de la TIENDA PLAY (B.101) y la aplica en este equipo. La dispara
+     * el comando FCM `SYNC_PLAY_STORE`, que no lleva datos: la lista viaja por la base por
+     * la misma razón que la de la lista blanca (el `data` de un mensaje FCM tiene un tope de
+     * ~4 KB y un catálogo de decenas de apps con dominios no entra).
+     *
+     * Estructura esperada:
+     * ```
+     * globalSettings/playStore/apps/<paquete_>  = {packageName,label,tier,access,status,allow:[…],block:[…],iconUrl}
+     * devices/<id>/playStoreExtras/<paquete_>   = {packageName,label,access,status,allow:[…],block:[…],iconUrl}
+     * ```
+     * (Las claves de Firebase no admiten `.`: el paquete real se lee del campo
+     * `packageName`, no de la clave — `_` → `.` no es reversible si el paquete ya tenía `_`.)
+     *
+     * Los dos nodos se leen primero y se aplican JUNTOS, con una sola reconciliación
+     * (ver `PlayStoreManager.replaceConfig`). Si uno no se pudo leer se conserva lo que el
+     * equipo ya tenía de ese nodo: un error de red nunca abre ni cierra la tienda.
+     *
+     * @return true si se aplicó algo.
+     */
+    fun pullPlayStoreConfig(context: Context): Boolean {
+        val ctx = context.applicationContext
+        return try {
+            var globalJson: String? = null
+            var extrasJson: String? = null
+            val latch = java.util.concurrent.CountDownLatch(2)
+            withAuth {
+                val db = FirebaseDatabase.getInstance()
+                db.getReference("globalSettings/playStore/apps").get()
+                    .addOnSuccessListener { snap ->
+                        try {
+                            globalJson = playStoreAppsJson(snap)
+                        } catch (e: Exception) {
+                            android.util.Log.e("FirebaseDeviceSync", "Tienda Play: catálogo ilegible: ${e.message}", e)
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        android.util.Log.e("FirebaseDeviceSync", "Tienda Play: no se pudo leer el catálogo global: ${e.message}", e)
+                        latch.countDown()
+                    }
+                db.getReference("devices/${deviceId(ctx)}/playStoreExtras").get()
+                    .addOnSuccessListener { snap ->
+                        try {
+                            extrasJson = playStoreAppsJson(snap)
+                        } catch (e: Exception) {
+                            android.util.Log.e("FirebaseDeviceSync", "Tienda Play: extras ilegibles: ${e.message}", e)
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        android.util.Log.w("FirebaseDeviceSync", "Tienda Play: no se pudieron leer los extras: ${e.message}")
+                        latch.countDown()
+                    }
+            }
+            // Tope alto pero finito: corre en un hilo de IO lanzado por el propio comando
+            // FCM, nunca en el hilo principal ni en el lector del túnel.
+            latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+            com.ejemplo.locksuite.mdm.PlayStoreManager.replaceConfig(ctx, globalJson, extrasJson)
+        } catch (e: Exception) {
+            android.util.Log.e("FirebaseDeviceSync", "Tienda Play: pullPlayStoreConfig falló: ${e.message}", e)
+            false
+        }
+    }
+
+    /** Un nodo de apps de la Tienda Play → arreglo JSON para `PlayStoreManager`. */
+    private fun playStoreAppsJson(node: com.google.firebase.database.DataSnapshot): String {
+        val arr = org.json.JSONArray()
+        node.children.forEach { child ->
+            val o = org.json.JSONObject()
+            val pkg = child.child("packageName").getValue(String::class.java)
+                ?: child.key?.replace("_", ".") ?: return@forEach
+            o.put("packageName", pkg)
+            child.child("label").getValue(String::class.java)?.let { o.put("label", it) }
+            // Firebase devuelve los números como Long; si el panel escribió texto, se ignora
+            // (PlayStoreCatalog descarta una entrada global sin nivel válido: falla cerrado).
+            child.child("tier").getValue(Long::class.java)?.let { o.put("tier", it.toInt()) }
+            child.child("access").getValue(String::class.java)?.let { o.put("access", it) }
+            child.child("status").getValue(String::class.java)?.let { o.put("status", it) }
+            child.child("iconUrl").getValue(String::class.java)?.let { o.put("iconUrl", it) }
+            o.put("allow", org.json.JSONArray(
+                child.child("allow").children.mapNotNull { it.getValue(String::class.java) }
+            ))
+            o.put("block", org.json.JSONArray(
+                child.child("block").children.mapNotNull { it.getValue(String::class.java) }
+            ))
+            arr.put(o)
+        }
+        return arr.toString()
+    }
+
+    /**
      * Publica al panel el estado de la lista blanca y la auditoría.
      *
      * **La auditoría es la parte que hace usable todo el modo.** Sin ella, "el equipo no
@@ -1358,7 +1462,9 @@ object FirebaseDeviceSync {
                     ?: com.ejemplo.locksuite.mdm.AppRequestManager.PENDIENTE,
                 pedidaEnMs = hijo.child("requestedAt").getValue(Long::class.java) ?: 0L,
                 resueltaEnMs = hijo.child("resolvedAt").getValue(Long::class.java) ?: 0L,
-                avisada = hijo.child("notified").getValue(Boolean::class.java) ?: false
+                avisada = hijo.child("notified").getValue(Boolean::class.java) ?: false,
+                // B.101: "play" si el pedido salió de la Tienda Play; vacío = tienda vieja.
+                fuente = hijo.child("store").getValue(String::class.java) ?: ""
             )
         }
 
@@ -1384,7 +1490,8 @@ object FirebaseDeviceSync {
         etiqueta: String,
         nota: String?,
         permitidas: Set<String>,
-        existentes: Collection<com.ejemplo.locksuite.mdm.AppRequestManager.Solicitud>
+        existentes: Collection<com.ejemplo.locksuite.mdm.AppRequestManager.Solicitud>,
+        fuente: String? = null
     ): com.ejemplo.locksuite.mdm.AppRequestManager.Veredicto {
         val ctx = context.applicationContext
         val veredicto = com.ejemplo.locksuite.mdm.AppRequestManager.decidir(
@@ -1397,7 +1504,7 @@ object FirebaseDeviceSync {
             ?: return com.ejemplo.locksuite.mdm.AppRequestManager.Veredicto.PAQUETE_INVALIDO
         val clave = com.ejemplo.locksuite.mdm.AppRequestManager.claveFirebase(paquete)
         val cuerpo = com.ejemplo.locksuite.mdm.AppRequestManager.cuerpo(
-            paquete, etiqueta, nota, System.currentTimeMillis()
+            paquete, etiqueta, nota, System.currentTimeMillis(), fuente
         )
         try {
             withAuth {
@@ -1484,12 +1591,10 @@ object FirebaseDeviceSync {
                 }
                 nm.createNotificationChannel(canal)
             }
-            val titulo = if (aviso.aprobada) "✅ ${aviso.label}: aprobada" else "❌ ${aviso.label}: rechazada"
-            val texto = if (aviso.aprobada) {
-                "Ya podés instalarla desde la Tienda de LockSuite."
-            } else {
-                "El administrador no aprobó este pedido."
-            }
+            // El texto sale de AppRequestManager (probado, en los tres idiomas) y nombra la
+            // tienda de donde salió el pedido: la vieja o la Tienda Play.
+            val (titulo, texto) = com.ejemplo.locksuite.mdm.AppRequestManager
+                .textoAviso(aviso, LocaleManager.getLang())
             // Un id por paquete: si hay tres pedidos contestados salen tres avisos y no
             // uno pisando al anterior. `hashCode()` puede ser negativo y eso está bien,
             // el id de notificación es un Int cualquiera mientras sea estable.
@@ -1651,6 +1756,18 @@ object FirebaseDeviceSync {
                 android.util.Log.w("FirebaseDeviceSync", "pullWhitelistConfigAsync: ${e.message}")
             }
         }, "LockSuiteWhitelistPull").start()
+    }
+
+    /** Relee la configuración de la Tienda Play, en un hilo propio. */
+    fun pullPlayStoreConfigAsync(context: Context) {
+        val ctx = context.applicationContext
+        Thread({
+            try {
+                pullPlayStoreConfig(ctx)
+            } catch (e: Exception) {
+                android.util.Log.w("FirebaseDeviceSync", "pullPlayStoreConfigAsync: ${e.message}")
+            }
+        }, "LockSuitePlayStorePull").start()
     }
 
     private fun writeFields(context: Context, fields: Map<String, Any>) {

@@ -1226,6 +1226,15 @@ fun PoliciesTabContent(context: Context) {
                 )
             }
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Grupo 5: TIENDA PLAY  (29/10/2026, B.101)
+        // Qué modo de la tienda tiene este equipo (cerrada / kosher / trabajo / lite).
+        // Las apps de cada nivel las define el administrador en el panel web.
+        // ─────────────────────────────────────────────────────────────────────
+        item {
+            PlayStoreModeGroup(refreshKey = refreshKey, onChanged = { refreshKey++ })
+        }
     }
 
     if (pendingSuspendConfirm) {
@@ -2137,7 +2146,7 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
                 fontSize = 16.sp
             )
             Text(
-                "Cuatro configuraciones listas. Un toque deja el celular configurado entero, " +
+                "${EnrollmentProfiles.ALL.size} configuraciones listas. Un toque deja el celular configurado entero, " +
                     "en vez de ir interruptor por interruptor. Después se puede ajustar lo que haga falta.",
                 color = Color.White.copy(alpha = 0.7f),
                 fontSize = 12.sp
@@ -2252,7 +2261,8 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
                     if (profile.id == EnrollmentProfiles.LEVEL_GRACE) {
                         val d = com.ejemplo.locksuite.mdm.GracePeriodManager.DURACIONES[graceIdx]
                         Text(
-                            "Dura ${d.first}, y al vencer se aplica solo el Nivel 1 — Kosher estricto.",
+                            "Dura ${d.first}, y al vencer se aplica solo el Nivel 1 — Kosher estricto " +
+                                "(la Tienda Play pasa de toda la tienda al modo Kosher).",
                             color = Color(0xFF8FC4E8),
                             fontSize = 12.sp
                         )

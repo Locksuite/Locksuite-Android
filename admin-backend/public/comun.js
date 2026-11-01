@@ -242,6 +242,53 @@
   };
 
   /* ─────────────────────────────────────────────────────────────────────────
+   * TIENDA PLAY — «Verificar en Play» (29/10/2026, B.101)
+   *
+   * Le pregunta a la Cloud Function `checkPlayApps` si Google Play tiene cada paquete.
+   * Va por el servidor porque el navegador no puede leer play.google.com (CORS) y porque
+   * así el panel no depende de cómo cambie el marcado de esa página.
+   *
+   * ⚠️ La URL sigue el patrón de las demás funciones de segunda generación
+   * (`<nombre en minúsculas>-<número de proyecto>.<región>.run.app`) pero NO está
+   * confirmada contra un despliegue real: al desplegar hay que verificar que sea
+   * exactamente esta (firebase deploy --only functions imprime la URL de cada función).
+   *
+   * @param {string[]} packages
+   * @returns {Promise<Array<{packageName:string, status:"found"|"missing"|"unknown", title?:string, iconUrl?:string}>>}
+   * @throws Error con el motivo, para que la pantalla lo muestre. Un error acá NUNCA debe
+   *         leerse como «la app no existe»: solo `status: "missing"` dice eso.
+   */
+  const URL_CHECK_PLAY = "https://checkplayapps-687828714595.us-central1.run.app";
+  const CHECK_PLAY_LOTE = 40; // mismo tope que play_lookup.js
+  LS.checkPlayApps = async function (packages) {
+    const lista = Array.from(new Set((packages || []).filter((p) => typeof p === "string" && p)));
+    const out = [];
+    for (let i = 0; i < lista.length; i += CHECK_PLAY_LOTE) {
+      const lote = lista.slice(i, i + CHECK_PLAY_LOTE);
+      let res;
+      try {
+        const idToken = await LS.auth.currentUser.getIdToken();
+        res = await fetch(URL_CHECK_PLAY, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + idToken },
+          body: JSON.stringify({ packages: lote })
+        });
+      } catch (e) {
+        throw new Error("no se pudo hablar con el servidor: " + e.message);
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || ("HTTP " + res.status +
+          (res.status === 404 ? " — la función checkPlayApps no está desplegada, o su URL cambió" : "")));
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!data || !Array.isArray(data.results)) throw new Error("respuesta inesperada del servidor");
+      for (const r of data.results) out.push(r);
+    }
+    return out;
+  };
+
+  /* ─────────────────────────────────────────────────────────────────────────
    * ESTADO "EN LÍNEA"
    *
    * Mismos umbrales que el panel viejo, y por el motivo que dejó anotado B.29:

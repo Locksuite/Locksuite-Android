@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- La Tienda Play con la tienda CERRADA en este equipo: mismo ícono, apagado en gris. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="315"
+                android:startColor="#94A3B8"
+                android:endColor="#475569" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+    <item
+        android:drawable="@drawable/ic_play_store_glyph_off"
+        android:left="12dp"
+        android:top="12dp"
+        android:right="12dp"
+        android:bottom="12dp" />
+</layer-list>

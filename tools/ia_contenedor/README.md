@@ -55,3 +55,11 @@ pkill -f "[G]radleDaemon"; pkill -f "[K]otlinCompileDaemon"
 ## Las reglas de la base
 
 Ver `tools/rules_tests/README.md` (emulador real de Realtime Database; necesita Java).
+
+## Si el contenedor NO llega a Maven ni al SDK
+
+(29/10/2026.) Hay sesiones en las que `setup_sdk.sh` no puede bajar nada (los hosts del SDK y de
+Maven están bloqueados). Para no entregar Kotlin sin ningún chequeo, `typecheck/` trae un
+verificador de tipos y un corredor de tests unitarios que **no usan Gradle**
+(`typecheck.sh`: ~45 s, `run_unit_tests.sh`: ~17 s). Cubren todo menos lo de Jetpack Compose y no
+reemplazan a este build; leé `typecheck/README.md` antes de confiar en su «0 errores».
