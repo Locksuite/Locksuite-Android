@@ -13,6 +13,10 @@ object Constants {
     const val PREFS_NAME = "locksuite_secure_prefs"
     const val KEY_PIN_HASH = "pin_hash"
     const val KEY_PIN_SALT = "pin_salt"
+    // Credenciales (PIN + código de recuperación) cuya publicación en la nube CONFIRMÓ el
+    // servidor. Si no coincide con lo que hay en el equipo, falta publicar. 1/11/2026, B.104:
+    // ver mdm/PinCloudSyncPolicy y FirebaseDeviceSync.ensurePinPublished().
+    const val KEY_PIN_CLOUD_ACKED = "pin_cloud_acked"
     const val KEY_RECOVERY_HASH = "recovery_hash"
     const val KEY_RECOVERY_SALT = "recovery_salt"
     const val KEY_RECOVERY_PLAINTEXT_CACHE = "recovery_plaintext_cache"

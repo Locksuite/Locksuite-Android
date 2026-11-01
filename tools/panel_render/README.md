@@ -82,6 +82,24 @@ No necesita red ni credenciales: nunca toca el Firebase de verdad.
   SOLO en ese equipo (`devices/<id>/playStoreExtras`), nunca en `allowedPackages` (que
   abriría la app a toda la flota); un pedido de la tienda vieja sigue igual que siempre.
 
+**(1/11/2026, B.104)** — un celular cuyo PIN la nube no tiene (`DEVICE_PIN_NOT_ENROLLED`, el
+caso de «Shuli»). `fake-function.js` imita la puerta del PIN de la Function real con dos
+modos nuevos: `pin_no_publicado` (412 `DEVICE_PIN_NOT_ENROLLED` a todo salvo
+`UPDATE_LOCKSUITE`/`UPDATE_APP`/`CANCEL_UPDATE_APP`) y `pin_requerido` (el verificador
+existe, PIN «1234»: 412 `PIN_REQUIRED` sin PIN, 403 `PIN_INCORRECT` con otro).
+
+- `test_ficha.js`: la ficha dice que falta el PIN en la NUBE (no «el celular no configuró un
+  PIN»), muestra el `pinPublishError` que anotó el celular y se redibuja al cambiar; el
+  comando vuelve `pin_no_publicado` con texto claro, **sin pedir un PIN** y con **un solo
+  pedido**; el botón muestra el aviso claro y no el código crudo; `UPDATE_LOCKSUITE` sigue
+  pasando; y dos controles: con el PIN en la nube se sigue pidiendo una vez, y un PIN
+  equivocado sigue siendo `PIN_INCORRECT`.
+- `test_panel.js`: con el celular sin bandera de PIN (o con la bandera en `true` pero sin
+  verificador) la ficha lateral **se abre** con el aviso, en vez de un `alert` que la cerraba;
+  un comando devuelve el mensaje claro; la actualización de LockSuite sale.
+- ⚠️ `openDeviceSidebar` espera a que alguien escriba el PIN: en un test hay que llamarla SIN
+  `return` dentro de `page.evaluate`, o la prueba se cuelga esperando su promesa.
+
 ## Control negativo
 
 Copiar el `app.js` viejo (`git show <commit>:admin-backend/public/app.js`) a la carpeta

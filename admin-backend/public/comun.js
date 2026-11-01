@@ -75,7 +75,7 @@
     // Los avisos que EXPLICAN algo se quedan más tiempo. Es la misma corrección
     // que B.41 hizo en la pantalla del celular: 1,8 s alcanzan para "✓ listo" y
     // no para una frase de dos renglones.
-    const ms = kind === "error" ? 9000 : msg.length > 60 ? 6000 : 3200;
+    const ms = kind === "error" ? (msg.length > 140 ? 15000 : 9000) : msg.length > 60 ? 6000 : 3200;
     setTimeout(() => {
       el.style.opacity = "0";
       setTimeout(() => el.remove(), 300);
@@ -101,6 +101,18 @@
 
   /** PIN por dispositivo recordado en memoria, igual que el panel viejo. */
   LS.pins = {};
+
+  /**
+   * Lo que la Function contesta (412 `DEVICE_PIN_NOT_ENROLLED`) cuando la nube no tiene el
+   * verificador del PIN de ese celular (1/11/2026, B.104). Es un problema del CELULAR, no del
+   * administrador: pedirle un PIN acá no sirve de nada, no hay contra qué compararlo. Antes caía
+   * en la rama `/PIN/i` de abajo, que pedía un PIN, reenviaba, y terminaba mostrando el código
+   * crudo («No se pudo: DEVICE_PIN_NOT_ENROLLED»).
+   */
+  LS.TEXTO_PIN_NO_PUBLICADO =
+    "Este celular todavía no le avisó a la nube su PIN de administrador, así que el panel no puede " +
+    "verificar el tuyo. Lo publica solo en cuanto tenga internet (unos minutos). Si tiene una versión " +
+    "vieja de LockSuite, mandale antes «Actualizar LockSuite (OTA)»: esa acción no pide PIN.";
 
   LS.askPin = function (deviceId, nombre) {
     return new Promise((resolve) => {
@@ -148,6 +160,10 @@
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         const msg = err.error || "HTTP_" + res.status;
+        // La nube no tiene el PIN de ese celular: no se pregunta nada ni se reintenta (B.104).
+        if (msg === "DEVICE_PIN_NOT_ENROLLED") {
+          return { ok: false, status: "pin_no_publicado", reason: LS.TEXTO_PIN_NO_PUBLICADO };
+        }
         // El único caso que se reintenta: falta el PIN de ese equipo.
         if (/PIN/i.test(msg) && intento === 0) {
           pin = await LS.askPin(deviceId, opts.nombre);

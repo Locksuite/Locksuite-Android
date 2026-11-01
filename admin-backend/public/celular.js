@@ -2493,14 +2493,23 @@
     const uid = LS.auth.currentUser ? LS.auth.currentUser.uid : "";
     const confianza = !!((campo("trustedAdmins", {}) || {})[uid]);
     const suspendido = campo("locksuiteSuspended", false) === true;
-    if (!cambio("acciones", [tienePin, confianza, suspendido])) return;
+    // Último motivo por el que el celular no pudo publicar su PIN en la nube (B.104). Lo escribe
+    // el propio celular; vacío si nunca falló o si ya lo publicó.
+    const errPin = String(campo("pinPublishError", "") || "");
+    if (!cambio("acciones", [tienePin, confianza, suspendido, errPin])) return;
 
     $("c-acciones").innerHTML = ACCIONES.map(([cmd, txt]) =>
       '<button class="ls-btn" data-cmd="' + cmd + '">' + esc(txt) + "</button>").join("") +
       '<button class="ls-btn" id="c-relink">Re-vincular canal de comandos</button>';
 
+    // 1/11/2026 (B.104): antes decía «todavía no configuró un PIN», y casi siempre era mentira: el
+    // celular SÍ tenía PIN, lo que faltaba era que se lo avisara a la nube (su única escritura
+    // había caído). Ahora lo dice como es, con el motivo del último intento si el celular lo anotó.
     $("c-pin-estado").textContent = !tienePin
-      ? "Este celular todavía no configuró un PIN de administrador."
+      ? "⚠️ La nube todavía no tiene el PIN de administrador de este celular. Si ya lo configuró, " +
+        "lo publica solo en cuanto tenga internet (unos minutos); si tiene una versión vieja de LockSuite, " +
+        "actualizala desde acá (no pide PIN)." +
+        (errPin ? " Último intento fallido del celular: " + errPin + "." : "")
       : confianza
         ? "🔓 Este celular te tiene como administrador de confianza: no te pide el PIN para las acciones críticas."
         : "🔒 Las acciones críticas piden el PIN de este celular.";

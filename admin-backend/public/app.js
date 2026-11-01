@@ -396,6 +396,19 @@ async function relinkCommandSecret(deviceId) {
     await database.ref(`devices/${deviceId}/info/commandSecretMismatch`).set(false).catch(() => {});
 }
 
+/**
+ * 1/11/2026 (B.104). Se muestra cuando la nube no tiene el verificador del PIN de un celular
+ * (la Function contesta 412 `DEVICE_PIN_NOT_ENROLLED`). Es un problema del CELULAR: no publicó su
+ * PIN (o el panel se lo borró) y se corrige solo cuando vuelve a publicarlo. Antes esto era un
+ * cartel «no tiene un PIN de administrador configurado» que además CERRABA la ficha lateral, así
+ * que ni siquiera se podía mandar la actualización que lo arregla. Mismo texto que la ficha
+ * completa (comun.js, LS.TEXTO_PIN_NO_PUBLICADO).
+ */
+const TEXTO_PIN_NO_PUBLICADO =
+    "Este celular todavía no le avisó a la nube su PIN de administrador, así que el panel no puede " +
+    "verificar el tuyo. Lo publica solo en cuanto tenga internet (unos minutos). Si tiene una versión " +
+    "vieja de LockSuite, mandale antes «Actualizar LockSuite (OTA)»: esa acción no pide PIN.";
+
 async function openDeviceSidebar(e, t) {
     selectedDeviceId = e;
 
@@ -436,6 +449,11 @@ async function openDeviceSidebar(e, t) {
     // Verificamos si tiene PIN configurado según la bandera pública hasPinConfigured
     const hasPinConfigured = t.hasPinConfigured || (t.info && t.info.hasPinConfigured) === true;
     
+    // Si la nube no tiene el PIN de este celular no hay nada contra qué verificar el que escriba el
+    // administrador: se abre la ficha igual (con un aviso) en vez de cerrarla, para poder seguir
+    // viendo el equipo y mandarle la actualización, que no pide PIN.
+    let pinNoPublicado = false;
+
     if (hasPinConfigured && !isTrusted && !verifiedDevicePins[e]) {
         const r = t.deviceName || (t.info && t.info.deviceName) || t.model || (t.info && t.info.model) || "Celular";
         let isPinCorrect = false;
@@ -457,26 +475,26 @@ async function openDeviceSidebar(e, t) {
                 isPinCorrect = true;
                 verifiedDevicePins[e] = pinData.pin;
             } catch (err) {
-                console.error("Error al verificar PIN:", err);
+                // «La nube no tiene el PIN de este celular» es un estado esperado (B.104), no una falla del panel.
+                (err.message === "DEVICE_PIN_NOT_ENROLLED" ? console.warn : console.error)("Error al verificar PIN:", err);
                 if (err.message === "PIN_INCORRECT") {
                     errorMessage = "PIN incorrecto. Intentá de nuevo.";
                 } else if (err.message === "DEVICE_PIN_NOT_ENROLLED") {
-                    alert("Este dispositivo no tiene un PIN de administrador configurado.");
-                    closeDeviceSidebar();
-                    return;
+                    // La bandera pública decía que sí, pero deviceSecrets no tiene el verificador.
+                    pinNoPublicado = true;
+                    break;
                 } else {
                     errorMessage = "Error al verificar PIN: " + err.message;
                 }
             }
         }
     } else if (!hasPinConfigured && !isTrusted) {
-        alert("Este dispositivo no tiene un PIN de administrador configurado.");
-        closeDeviceSidebar();
-        return;
+        pinNoPublicado = true;
     }
     
     sidebar.classList.remove("hidden");
     updateSidebarUI(e, t);
+    if (pinNoPublicado) setCommandStatus("⚠️ " + TEXTO_PIN_NO_PUBLICADO);
 }
 
 function closeDeviceSidebar() {
@@ -742,7 +760,7 @@ function updateSidebarUI(e, t) {
     const s = !!(field(t, "hasPinConfigured") || field(t, "pinHash") && field(t, "pinSalt")),
         o = auth.currentUser ? auth.currentUser.uid : "",
         c = !!field(t, "trustedAdmins", {})[o];
-    s ? (sidebarForgetPinBtn.classList.remove("hidden"), sidebarTrustStatus.textContent = c ? "🔓 PIN de administrador recordado en esta sesión." : "🔒 Se requerirá el PIN para realizar acciones críticas.") : (sidebarForgetPinBtn.classList.add("hidden"), sidebarTrustStatus.textContent = "Ese celular todavía no configuró un PIN de administrador.")
+    s ? (sidebarForgetPinBtn.classList.remove("hidden"), sidebarTrustStatus.textContent = c ? "🔓 PIN de administrador recordado en esta sesión." : "🔒 Se requerirá el PIN para realizar acciones críticas.") : (sidebarForgetPinBtn.classList.add("hidden"), sidebarTrustStatus.textContent = "⚠️ La nube todavía no tiene el PIN de este celular (lo publica solo cuando tenga internet).")
 }
 sidebarCloseBtn.addEventListener("click", closeDeviceSidebar), sidebarTabButtons.forEach(e => {
     e.addEventListener("click", () => {
@@ -1523,6 +1541,13 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
                 verifiedDevicePinHashes[e] = dHash;
             }
             continue;
+        }
+        // La nube no tiene el PIN de este celular (B.104): se dice como es, no con el código crudo.
+        if ("DEVICE_PIN_NOT_ENROLLED" === err.message) {
+            setCommandStatus("✗ " + TEXTO_PIN_NO_PUBLICADO);
+            if (a) a.disabled = false;
+            if (i) i();
+            return false;
         }
         setCommandStatus("✗ Error: " + (err.message || "desconocido"));
         if (a) a.disabled = false;

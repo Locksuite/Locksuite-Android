@@ -20,13 +20,26 @@
     }
     if (String(url).includes("sendcommandv8")) {
       const body = JSON.parse(opts.body);
+      window.__calls.push(body);
+      // Puerta del PIN de la Function real (B.104): salvo UPDATE_LOCKSUITE, UPDATE_APP y
+      // CANCEL_UPDATE_APP, todo comando pasa por verifyDevicePin ANTES de escribir nada.
+      //   "pin_no_publicado": la nube no tiene el verificador → 412 DEVICE_PIN_NOT_ENROLLED.
+      //   "pin_requerido":    tiene verificador (PIN "1234") → 412 PIN_REQUIRED sin PIN, 403 PIN_INCORRECT si no coincide.
+      // Pasada la puerta se contesta como "fcm_new".
+      const EXENTOS = ["UPDATE_LOCKSUITE", "UPDATE_APP", "CANCEL_UPDATE_APP"];
+      const modo0 = window.__fnMode;
+      if ((modo0 === "pin_no_publicado" || modo0 === "pin_requerido") && !EXENTOS.includes(body.command)) {
+        const fallo = (status, error) => new Response(JSON.stringify({ error }), { status, headers: { "Content-Type": "application/json" } });
+        if (modo0 === "pin_no_publicado") return fallo(412, "DEVICE_PIN_NOT_ENROLLED");
+        if (!body.devicePin) return fallo(412, "PIN_REQUIRED");
+        if (body.devicePin !== "1234") return fallo(403, "PIN_INCORRECT");
+      }
       const cid = "c" + Math.random().toString(36).slice(2, 8);
       window.__lastCid = cid;
-      window.__calls.push(body);
       const d = "devices/" + body.deviceId;
       __fakeDb.setAt(d + "/commandAcks/" + cid, { status: "sent", command: body.command, timestamp: Date.now() });
       __fakeDb.setAt(d + "/pendingCommands/" + cid, { data: { command: body.command, commandId: cid, timestamp: String(Date.now()), signature: "s" }, family: body.command, queuedAt: Date.now(), expiresAt: Date.now() + 86400000 });
-      const m = window.__fnMode;
+      const m = (modo0 === "pin_no_publicado" || modo0 === "pin_requerido") ? "fcm_new" : modo0;
       let resp;
       if (m === "fcm_old") resp = { success: true, commandId: cid, queued: true };
       else if (m === "fcm_new") resp = { success: true, commandId: cid, queued: true, delivered: true, channel: "fcm" };

@@ -23,8 +23,11 @@ import android.content.Context
 import android.os.Build
 import android.provider.Settings
 import android.util.Base64
+import com.ejemplo.locksuite.mdm.PinCloudSyncPolicy
+import com.ejemplo.locksuite.mdm.PinCloudSyncPolicy.CloudFlag
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.mdm.UpdateStepLog
+import com.ejemplo.locksuite.security.PinManager
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
@@ -154,6 +157,15 @@ object FirebaseDeviceSync {
                             p.edit().remove("rebind_requested_at").apply()
                             requestSync(context)
                         }
+                    } catch (ex: Exception) {
+                        ex.printStackTrace()
+                    }
+                    // 1/11/2026 (B.104): el latido pasó, o sea que hay sesión y el nodo es de este uid
+                    // —el mejor momento para publicar el PIN si todavía no está confirmado—. En el
+                    // hilo de sincronización y no acá: este oyente corre en el hilo principal y
+                    // `ensurePinPublished` lee las prefs cifradas.
+                    try {
+                        syncHandler.post { ensurePinPublished(context) }
                     } catch (ex: Exception) {
                         ex.printStackTrace()
                     }
@@ -391,59 +403,247 @@ object FirebaseDeviceSync {
         }
     }
 
+    // ──────────────────────────────────────────────────────────────────────────────────────
+    // PUBLICACIÓN DEL PIN DE ADMINISTRADOR  (1/11/2026, B.104)
+    //
+    // El panel no conoce el PIN de ningún celular. Para cada comando, la Cloud Function
+    // (`verifyDevicePin`) compara el PIN que escribe el administrador contra el verificador
+    // `deviceSecrets/<id>/{pinHash,pinSalt}`, y ese verificador lo escribe el CELULAR. Si no
+    // está, contesta `DEVICE_PIN_NOT_ENROLLED` y el panel dice "este dispositivo no tiene un
+    // PIN de administrador configurado", aunque el celular lo tenga y funcione.
+    //
+    // ⚠️ POR QUÉ EL PIN "NO LLEGABA" CON UN CELULAR NUEVO. Hasta B.104 el verificador se
+    // escribía UNA sola vez, en el instante de elegir el PIN, sin esperar confirmación del
+    // servidor y sin volver a intentarlo jamás. Cualquier cosa que hiciera caer esa única
+    // escritura dejaba al celular convencido de que estaba todo bien (su PIN local anda) y a
+    // la nube sin verificador, para siempre:
+    //   • el celular nuevo todavía sin internet, o sin la sesión anónima abierta (la escritura
+    //     salía sin usuario y las reglas la rechazaban: solo se imprimía un stack trace);
+    //   • varias sesiones anónimas abiertas a la vez al arrancar (ver SignInGate), con lo que
+    //     el nodo `devices/<id>` quedaba a nombre de un uid y el PIN se escribía con otro;
+    //   • el PIN elegido antes de que el latido reclamara `devices/<id>/ownerUid`;
+    //   • un "Eliminar del panel", que borra `deviceSecrets/<id>` entero y no le avisa al celular;
+    //   • reinstalar LockSuite, que cambia el uid hasta que el panel aprueba la re-vinculación.
+    // Lo único que lo arreglaba era volver a elegir el PIN a mano, que dispara otra escritura.
+    //
+    // Ahora: (1) se anota qué credenciales CONFIRMÓ el servidor; (2) lo no confirmado se
+    // reintenta solo, con espera creciente, en cada latido y en cada sincronización; (3) la
+    // bandera pública `hasPinConfigured` se escribe recién DESPUÉS de la confirmación, así el
+    // panel nunca dice "tiene PIN" cuando la Function va a contestar que no; (4) cada tanto se
+    // mira esa bandera: si el panel borró el equipo, se vuelve a publicar. Las decisiones viven
+    // en `PinCloudSyncPolicy` (puro, con pruebas). La Cloud Function y las reglas no cambian.
+    // ──────────────────────────────────────────────────────────────────────────────────────
+
+    private val pinPublishLock = Any()
+    // Todo lo que sigue se toca solo adentro de pinPublishLock, salvo lo marcado @Volatile.
+    private var pinPublishInFlight = false
+    private var pinPublishStartedMs = 0L
+    private var pinPublishKey = ""
+    private var pinPublishGen = 0
+    @Volatile private var pinPublishLastAttemptMs = 0L
+    @Volatile private var pinPublishFailures = 0
+    @Volatile private var pinCloudCheckLastMs = 0L
+
+    /**
+     * Primer intento inmediato, justo al elegir o cambiar el PIN en el celular
+     * (`PinManager.saveAdminPin`). Si falla, [ensurePinPublished] lo reintenta solo.
+     */
     fun syncPinCredentials(context: Context, pinHash: String, pinSalt: String) {
+        val ctx = context.applicationContext
+        // El código de recuperación viaja en la misma publicación (ver PinManager.saveAdminPin,
+        // que lo genera antes). Se lee de donde vive, no se recibe: así el primer intento y los
+        // reintentos publican exactamente lo mismo.
+        val recovery = try {
+            PinManager.credentialsForSync(ctx)?.recoveryCode
+        } catch (e: Exception) {
+            null
+        }
+        publishPinCredentials(ctx, PinManager.PublishableCredentials(pinHash, pinSalt, recovery))
+    }
+
+    /**
+     * Se asegura de que la nube tenga el verificador del PIN de ESTE equipo. Barato de llamar
+     * seguido (cada latido, cada sincronización): sin PIN en el equipo, o con todo confirmado,
+     * no escribe nada.
+     *
+     * @param force salta la espera entre reintentos (se usa al elegir un PIN nuevo).
+     */
+    fun ensurePinPublished(context: Context, force: Boolean = false) {
+        try {
+            val ctx = context.applicationContext
+            val creds = PinManager.credentialsForSync(ctx) ?: return
+            val now = System.currentTimeMillis()
+            if (PinCloudSyncPolicy.needsPublish(creds.key(), PinManager.cloudAckedKey(ctx), CloudFlag.UNKNOWN)) {
+                if (force || PinCloudSyncPolicy.mayAttempt(now, pinPublishLastAttemptMs, pinPublishFailures)) {
+                    publishPinCredentials(ctx, creds)
+                }
+                return
+            }
+            // Todo figura confirmado. De vez en cuando se comprueba que la nube lo siga sabiendo.
+            if (PinCloudSyncPolicy.shouldCheckCloudFlag(now, pinCloudCheckLastMs)) {
+                pinCloudCheckLastMs = now
+                checkCloudPinFlag(ctx)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("FirebaseDeviceSync", "ensurePinPublished: ${e.message}")
+        }
+    }
+
+    /** Lee `devices/<id>/hasPinConfigured`; si la nube no lo tiene (p. ej. "Eliminar del panel"), vuelve a publicar. */
+    private fun checkCloudPinFlag(ctx: Context) {
         withAuth {
-            val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
-            // 1. Escribir credenciales reales en la ruta protegida deviceSecrets
-            //
-            // ⚠️ 2/9/2026 — POR QUÉ EL commandSecret VA EN SU PROPIA ESCRITURA Y NO ACÁ.
-            //
-            // Antes este updateChildren() mandaba {pinHash, pinSalt, commandSecret}
-            // JUNTOS. Un updateChildren de Realtime Database es ATÓMICO: si las reglas
-            // rechazan UNA sola de las rutas, se rechaza la escritura ENTERA. Y la regla
-            // de deviceSecrets/$id/commandSecret dice, textual, que el dispositivo NO
-            // puede cambiar el valor una vez que existe (solo reescribir el mismo, o un
-            // admin):
-            //
-            //   ".write": "auth != null && (!data.exists() || newData.val() === data.val()
-            //              || auth.token.admin === true || root.child('authorizedAdminsUids')...)"
-            //
-            // El commandSecret vive en EncryptedSharedPreferences, que NO sobrevive a
-            // reinstalar la app ni a que se invalide la clave del Keystore — mientras que
-            // el deviceId es el ANDROID_ID, que SÍ sobrevive. O sea: reinstalás LockSuite,
-            // el equipo genera un secreto nuevo, el servidor conserva el viejo, y a partir
-            // de ahí la escritura del secreto se rechaza para siempre. Con el paquete
-            // atómico, ese rechazo se llevaba puesto también el pinHash y el pinSalt: el
-            // panel seguía viendo el PIN VIEJO. Ese es exactamente el síntoma reportado
-            // por el dueño — "a veces hay que cambiar el PIN varias veces hasta que puedo
-            // controlar el equipo desde la web".
-            //
-            // Separadas, el PIN llega siempre; el secreto falla solo (y se reporta más
-            // abajo con `commandSecretMismatch` para que el panel ofrezca re-vincular).
-            val secretsRef = FirebaseDatabase.getInstance().getReference("deviceSecrets/${deviceId(context)}")
-            val secretsPayload = mutableMapOf<String, Any>(
-                "pinHash" to pinHash,
-                "pinSalt" to pinSalt
-            )
-            if (authUid.isNotEmpty()) {
-                secretsPayload["ownerUid"] = authUid
+            try {
+                if (FirebaseAuth.getInstance().currentUser == null) return@withAuth
+                FirebaseDatabase.getInstance()
+                    .getReference("devices/${deviceId(ctx)}/hasPinConfigured")
+                    .get()
+                    .addOnCompleteListener { task ->
+                        try {
+                            // Sin poder leer (sin red, sin permiso) no se decide nada: manda la confirmación.
+                            if (!task.isSuccessful) return@addOnCompleteListener
+                            val flag = if (task.result?.value == true) CloudFlag.PRESENT else CloudFlag.ABSENT
+                            val creds = PinManager.credentialsForSync(ctx) ?: return@addOnCompleteListener
+                            if (PinCloudSyncPolicy.needsPublish(creds.key(), PinManager.cloudAckedKey(ctx), flag)) {
+                                android.util.Log.w(
+                                    "FirebaseDeviceSync",
+                                    "La nube no tiene registrado el PIN de este equipo (¿lo eliminaron del panel?): se vuelve a publicar."
+                                )
+                                publishPinCredentials(ctx, creds)
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.w("FirebaseDeviceSync", "checkCloudPinFlag: ${e.message}")
+                        }
+                    }
+            } catch (e: Exception) {
+                android.util.Log.w("FirebaseDeviceSync", "checkCloudPinFlag: ${e.message}")
             }
-            secretsRef.updateChildren(secretsPayload).addOnFailureListener { it.printStackTrace() }
+        }
+    }
 
-            // Escritura separada e independiente del secreto de comandos.
-            pushCommandSecret(context)
-
-            // 2. Escribir solo la bandera hasPinConfigured en la ruta pública
-            val publicRef = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
-            val publicPayload = mutableMapOf<String, Any>(
-                "hasPinConfigured" to true,
-                "info/hasPinConfigured" to true
-            )
-            if (authUid.isNotEmpty()) {
-                publicPayload["ownerUid"] = authUid
-                publicPayload["info/ownerUid"] = authUid
+    /**
+     * Publica el verificador (y el código de recuperación) en tres escrituras ENCADENADAS, cada una
+     * recién cuando el servidor confirmó la anterior:
+     *
+     *   0. `devices/<id>/ownerUid`: el equipo reclama su nodo. Las reglas dejan escribir
+     *      `deviceSecrets/<id>` solo si `devices/<id>` es de este uid (o no existe todavía), así
+     *      que esto cierra la carrera con el latido del arranque. Si el nodo es de OTRO uid
+     *      (reinstalación) se pide la re-vinculación al panel, igual que hace el latido.
+     *   1. `deviceSecrets/<id>/{pinHash,pinSalt,recoveryCode,ownerUid}`.
+     *   2. `devices/<id>/hasPinConfigured` (la bandera que lee el panel).
+     * Con la confirmación de la 2 se anota en el equipo que esas credenciales quedaron publicadas.
+     *
+     * El secreto de comandos va en su PROPIA escritura (`pushCommandSecret`), nunca en esta: un
+     * `updateChildren` es atómico y la regla de `commandSecret` rechaza el cambio una vez que el
+     * valor existe (2/9/2026: eso se llevaba puesto también el PIN y el panel seguía viendo el
+     * viejo).
+     */
+    private fun publishPinCredentials(ctx: Context, creds: PinManager.PublishableCredentials) {
+        val key = creds.key()
+        val now = System.currentTimeMillis()
+        val gen: Int = synchronized(pinPublishLock) {
+            if (!PinCloudSyncPolicy.mayStartPublish(pinPublishInFlight, key == pinPublishKey, now, pinPublishStartedMs)) {
+                return
             }
-            publicRef.updateChildren(publicPayload).addOnFailureListener { it.printStackTrace() }
+            pinPublishInFlight = true
+            pinPublishStartedMs = now
+            pinPublishKey = key
+            pinPublishLastAttemptMs = now
+            ++pinPublishGen
+        }
+        try {
+            withAuth {
+                try {
+                    val uid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+                    if (uid.isEmpty()) {
+                        pinPublishEnd(ctx, gen, false, "sesión anónima", null)
+                        return@withAuth
+                    }
+                    val id = deviceId(ctx)
+                    val db = FirebaseDatabase.getInstance()
+                    val claim = mapOf<String, Any>("ownerUid" to uid, "info/ownerUid" to uid)
+                    db.getReference("devices/$id").updateChildren(claim)
+                        .addOnFailureListener { e ->
+                            if (isPermissionDenied(e)) requestRebind(ctx)
+                            pinPublishEnd(ctx, gen, false, "nodo del equipo", e)
+                        }
+                        .addOnSuccessListener {
+                            if (!pinPublishIsCurrent(gen)) return@addOnSuccessListener
+                            val secrets = mutableMapOf<String, Any>(
+                                "pinHash" to creds.pinHash,
+                                "pinSalt" to creds.pinSalt,
+                                "ownerUid" to uid
+                            )
+                            creds.recoveryCode?.let { secrets["recoveryCode"] = it }
+                            db.getReference("deviceSecrets/$id").updateChildren(secrets)
+                                .addOnFailureListener { e -> pinPublishEnd(ctx, gen, false, "verificador", e) }
+                                .addOnSuccessListener {
+                                    if (!pinPublishIsCurrent(gen)) return@addOnSuccessListener
+                                    // Escritura independiente del secreto de comandos (ver arriba).
+                                    pushCommandSecret(ctx)
+                                    // Recién con el verificador confirmado se avisa en la ruta pública.
+                                    val pub = mapOf<String, Any>(
+                                        "hasPinConfigured" to true,
+                                        "info/hasPinConfigured" to true,
+                                        "ownerUid" to uid,
+                                        "info/ownerUid" to uid
+                                    )
+                                    db.getReference("devices/$id").updateChildren(pub)
+                                        .addOnFailureListener { e -> pinPublishEnd(ctx, gen, false, "bandera pública", e) }
+                                        .addOnSuccessListener {
+                                            // Si entre tanto cambió el PIN, lo confirmado ya no es lo vigente: no se anota.
+                                            if (PinManager.credentialsForSync(ctx)?.key() == key) {
+                                                PinManager.markPublishedToCloud(ctx, key)
+                                            }
+                                            pinPublishEnd(ctx, gen, true, "", null)
+                                        }
+                                }
+                        }
+                } catch (e: Exception) {
+                    pinPublishEnd(ctx, gen, false, "excepción", e)
+                }
+            }
+        } catch (e: Exception) {
+            pinPublishEnd(ctx, gen, false, "excepción", e)
+        }
+    }
+
+    private fun pinPublishIsCurrent(gen: Int): Boolean = synchronized(pinPublishLock) { gen == pinPublishGen }
+
+    /** Cierra un intento de publicación. Un intento viejo, ya reemplazado por otro, no toca el estado del vigente. */
+    private fun pinPublishEnd(ctx: Context, gen: Int, ok: Boolean, step: String, e: Exception?) {
+        synchronized(pinPublishLock) {
+            if (gen != pinPublishGen) return
+            pinPublishInFlight = false
+            pinPublishFailures = if (ok) 0 else (pinPublishFailures + 1).coerceAtMost(30)
+        }
+        val detail = if (ok) null else "$step: ${e?.message ?: "sin detalle"}".take(140)
+        if (!ok) {
+            android.util.Log.w("FirebaseDeviceSync", "PIN todavía sin publicar ($detail); se reintenta solo.")
+        }
+        reportPinPublishState(ctx, detail)
+    }
+
+    /**
+     * Deja en `devices/<id>` el motivo del último intento fallido (`pinPublishError`), o lo borra si
+     * salió bien, para que el panel pueda explicar por qué un celular no tiene PIN publicado sin
+     * conectarlo por USB. Si lo que falló fue justamente la escritura de `devices/<id>` (otro uid),
+     * esto tampoco pasa: ahí el aviso es el pedido de re-vinculación.
+     */
+    private fun reportPinPublishState(ctx: Context, detail: String?) {
+        try {
+            val uid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+            if (uid.isEmpty()) return
+            val payload = mutableMapOf<String, Any?>(
+                "pinPublishError" to detail,
+                "info/pinPublishError" to detail,
+                "ownerUid" to uid,
+                "info/ownerUid" to uid
+            )
+            FirebaseDatabase.getInstance().getReference("devices/${deviceId(ctx)}")
+                .updateChildren(payload)
+                .addOnFailureListener { /* es un aviso de cortesía: no se reintenta */ }
+        } catch (e: Exception) {
+            android.util.Log.w("FirebaseDeviceSync", "reportPinPublishState: ${e.message}")
         }
     }
 
@@ -634,6 +834,9 @@ object FirebaseDeviceSync {
             // REPORTADO (commandSecretMismatch) en vez de perderse en un stack trace:
             // ese rechazo es lo que deja el equipo sordo a los comandos del panel.
             pushCommandSecret(context)
+            // 1/11/2026 (B.104): lo mismo para el verificador del PIN. Una sola vez publicado y
+            // confirmado esto no escribe nada; si no, es otro intento (con espera creciente).
+            ensurePinPublished(context)
             writeFields(
                 context,
                 mapOf(
@@ -1792,21 +1995,32 @@ object FirebaseDeviceSync {
         }
     }
 
+    /**
+     * 1/11/2026 (B.104): la sesión anónima se abre UNA sola vez por arranque aunque la pidan
+     * varios a la vez (latido, sincronización, token, buzón de comandos, PIN). Antes cada pedido
+     * abría la suya, el "usuario actual" cambiaba de uid en el medio y las reglas —que atan
+     * `devices/<id>` y `deviceSecrets/<id>` al uid que los creó— rechazaban lo que viniera después.
+     * Ver SignInGate.
+     */
+    private val signInGate = SignInGate(
+        isSignedIn = { FirebaseAuth.getInstance().currentUser != null },
+        startSignIn = { done ->
+            // Requiere Anonymous Auth habilitado en Firebase Console.
+            FirebaseAuth.getInstance().signInAnonymously()
+                .addOnSuccessListener { done(true) }
+                .addOnFailureListener { e ->
+                    // Loguear el error real para facilitar el diagnóstico
+                    android.util.Log.e("FirebaseDeviceSync", "signInAnonymously falló: ${e.message}", e)
+                    done(false)
+                }
+        },
+        onError = { e -> android.util.Log.e("FirebaseDeviceSync", "acción autenticada falló: ${e.message}", e) }
+    )
+
     private fun withAuth(action: () -> Unit) {
-        val auth = FirebaseAuth.getInstance()
-        if (auth.currentUser != null) {
-            // Reutilizar sesión existente: no re-autenticar en cada ciclo
-            action()
-            return
-        }
-        // Primera vez: iniciar sesión anónima (requiere Anonymous Auth habilitado en Firebase Console)
-        auth.signInAnonymously()
-            .addOnSuccessListener { action() }
-            .addOnFailureListener { e ->
-                // Loguear el error real para facilitar el diagnóstico
-                android.util.Log.e("FirebaseDeviceSync", "signInAnonymously falló: ${e.message}", e)
-                // Intentar igual — si hay reglas permisivas podría funcionar sin auth
-                action()
-            }
+        // Con sesión corre al instante (no se re-autentica en cada ciclo). Sin sesión espera a que el
+        // único intento en curso termine y corre igual aunque haya fallado —como antes—: algunas
+        // acciones solo dejan rastro en el log y las que escriben vuelven a mirar si hay usuario.
+        signInGate.run(action)
     }
 }

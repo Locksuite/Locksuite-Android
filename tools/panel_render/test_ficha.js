@@ -43,7 +43,12 @@ const SEED = {
     dev3: { deviceName: "nuevo", model: "X", lastSeen: now - 10000, mailboxLive: true, mailboxLastCheckAt: now - 5000, mailboxLastResult: "sin pendientes" },
     dev4: { deviceName: "viejo", model: "Y", lastSeen: now - 10000, fcmToken: "tok4", versionName: "0.6.67", versionCode: 130,
       apps: { com_whatsapp: APPS_DEV1.com_whatsapp },
-      updateFlow: { running: false, lastResult: "NO_SPACE", lastResultPackage: "com.whatsapp", lastResultReason: "Faltan 180 MB", lastResultAt: now - 60000, freeSpaceMb: 120 } }
+      updateFlow: { running: false, lastResult: "NO_SPACE", lastResultPackage: "com.whatsapp", lastResultReason: "Faltan 180 MB", lastResultAt: now - 60000, freeSpaceMb: 120 },
+    },
+    // Como «Shuli» de la captura del dueño (1/11/2026, B.104): celular nuevo cuyo PIN no llegó a la nube.
+    // Sin hasPinConfigured ni trustedAdmins; el celular dejó anotado por qué no pudo publicarlo.
+    dev5: { deviceName: "Shuli", model: "Google Pixel", lastSeen: now - 10000, fcmToken: "tok5", versionName: "0.6.69", versionCode: 132,
+      pinPublishError: "verificador: Permission denied" }
   }
 };
 
@@ -283,6 +288,54 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const viejo = await p.evaluate(() => document.querySelector('.ls-section[data-sec="actualizaciones"]').textContent);
   ok(/solo por Google Play/.test(viejo) && /No hay espacio/.test(viejo) && /Faltan 180 MB/.test(viejo),
     'equipo viejo: avisa que actualiza solo por Google Play, y muestra el último resultado con su motivo');
+
+  // ══ 4. Celular cuyo PIN la nube no tiene (1/11/2026, B.104) ═══════════════════════════
+  // El caso del dueño: pone un celular nuevo y el panel dice «no tiene PIN de administrador»; la
+  // Function contesta 412 DEVICE_PIN_NOT_ENROLLED a todo salvo UPDATE_LOCKSUITE. Antes la ficha
+  // pedía igual un PIN (que no sirve: no hay contra qué compararlo), reenviaba, y terminaba con
+  // el código crudo en un aviso rojo.
+  await p.goto('file://' + path.resolve('celular.html') + '?id=dev5#acciones');
+  await p.waitForTimeout(1000);
+  let estadoPin = await p.evaluate(() => document.getElementById('c-pin-estado').textContent);
+  ok(/La nube todavía no tiene el PIN/.test(estadoPin) && !/no configuró/.test(estadoPin),
+    'B.104 ficha: el estado del PIN dice que falta en la NUBE (no que el celular no lo configuró) → ' + estadoPin.slice(0, 90));
+  ok(/Último intento fallido del celular: verificador: Permission denied/.test(estadoPin),
+    'B.104 ficha: muestra el motivo que anotó el celular (pinPublishError)');
+  await p.evaluate(() => __fakeDb.setAt('devices/dev5/pinPublishError', null));
+  await sleep(300);
+  estadoPin = await p.evaluate(() => document.getElementById('c-pin-estado').textContent);
+  ok(/La nube todavía no tiene el PIN/.test(estadoPin) && !/Último intento fallido/.test(estadoPin),
+    'B.104 ficha: sin error anotado no inventa uno, y se redibuja al cambiar');
+
+  await p.evaluate(() => { window.__prompts = 0; window.prompt = () => { window.__prompts++; return null; }; window.__fnMode = 'pin_no_publicado'; });
+  const nPin0 = await p.evaluate(() => __calls.length);
+  const rNo = await p.evaluate(async () => await LS.sendCommand('dev5', 'BLOCK_WIFI', null, null, { nombre: 'Shuli' }));
+  const callsNo = await p.evaluate((n) => __calls.slice(n).map(c => c.command + ':' + (c.devicePin || '-')), nPin0);
+  ok(!rNo.ok && rNo.status === 'pin_no_publicado' && /todavía no le avisó a la nube/.test(rNo.reason) && !/NOT_ENROLLED/.test(rNo.reason),
+    'B.104 sendCommand: DEVICE_PIN_NOT_ENROLLED vuelve como pin_no_publicado con texto claro → ' + JSON.stringify(rNo).slice(0, 140));
+  ok((await p.evaluate(() => __prompts)) === 0, 'B.104 sendCommand: NO pide un PIN que no serviría de nada');
+  ok(callsNo.length === 1, 'B.104 sendCommand: un solo pedido, sin reintento inútil → ' + JSON.stringify(callsNo));
+
+  await p.click('#c-acciones button[data-cmd="LOCK_DEVICE"]');
+  await sleep(500);
+  const avisosPin = await p.evaluate(() => [...document.querySelectorAll('.ls-toast')].map(t => t.className + ' | ' + t.textContent));
+  ok(avisosPin.some(t => /error/.test(t.split('|')[0]) && /No se pudo: Este celular todavía no le avisó a la nube su PIN/.test(t)) && !avisosPin.some(t => /NOT_ENROLLED/.test(t)),
+    'B.104 ficha: el botón muestra el aviso claro, no «No se pudo: DEVICE_PIN_NOT_ENROLLED» → ' + JSON.stringify(avisosPin).slice(0, 200));
+  ok((await p.evaluate(() => __prompts)) === 0, 'B.104 ficha: tampoco desde el botón se pide PIN');
+
+  // Lo único que sigue funcionando sin verificador es lo que la Function exceptúa: la actualización de LockSuite.
+  const rUpd = await p.evaluate(async () => { setTimeout(() => __deviceApplies('dev5', __lastCid, null), 400); return await LS.sendCommand('dev5', 'UPDATE_LOCKSUITE', null, null, { nombre: 'Shuli', timeoutMs: 5000 }); });
+  ok(rUpd.ok && rUpd.status === 'applied', 'B.104: UPDATE_LOCKSUITE sigue pasando sin PIN en la nube (es la vía para arreglar un celular viejo) ' + JSON.stringify(rUpd));
+
+  // Controles: con el verificador en la nube todo sigue como antes (se pide el PIN, una sola vez, y se manda).
+  await p.evaluate(() => { window.__prompts = 0; window.prompt = () => { window.__prompts++; return '1234'; }; window.__fnMode = 'pin_requerido'; delete LS.pins['dev5']; });
+  const rOk = await p.evaluate(async () => { setTimeout(() => __deviceApplies('dev5', __lastCid, null), 500); return await LS.sendCommand('dev5', 'BLOCK_WIFI', null, null, { nombre: 'Shuli' }); });
+  ok(rOk.ok && rOk.status === 'applied' && (await p.evaluate(() => __prompts)) === 1,
+    'control: con el PIN en la nube, PIN_REQUIRED sigue pidiendo el PIN (1 vez) y manda el comando ' + JSON.stringify(rOk));
+  await p.evaluate(() => { window.__prompts = 0; window.prompt = () => { window.__prompts++; return '0000'; }; delete LS.pins['dev5']; });
+  const rMal = await p.evaluate(async () => await LS.sendCommand('dev5', 'BLOCK_WIFI', null, null, { nombre: 'Shuli' }));
+  ok(!rMal.ok && rMal.status === 'rechazado' && rMal.reason === 'PIN_INCORRECT' && (await p.evaluate(() => __prompts)) === 1,
+    'control: un PIN equivocado sigue siendo PIN_INCORRECT (no se confunde con «no publicado») ' + JSON.stringify(rMal));
 
   ok(errores.length === 0, 'sin errores de consola/página: ' + JSON.stringify(errores.slice(0, 5)));
   await b.close(); console.log(fallas ? fallas + ' FALLAS' : 'TODO VERDE'); process.exit(fallas ? 1 : 0);

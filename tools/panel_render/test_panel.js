@@ -9,7 +9,11 @@ const SEED = {
     dev2: { deviceName: "R shaul said", model: "Q-Tel Q1", lastSeen: now - 60000, hasPinConfigured: true, trustedAdmins: { admin1: true }, fcmTokenError: "SERVICE_NOT_AVAILABLE", whatsappBlockStatus: false, wifiBlocked: false,
       pendingCommands: { k1: { data: { command: "BLOCK_WHATSAPP_STATUS", commandId: "k1", timestamp: String(now - 120000), signature: "x" }, family: "BLOCK_WHATSAPP_STATUS", queuedAt: now - 120000, expiresAt: now + 86400000 } },
       versionName: "0.6.66", versionCode: 129 },
-    dev3: { deviceName: "nuevo sin FCM", model: "X", lastSeen: now - 10000, hasPinConfigured: true, trustedAdmins: { admin1: true }, mailboxLive: true, mailboxLastCheckAt: now - 5000, mailboxLastResult: "sin pendientes", wifiBlocked: false, versionName: "0.6.67", versionCode: 130 }
+    dev3: { deviceName: "nuevo sin FCM", model: "X", lastSeen: now - 10000, hasPinConfigured: true, trustedAdmins: { admin1: true }, mailboxLive: true, mailboxLastCheckAt: now - 5000, mailboxLastResult: "sin pendientes", wifiBlocked: false, versionName: "0.6.67", versionCode: 130 },
+    // 1/11/2026 (B.104): celulares cuya nube no tiene el PIN. dev5: sin bandera (como «Shuli», el celular
+    // nuevo del dueño). dev6: con la bandera en true pero SIN verificador en deviceSecrets (bandera vieja).
+    dev5: { deviceName: "Shuli", model: "Google Pixel", lastSeen: now - 10000, fcmToken: "tok5", versionName: "0.6.69", versionCode: 132 },
+    dev6: { deviceName: "bandera vieja", model: "Z", lastSeen: now - 10000, fcmToken: "tok6", hasPinConfigured: true, versionName: "0.6.69", versionCode: 132 }
   }
 };
 let fallas = 0;
@@ -114,6 +118,39 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await sleep(1800);
   st = await page.evaluate(() => document.getElementById('sidebar-status-msg').textContent);
   ok(/En el buzón del celular/.test(st) && !/actualizando en segundo plano/.test(st), 'F) autoactualización a un equipo sin FCM: no promete lo que no sabe: ' + st.slice(0, 80));
+  // ── B.104: celular cuya nube no tiene el PIN ──
+  // Antes: alert «Este dispositivo no tiene un PIN de administrador configurado» y la ficha lateral se
+  // CERRABA, así que ni siquiera se podía mandar la actualización (que no pide PIN) que lo arregla.
+  const dialogos = [];
+  page.on('dialog', d => { dialogos.push(d.message()); d.dismiss(); });
+  await page.evaluate(() => openDeviceSidebar('dev5', currentDevicesData['dev5']));
+  await sleep(300);
+  const sb5 = await page.evaluate(() => ({ abierta: !document.getElementById('device-sidebar').classList.contains('hidden'), sel: selectedDeviceId, st: document.getElementById('sidebar-status-msg').textContent, modal: !document.getElementById('pin-modal').classList.contains('hidden') }));
+  ok(sb5.abierta && sb5.sel === 'dev5', 'B.104) celular sin bandera de PIN: la ficha lateral SE ABRE (antes se cerraba)');
+  ok(/todavía no le avisó a la nube su PIN/.test(sb5.st) && /Actualizar LockSuite/.test(sb5.st), 'B.104) …con el aviso claro y la salida (actualizar): ' + sb5.st.slice(0, 80));
+  ok(dialogos.length === 0 && !sb5.modal, 'B.104) …sin carteles bloqueantes ni pedido de PIN: ' + JSON.stringify(dialogos));
+  await page.evaluate(() => { window.__fnMode = 'pin_no_publicado'; runCommandOnDevice('dev5', 'BLOCK_WIFI', null, null, null); });
+  await sleep(400);
+  st = await page.evaluate(() => document.getElementById('sidebar-status-msg').textContent);
+  ok(/^✗ Este celular todavía no le avisó a la nube su PIN/.test(st) && !/NOT_ENROLLED/.test(st), 'B.104) un comando devuelve el mensaje claro, no «Error: DEVICE_PIN_NOT_ENROLLED»: ' + st.slice(0, 80));
+  ok(!(await page.evaluate(() => !document.getElementById('pin-modal').classList.contains('hidden'))), 'B.104) …y no abre el pedido de PIN');
+  await page.evaluate(() => { runCommandOnDevice('dev5', 'UPDATE_LOCKSUITE', null, null, null); });
+  await sleep(300);
+  const llamUpd = await page.evaluate(() => __calls.filter(c => c.deviceId === 'dev5' && c.command === 'UPDATE_LOCKSUITE').length);
+  st = await page.evaluate(() => document.getElementById('sidebar-status-msg').textContent);
+  ok(llamUpd === 1 && !/^✗/.test(st), 'B.104) la actualización de LockSuite sale igual (no pide PIN): ' + st.slice(0, 80));
+  await page.evaluate(() => closeDeviceSidebar());
+  // dev6: la bandera pública dice que hay PIN pero deviceSecrets no tiene el verificador.
+  // Sin `return`: openDeviceSidebar queda esperando que se escriba el PIN y page.evaluate esperaría su promesa para siempre.
+  await page.evaluate(() => { openDeviceSidebar('dev6', currentDevicesData['dev6']); });
+  await page.waitForSelector('#pin-modal:not(.hidden)', { timeout: 3000 });
+  await page.fill('#pin-modal-input', '1234');
+  await page.click('#pin-modal-confirm');
+  await sleep(500);
+  const sb6 = await page.evaluate(() => ({ abierta: !document.getElementById('device-sidebar').classList.contains('hidden'), st: document.getElementById('sidebar-status-msg').textContent, modal: !document.getElementById('pin-modal').classList.contains('hidden') }));
+  ok(sb6.abierta && !sb6.modal && /todavía no le avisó a la nube su PIN/.test(sb6.st) && dialogos.length === 0,
+    'B.104) bandera vieja sin verificador: tras escribir el PIN la ficha se abre con el aviso (antes: cartel y cierre) ' + JSON.stringify({ dialogos, st: sb6.st.slice(0, 60) }));
+  await page.evaluate(() => closeDeviceSidebar());
   await page.screenshot({ path: 'panel_sidebar.png' });
   await page.evaluate(() => openDeviceSidebar('dev2', currentDevicesData['dev2']));
   await sleep(300);

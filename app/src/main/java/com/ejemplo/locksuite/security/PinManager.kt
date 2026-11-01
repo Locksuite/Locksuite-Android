@@ -2,6 +2,7 @@ package com.ejemplo.locksuite.security
 
 import android.content.Context
 import android.util.Base64
+import com.ejemplo.locksuite.mdm.PinCloudSyncPolicy
 import com.ejemplo.locksuite.util.Constants
 import com.ejemplo.locksuite.util.PrefsHelper
 import java.security.MessageDigest
@@ -35,21 +36,58 @@ object PinManager {
             .putBoolean("pin_configured_mirror", true)
             .apply()
 
-        // Sincronizar las credenciales del PIN con Firebase para el panel web remoto
-        try {
-            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncPinCredentials(context, hash, saltStr)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
         // Generar (si todavía no existe) el código de recuperación de emergencia
         // por dispositivo y sincronizarlo al panel web. La configuración del PIN
         // de admin es el momento natural de aprovisionamiento del equipo.
+        //
+        // 1/11/2026 (B.104): va ANTES de publicar el PIN. La publicación manda las dos cosas
+        // juntas y las anota como una sola unidad confirmada; si el código se generara después,
+        // la primera publicación saldría sin él y habría que repetirla enseguida.
         try {
             getOrCreateRecoveryCode(context)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+
+        // Sincronizar las credenciales del PIN con Firebase para el panel web remoto.
+        // El panel NO conoce el PIN: la Cloud Function lo verifica contra lo que el celular
+        // publica acá. Desde B.104 la publicación se confirma y se reintenta sola (ver
+        // FirebaseDeviceSync.ensurePinPublished); este es solo el primer intento, inmediato.
+        try {
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncPinCredentials(context, hash, saltStr)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /** Verificador del PIN tal como se guarda y se publica (hash + sal en base64) y el código de recuperación. */
+    data class PublishableCredentials(val pinHash: String, val pinSalt: String, val recoveryCode: String?) {
+        /** Clave para comparar contra la última publicación que el servidor confirmó. */
+        fun key(): String = PinCloudSyncPolicy.credentialKey(pinHash, pinSalt, recoveryCode)
+    }
+
+    /**
+     * Lo que hay que tener publicado en la nube para este equipo, o `null` si todavía no tiene
+     * PIN (en ese caso no hay nada que publicar: publicar vacío borraría un verificador bueno).
+     */
+    fun credentialsForSync(context: Context): PublishableCredentials? {
+        val prefs = PrefsHelper.getEncryptedPrefs(context)
+        val hash = prefs.getString(Constants.KEY_PIN_HASH, null)
+        val salt = prefs.getString(Constants.KEY_PIN_SALT, null)
+        if (hash.isNullOrEmpty() || salt.isNullOrEmpty()) return null
+        val recovery = prefs.getString(Constants.KEY_RECOVERY_PLAINTEXT_CACHE, null)?.takeIf { it.isNotEmpty() }
+        return PublishableCredentials(hash, salt, recovery)
+    }
+
+    /** Clave de las credenciales cuya publicación confirmó el servidor la última vez; `null` si nunca. */
+    fun cloudAckedKey(context: Context): String? =
+        PrefsHelper.getEncryptedPrefs(context).getString(Constants.KEY_PIN_CLOUD_ACKED, null)
+
+    /** Anota que el servidor confirmó haber recibido [credentialsKey]. Solo lo llama quien vio la confirmación. */
+    fun markPublishedToCloud(context: Context, credentialsKey: String) {
+        PrefsHelper.getEncryptedPrefs(context).edit()
+            .putString(Constants.KEY_PIN_CLOUD_ACKED, credentialsKey)
+            .apply()
     }
 
     fun isPinConfigured(context: Context): Boolean {
