@@ -4,7 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>LockSuite Kosher — Panel de administración</title>
-  <link rel="stylesheet" href="styles.css?v=24" />
+  <link rel="stylesheet" href="styles.css?v=25" />
+  <script>
+    (function() {
+      try {
+        var t = localStorage.getItem('ls_theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+        if (t === 'light') document.documentElement.classList.add('theme-light');
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
 
@@ -41,10 +50,12 @@
             <h1>LockSuite <span class="accent">Kosher</span></h1>
           </div>
           <div class="header-mobile-controls">
+            <button id="mobile-theme-btn" class="header-icon-btn" type="button" title="Cambiar tema">☀️</button>
             <button id="mobile-refresh-btn" class="header-icon-btn" type="button" title="Actualizar">🔄</button>
             <button id="mobile-menu-btn" class="header-icon-btn" type="button" title="Opciones">⋮</button>
           </div>
           <div class="header-actions" id="header-actions-menu">
+            <button id="theme-toggle-btn" class="header-btn secondary" type="button" title="Cambiar tema">☀️ Modo Claro</button>
             <a href="installer/index.html" target="_blank" class="header-btn installer-btn">🔌 Instalador Web</a>
             <button id="global-update-locksuite-btn" class="header-btn update-all-btn" type="button">🔄 Actualizar LockSuite (Todos)</button>
             <button id="refresh-button" class="header-btn secondary" type="button">Actualizar</button>
@@ -78,7 +89,37 @@
           <button id="main-tab-requests" class="main-nav-btn" type="button">🔔 Pedidos<span id="app-requests-badge" class="hidden" style="margin-left:6px; background: var(--alert-red); color:#fff; border-radius:10px; padding:1px 7px; font-size:11px; font-weight:bold;">0</span></button>
         </div>
 
-        <main id="devices-container">
+        <!-- Barra de herramientas de visualización de celulares -->
+        <div class="devices-view-toolbar" id="devices-view-toolbar">
+          <div class="devices-view-info">
+            <span class="devices-view-title">Dispositivos registrados</span>
+            <span id="devices-total-badge" class="badge" style="background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface); font-size: 11px;">0</span>
+          </div>
+          <div class="devices-view-selector" role="group" aria-label="Modo de visualización de celulares">
+            <button type="button" class="view-btn active" data-view="grid-large" title="Iconos grandes">
+              <span class="view-btn-icon">🔲</span>
+              <span class="view-btn-label">Grandes</span>
+            </button>
+            <button type="button" class="view-btn" data-view="grid-small" title="Iconos pequeños">
+              <span class="view-btn-icon">▫️</span>
+              <span class="view-btn-label">Pequeños</span>
+            </button>
+            <button type="button" class="view-btn" data-view="list" title="Lista">
+              <span class="view-btn-icon">☰</span>
+              <span class="view-btn-label">Lista</span>
+            </button>
+            <button type="button" class="view-btn" data-view="details" title="Detalles">
+              <span class="view-btn-icon">📑</span>
+              <span class="view-btn-label">Detalles</span>
+            </button>
+            <button type="button" class="view-btn" data-view="names-only" title="Solo nombre (desplegable al tocar)">
+              <span class="view-btn-icon">👤</span>
+              <span class="view-btn-label">Solo nombre</span>
+            </button>
+          </div>
+        </div>
+
+        <main id="devices-container" class="view-grid-large">
           <p class="loading-text">Cargando dispositivos…</p>
         </main>
 
@@ -946,18 +987,23 @@
             <span class="device-id"></span>
           </div>
         </div>
-        <span class="badge status-badge"></span>
+        <div class="device-header-right">
+          <span class="badge status-badge"></span>
+          <span class="expand-chevron" aria-hidden="true" title="Expandir">▼</span>
+        </div>
       </div>
-      <p class="last-seen"></p>
-      <div class="card-action-bar">
-        <!-- 10/9/2026: la ficha COMPLETA se abre en pestaña nueva (celular.html).
-             Es la pantalla donde se configura; la barra lateral de acá queda como
-             vista rápida. Abrir en pestaña nueva fue pedido explícito del dueño
-             ("se puede abrir pestaña nueva, así es más cómodo") y además permite
-             tener varios equipos abiertos a la vez para compararlos. -->
-        <button class="action-btn open-full-btn" type="button">🗂️ Ficha completa ↗</button>
-        <button class="action-btn view-details-btn" type="button">⚙️ Vista rápida</button>
-        <button class="action-btn quick-update-btn" type="button">🔄 Actualizar</button>
+      <div class="device-card-drawer">
+        <p class="last-seen"></p>
+        <div class="card-action-bar">
+          <!-- 10/9/2026: la ficha COMPLETA se abre en pestaña nueva (celular.html).
+               Es la pantalla donde se configura; la barra lateral de acá queda como
+               vista rápida. Abrir en pestaña nueva fue pedido explícito del dueño
+               ("se puede abrir pestaña nueva, así es más cómodo") y además permite
+               tener varios equipos abiertos a la vez para compararlos. -->
+          <button class="action-btn open-full-btn" type="button">🗂️ Ficha completa ↗</button>
+          <button class="action-btn view-details-btn" type="button">⚙️ Vista rápida</button>
+          <button class="action-btn quick-update-btn" type="button">🔄 Actualizar</button>
+        </div>
       </div>
     </div>
   </template>

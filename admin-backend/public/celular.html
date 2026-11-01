@@ -4,8 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Ficha del celular — LockSuite</title>
-  <link rel="stylesheet" href="styles.css?v=24" />
-  <link rel="stylesheet" href="panel2.css?v=5" />
+  <link rel="stylesheet" href="styles.css?v=25" />
+  <link rel="stylesheet" href="panel2.css?v=6" />
+  <script>
+    (function() {
+      try {
+        var t = localStorage.getItem('ls_theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+        if (t === 'light') document.documentElement.classList.add('theme-light');
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body class="ls-body">
 
@@ -40,6 +49,7 @@
     <span class="ls-chip" id="c-bateria">🔋 —</span>
     <span class="ls-chip" id="c-version">—</span>
     <button class="ls-chip ls-chip-btn hidden" id="c-upd-chip" title="Ver la actualización en curso">⬆️ actualizando…</button>
+    <button id="theme-toggle-btn" class="ls-chip ls-chip-btn" type="button" title="Cambiar tema">☀️ Claro</button>
     <div class="ls-top-spacer"></div>
     <input class="ls-input" id="c-buscar" type="search" placeholder="Buscar app, dominio o política…  (/)" style="width:min(320px,42vw)" />
     <a class="ls-btn ls-btn-sm" href="index.html" title="Volver al panel">← Panel</a>

@@ -354,6 +354,39 @@
     };
   };
 
+  /* ─────────────────────────────────────────────────────────────────────────
+   * MODO CLARO / OSCURO (Material Design 3)
+   * ───────────────────────────────────────────────────────────────────────── */
+  LS.applyTheme = function (theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.classList.toggle("theme-light", theme === "light");
+    try { localStorage.setItem("ls_theme", theme); } catch (_) {}
+    const btn = document.getElementById("theme-toggle-btn");
+    if (btn) {
+      btn.textContent = theme === "light" ? "🌙 Oscuro" : "☀️ Claro";
+    }
+  };
+
+  LS.initTheme = function () {
+    const savedTheme = localStorage.getItem("ls_theme") || "dark";
+    LS.applyTheme(savedTheme);
+
+    const btn = document.getElementById("theme-toggle-btn");
+    if (btn) {
+      btn.addEventListener("click", function () {
+        const current = document.documentElement.getAttribute("data-theme") || "dark";
+        const next = current === "light" ? "dark" : "light";
+        LS.applyTheme(next);
+      });
+    }
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", LS.initTheme);
+  } else {
+    LS.initTheme();
+  }
+
   // Confinamiento kosher en :admin-app: los enlaces internos navegan en la misma vista
   if (/LockSuiteAdminApp/.test(navigator.userAgent)) {
     const retarget = () => {

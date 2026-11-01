@@ -2270,37 +2270,61 @@ Pedido del dueño (1/11):
 
 ---
 
+**B.103 — MODO CLARO / OSCURO (MATERIAL DESIGN 3) Y 5 MODOS DE VISUALIZACIÓN DE CELULARES CON ACORDEÓN DESPLEGABLE («SOLO AL APRETAR BAJE»). [COMPILADO, TESTS 100% VERDES, 1/11/2026]**
+
+Pedido del dueño (1/11):
+1. Agregar **Modo Claro / Oscuro** al panel web de administración.
+2. En la sección **Celulares**, agregar opciones para visualizarlos en 5 modos:
+   - `lista` (Lista)
+   - `iconos grandes` (Grandes / Grid Large)
+   - `iconos pequeños` (Pequeños / Grid Small)
+   - `detalles` (Detalles / Details)
+   - `solo nombre (de persona y celular) y solo al apretar baje` (Solo nombre de persona y modelo; al tocar/hacer clic se despliega hacia abajo tipo acordeón con la ficha, vista rápida y actualizar).
+3. Asegurar que todo funcione de forma adaptativa y cómoda tanto en PC como en celulares grandes y celulares pequeños (~320px de ancho como CAT S22 Flip / Qin F21 Pro) sin desbordes horizontales ni romper funciones existentes.
+4. Al terminar: commitear, actualizar `LOCKSUITE_CONTEXTO_PARA_IA.md` y desplegar (`deploy_all.ps1`).
+
+**Qué se implementó:**
+- **Sistema de Modo Claro / Oscuro (Material Design 3):**
+  - Paleta tonal clara M3 en `:root[data-theme="light"], [data-theme="light"], body.theme-light`: fondo `#F8FAFC`, superficie `#FFFFFF`, contenedores tonales `#F1F5F9`/`#E2E8F0`/`#CBD5E1`, primario ámbar de alto contraste `#D97706`, texto `#0F172A`, texto secundario `#475569`, borde `#E2E8F0`, sombras de elevación M3 suaves.
+  - Mapeo automático de los alias legados (`--navy-dark`, `--navy-medium`, `--navy-light`, `--navy-border`, `--text-light`, `--text-gray`) para que todos los estilos en línea y tarjetas existentes pasen a claro limpiamente.
+  - Botón de alternancia en la barra superior: `#theme-toggle-btn` y `#mobile-theme-btn` en `index.html`, y `#theme-toggle-btn` en `.ls-top` de `celular.html`, `dominios.html` y `tienda.html`.
+  - Persistencia en `localStorage.getItem('ls_theme')` y script de inicialización inmediata en `<head>` de los cuatro HTMLs para evitar cualquier destello de tema (FOUC).
+  - En `panel2.css`, refinamiento para `.ls-top` (`rgba(255,255,255,0.94)`), `.ls-rail`, `.ls-card`, `.ls-irow`, `.ls-cart` e inputs en modo claro.
+- **5 Modos de visualización en la sección Celulares:**
+  - Barra de herramientas `.devices-view-toolbar` arriba de `#devices-container` con contador de dispositivos (`#devices-total-badge`) y grupo de botones segmentados M3 (`.view-btn`):
+    1. `grid-large` (🔲 Grandes): tarjetas amplias M3 (320px min), padding cómodo, datos completos.
+    2. `grid-small` (▫️ Pequeños): tarjetas compactas (220px min), tipografía y botones reducidos.
+    3. `list` (☰ Lista): filas horizontales continuas con alineación limpia.
+    4. `details` (📑 Detalles): tarjetas enriquecidas con detalles visuales destacados.
+    5. `names-only` (👤 Solo nombre): muestra únicamente el nombre de la persona, modelo del celular y flecha indicadora (`▼`). Al hacer clic sobre cualquier parte de la fila o en la flecha («solo al apretar baje»), se despliega con animación fluida el cajón `.device-card-drawer` revelando la chapa de estado (En línea/En reposo/Desconectado/Sin FCM), ID del dispositivo, última conexión y botones de acción (`🗂️ Ficha completa ↗`, `⚙️ Vista rápida`, `🔄 Actualizar`).
+  - Persistencia de la preferencia de vista en `localStorage.getItem('ls_devices_view')`.
+  - En celulares pequeños (<= 600px y <= 320px): la barra de herramientas y los botones segmentados se compactan y tienen scroll horizontal sin desborde de ventana; las tarjetas en lista se ajustan verticalmente sin scroll horizontal en pantallas de 320px (CAT S22 Flip / Qin F21 Pro).
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**1/11 — Antigravity (en PC con terminal, Gradle y Firebase CLI): aplicación de Tienda Play (B.101), resolución de Node.js 22, compilación de APK release, despliegue completo y verificación en vivo de Cloud Functions y Hosting.**
+**1/11 — Antigravity (en PC con terminal, Gradle y Firebase CLI): Rediseño Material Design 3, Modo Claro/Oscuro en panel, 5 modos de visualización de celulares (con acordeón desplegable «solo al apretar baje»), retiro de tienda vieja en favor de Tienda Play kosher por defecto, compilación release y despliegue.**
 
-- **Pedido del usuario:** revisar lo último que hizo Claude (Tienda Play B.101), hacer lo que faltaba y ejecutar el script de deploy (`deploy_all.ps1`).
+- **Pedidos del usuario resueltos:**
+  1. Rediseñar web y app bajo Material Design 3 UI sin romper funciones existentes (B.102).
+  2. Retirar la tienda vieja de APKs y dejar exclusivamente Tienda Play abierta en modo kosher por defecto (B.102).
+  3. Agregar Modo Claro / Oscuro al panel web (B.103).
+  4. En la sección Celulares: 5 vistas (lista, iconos grandes, iconos pequeños, detalles, solo nombre de persona y celular desplegable al apretar) (B.103).
+  5. Garantizar comodidad responsiva para pantallas chicas (320px como CAT S22 Flip / Qin F21 Pro), celulares grandes y PC sin scroll horizontal indeseado (B.102, B.103).
 - **Qué se hizo en esta sesión:**
-  1. **Parche aplicado:** se aplicó el parche `Claude outputs/2026-11-01_tienda_play.patch` limpiamente sobre `main`.
-  2. **Codificación en Windows:** se corrigió `tools/check_store_sync.py` para forzar UTF-8 en `sys.stdout` evitando el fallo por caracteres Unicode (`✅`) en la consola de Windows. Los cinco chequeos de simetría (`check_command_sync.py`, `check_panel_commands.py`, `check_whitelist_sync.py`, `check_profile_sync.py`, `check_store_sync.py`) dieron 100% OK.
-  3. **Verificación de lógica y sintaxis:** `node tools/test_tienda_logic.js` (48 pruebas OK), `node tools/test_play_lookup.js` (16 pruebas OK), `node --check` de todos los scripts del backend y panel sin errores.
-  4. **Compilación Android completa con Gradle:**
-     - `:app:compileDebugKotlin` -> BUILD SUCCESSFUL (Compose y Views compilaron sin errores).
-     - `:app:testDebugUnitTest` -> 102/102 pruebas unitarias en verde.
-     - `clean assembleRelease` -> BUILD SUCCESSFUL. Generó el APK release firmado.
-  5. **Versión y Release:**
-     - Incrementada a **versionCode 133 / versionName "0.6.70"** en `app/build.gradle.kts` y `admin-backend/public/version.json`.
-     - APK release copiado a `admin-backend/public/LockSuite.apk` y `admin-backend/public/locksuite-latest.apk`.
-  6. **Migración y Despliegue de Cloud Functions a Node.js 22:**
-     - GCP decommissionó Node.js 20 el 30/10/2026. Se actualizó `admin-backend/functions/package.json` a `"engines": { "node": "22" }`.
-     - Se desplegó `checkPlayApps` en Node.js 22. URL en Cloud Run: `https://checkplayapps-5i52mt6h3q-uc.a.run.app`.
-     - Se actualizó el permiso IAM `roles/run.invoker` para `allUsers` en el servicio Cloud Run de `checkplayapps` (responde 204 en preflight OPTIONS y 401 sin token, idéntico a `sendCommandV8`).
-     - Se desplegó `sendCommandV8` en Node.js 22, incorporando los comandos `SET_PLAY_STORE_MODE` y `SYNC_PLAY_STORE`.
-  7. **Actualización de Panel y Hosting:**
-     - En `admin-backend/public/comun.js`: `URL_CHECK_PLAY` actualizada a `https://checkplayapps-5i52mt6h3q-uc.a.run.app`.
-     - Cache buster `comun.js?v=5` incrementado en `celular.html`, `dominios.html` y `tienda.html`.
-     - Hosting de Firebase desplegado y confirmado activo (`https://locksuite-nueva.web.app/version.json` devuelve 133 / 0.6.70).
-- **Pendiente para el dueño (probar en celulares):**
-  1. Panel → **Tienda Play** (`tienda.html`): verificar la lista inicial de apps, tocar «Verificar en Play» (comprobar que la función responda con los estados), repartir niveles 1/2/3, «Guardar» y «Enviar a todos».
-  2. Ficha del celular → sección Tienda Play → modo **Kosher**: en el teléfono debe verse el widget o baldosa.
-  3. ★ **Instalar app:** probar con pantalla tapada y confirmar que el flujo termine en «Abrir».
-  4. Probar opciones «Sin web», dominios restringidos, y flujo «Solo a pedido» (Pedir → Panel aprueba → Instalar).
-  5. Probar cambio de modo (bajar a Cerrada suspende las apps; volver a Kosher las reanuda).
-- Siguen abiertas las pruebas en equipo real de B.95 a B.100 y la decisión sobre la regla de `ownerUid` de B.94.
+  1. **Modo Claro / Oscuro:** implementado en `styles.css?v=25` y `panel2.css?v=6` mediante tokens semánticos M3 (`data-theme="light"` y `data-theme="dark"`), botones de alternancia en header desktop y móvil (`#theme-toggle-btn`, `#mobile-theme-btn`) y en la barra superior de `celular.html`, `dominios.html` y `tienda.html` vía `comun.js`. Persiste en `localStorage` con bootstrapper anti-FOUC.
+  2. **5 Modos de visualización en Celulares:** `.devices-view-toolbar` con segmented buttons (`grid-large`, `grid-small`, `list`, `details`, `names-only`) y persistencia en `localStorage`. En `names-only`, solo se muestran persona y modelo; un clic despliega con transición suave `.device-card-drawer` con estado, ID, última conexión y botones de acción.
+  3. **Verificación y Test Suites:**
+     - `python tools/check_command_sync.py`: 100% OK.
+     - `python tools/check_panel_commands.py`: 100% OK.
+     - `python tools/check_whitelist_sync.py`: 100% OK.
+     - `python tools/check_profile_sync.py`: 100% OK.
+     - `python tools/check_store_sync.py`: 100% OK.
+     - `node tools/test_tienda_logic.js`: 48 pruebas OK.
+     - `node tools/test_play_lookup.js`: 16 pruebas OK.
+     - `node -c app.js` y `node -c comun.js`: sintaxis limpia.
+     - `:app:compileDebugKotlin` y `:app:testDebugUnitTest`: 102/102 pruebas unitarias en verde.
+  4. **Compilación y Despliegue (`deploy_all.ps1`):** compilación de APK release, actualización de `versionCode` y `versionName`, despliegue de Firebase Hosting y subida a GitHub.

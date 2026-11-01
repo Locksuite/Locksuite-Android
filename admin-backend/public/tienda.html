@@ -4,8 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Tienda Play — LockSuite</title>
-  <link rel="stylesheet" href="styles.css?v=24" />
-  <link rel="stylesheet" href="panel2.css?v=5" />
+  <link rel="stylesheet" href="styles.css?v=25" />
+  <link rel="stylesheet" href="panel2.css?v=6" />
+  <script>
+    (function() {
+      try {
+        var t = localStorage.getItem('ls_theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+        if (t === 'light') document.documentElement.classList.add('theme-light');
+      } catch (e) {}
+    })();
+  </script>
   <style>
     /* Solo lo que esta página necesita y panel2.css no trae. */
     .tp-tier { margin: 22px 0 8px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
@@ -59,6 +68,7 @@
       <div class="ls-sub">Configuración GLOBAL — rige para toda la flota</div>
     </div>
     <span class="ls-chip warn" id="t-pend">cargando…</span>
+    <button id="theme-toggle-btn" class="ls-chip ls-chip-btn" type="button" title="Cambiar tema">☀️ Claro</button>
     <div class="ls-top-spacer"></div>
     <input class="ls-input" id="t-buscar" type="search" placeholder="Buscar app o paquete…" style="width:min(320px,42vw)" />
     <a class="ls-btn ls-btn-sm" href="index.html">← Panel</a>

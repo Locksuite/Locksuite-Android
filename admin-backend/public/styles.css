@@ -103,6 +103,183 @@
   --card-shadow-hover: var(--md-sys-elevation-level2);
 }
 
+:root[data-theme="light"], [data-theme="light"], body.theme-light {
+  /* ==========================================================================
+     MATERIAL DESIGN 3 — SYSTEM TOKENS (Light Tonal Palette)
+     ========================================================================== */
+
+  /* ── M3 Surface & Background Roles ── */
+  --md-sys-color-background: #F8FAFC;
+  --md-sys-color-on-background: #0F172A;
+  --md-sys-color-surface: #FFFFFF;
+  --md-sys-color-surface-dim: #F1F5F9;
+  --md-sys-color-surface-bright: #FFFFFF;
+  --md-sys-color-surface-container-lowest: #FFFFFF;
+  --md-sys-color-surface-container-low: #F8FAFC;
+  --md-sys-color-surface-container: #F1F5F9;
+  --md-sys-color-surface-container-high: #E2E8F0;
+  --md-sys-color-surface-container-highest: #CBD5E1;
+  --md-sys-color-on-surface: #0F172A;
+  --md-sys-color-on-surface-variant: #475569;
+
+  /* ── M3 Outline Roles ── */
+  --md-sys-color-outline: #94A3B8;
+  --md-sys-color-outline-variant: #E2E8F0;
+
+  /* ── M3 Primary Roles (Warm Amber Gold with high contrast) ── */
+  --md-sys-color-primary: #D97706;
+  --md-sys-color-on-primary: #FFFFFF;
+  --md-sys-color-primary-container: #FEF3C7;
+  --md-sys-color-on-primary-container: #78350F;
+
+  /* ── M3 Secondary Roles (Slate Tonal) ── */
+  --md-sys-color-secondary: #475569;
+  --md-sys-color-on-secondary: #FFFFFF;
+  --md-sys-color-secondary-container: #E2E8F0;
+  --md-sys-color-on-secondary-container: #1E293B;
+
+  /* ── M3 Tertiary Roles (Sky Cyan / Blue) ── */
+  --md-sys-color-tertiary: #0284C7;
+  --md-sys-color-on-tertiary: #FFFFFF;
+  --md-sys-color-tertiary-container: #E0F2FE;
+  --md-sys-color-on-tertiary-container: #0369A1;
+
+  /* ── M3 Semantic Status Roles (Error / Success / Warning) ── */
+  --md-sys-color-error: #DC2626;
+  --md-sys-color-on-error: #FFFFFF;
+  --md-sys-color-error-container: #FEE2E2;
+  --md-sys-color-on-error-container: #991B1B;
+
+  --md-sys-color-success: #16A34A;
+  --md-sys-color-on-success: #FFFFFF;
+  --md-sys-color-success-container: #DCFCE7;
+  --md-sys-color-on-success-container: #166534;
+
+  --md-sys-color-warning: #D97706;
+  --md-sys-color-on-warning: #FFFFFF;
+  --md-sys-color-warning-container: #FEF3C7;
+  --md-sys-color-on-warning-container: #92400E;
+
+  /* ── M3 Elevation for Light Theme ── */
+  --md-sys-elevation-level1: 0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --md-sys-elevation-level2: 0 4px 10px rgba(15, 23, 42, 0.10), 0 1px 3px rgba(15, 23, 42, 0.05);
+  --md-sys-elevation-level3: 0 8px 20px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.06);
+  --md-sys-elevation-level4: 0 14px 28px rgba(15, 23, 42, 0.14), 0 4px 10px rgba(15, 23, 42, 0.08);
+  --md-sys-elevation-level5: 0 20px 40px rgba(15, 23, 42, 0.18), 0 6px 14px rgba(15, 23, 42, 0.10);
+
+  /* ── Legacy Token Aliases Mapped to M3 Light Roles ── */
+  --navy-dark: var(--md-sys-color-surface);
+  --navy-medium: var(--md-sys-color-surface-container);
+  --navy-light: var(--md-sys-color-surface-container-high);
+  --navy-border: var(--md-sys-color-outline-variant);
+  --navy-border-hover: var(--md-sys-color-outline);
+
+  --accent-orange: var(--md-sys-color-primary);
+  --accent-orange-hover: #B45309;
+  --accent-cyan: var(--md-sys-color-tertiary);
+
+  --text-light: var(--md-sys-color-on-surface);
+  --text-gray: var(--md-sys-color-on-surface-variant);
+  --text-muted: #64748B;
+
+  --alert-red: var(--md-sys-color-error);
+  --success-green: var(--md-sys-color-success);
+  --warning-yellow: var(--md-sys-color-warning);
+}
+
+/* ── Light Theme Element Refinements ── */
+[data-theme="light"] .card,
+[data-theme="light"] .modal-card,
+[data-theme="light"] .sidebar-card {
+  background: #FFFFFF;
+  border-color: #E2E8F0;
+  box-shadow: var(--md-sys-elevation-level1);
+}
+
+[data-theme="light"] .device-card {
+  background: #FFFFFF;
+  border-color: #E2E8F0;
+  box-shadow: var(--md-sys-elevation-level1);
+}
+
+[data-theme="light"] .device-card:hover {
+  background: #F8FAFC;
+  border-color: #CBD5E1;
+}
+
+[data-theme="light"] .device-card.selected {
+  border-color: var(--md-sys-color-primary);
+  background: #FEF3C7;
+}
+
+[data-theme="light"] .sidebar {
+  background: #FFFFFF !important;
+  border-left-color: #E2E8F0 !important;
+}
+
+[data-theme="light"] .sidebar-header {
+  background: #FFFFFF;
+  border-bottom-color: #E2E8F0;
+}
+
+[data-theme="light"] .sidebar-tabs {
+  background: #F8FAFC;
+  border-bottom-color: #E2E8F0;
+}
+
+[data-theme="light"] .sidebar-footer {
+  background: #FFFFFF;
+  border-top-color: #E2E8F0;
+}
+
+[data-theme="light"] .header-actions {
+  background: #FFFFFF;
+  border-color: #E2E8F0;
+}
+
+[data-theme="light"] input,
+[data-theme="light"] select,
+[data-theme="light"] textarea {
+  background-color: #FFFFFF !important;
+  color: #0F172A !important;
+  border-color: #CBD5E1 !important;
+}
+
+[data-theme="light"] input:focus,
+[data-theme="light"] select:focus,
+[data-theme="light"] textarea:focus {
+  border-color: var(--md-sys-color-primary) !important;
+  box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.2) !important;
+  background-color: #FFFFFF !important;
+}
+
+[data-theme="light"] .main-navigation {
+  background: #F1F5F9;
+  border-color: #E2E8F0;
+}
+
+[data-theme="light"] .main-nav-btn:hover {
+  background: rgba(15, 23, 42, 0.06);
+  color: #0F172A;
+}
+
+[data-theme="light"] .empty-state {
+  background: #F8FAFC;
+  border-color: #CBD5E1;
+}
+
+[data-theme="light"] .view-details-btn {
+  background: #F1F5F9;
+  color: #0F172A;
+  border-color: #E2E8F0;
+}
+
+[data-theme="light"] .view-details-btn:hover {
+  background: var(--md-sys-color-primary);
+  color: #FFFFFF;
+  border-color: var(--md-sys-color-primary);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -679,6 +856,278 @@ button.google-btn:hover {
   color: var(--md-sys-color-on-warning);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   DEVICES VIEW TOOLBAR & VIEW MODES (M3 Segmented Buttons & Layouts)
+   ═══════════════════════════════════════════════════════════════════════════ */
+.devices-view-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.devices-view-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.devices-view-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--md-sys-color-on-surface);
+  letter-spacing: -0.01em;
+}
+
+.devices-view-selector {
+  display: inline-flex;
+  background: var(--md-sys-color-surface-container);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-full);
+  padding: 3px;
+  gap: 2px;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.devices-view-selector::-webkit-scrollbar {
+  display: none;
+}
+
+.view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface-variant);
+  background: transparent;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  cursor: pointer;
+  transition: all var(--md-sys-motion-duration-short) ease;
+  white-space: nowrap;
+  box-shadow: none;
+  margin: 0;
+}
+
+.view-btn:hover {
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+}
+
+.view-btn.active {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  box-shadow: var(--md-sys-elevation-level1);
+}
+
+.view-btn-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.device-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.expand-chevron {
+  display: none;
+  cursor: pointer;
+  padding: 4px;
+  user-select: none;
+  font-size: 11px;
+  color: var(--md-sys-color-on-surface-variant);
+  transition: transform 0.25s ease, color 0.25s ease;
+}
+
+/* ── 1. MODE: Grid Large (default) ── */
+#devices-container.view-grid-large {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+#devices-container.view-grid-large .device-card {
+  padding: 18px;
+}
+#devices-container.view-grid-large .expand-chevron {
+  display: none;
+}
+
+/* ── 2. MODE: Grid Small (compact cards) ── */
+#devices-container.view-grid-small {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+#devices-container.view-grid-small .device-card {
+  padding: 12px;
+  border-radius: var(--md-sys-shape-corner-medium);
+}
+#devices-container.view-grid-small .device-name {
+  font-size: 13.5px;
+}
+#devices-container.view-grid-small .device-sub-row {
+  font-size: 10px;
+  gap: 4px;
+}
+#devices-container.view-grid-small .badge {
+  font-size: 9.5px;
+  padding: 2px 6px;
+}
+#devices-container.view-grid-small .last-seen {
+  font-size: 10px;
+  margin: 2px 0 8px 0;
+}
+#devices-container.view-grid-small .card-action-bar {
+  gap: 4px;
+}
+#devices-container.view-grid-small .card-action-bar .action-btn {
+  padding: 5px 8px;
+  font-size: 11px;
+  height: 28px;
+}
+#devices-container.view-grid-small .expand-chevron {
+  display: none;
+}
+
+/* ── 3. MODE: List (horizontal single-column rows) ── */
+#devices-container.view-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#devices-container.view-list .device-card {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  gap: 16px;
+  border-radius: var(--md-sys-shape-corner-medium);
+}
+#devices-container.view-list .device-header {
+  margin-bottom: 0;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+#devices-container.view-list .device-info-left {
+  flex: 1;
+  min-width: 0;
+}
+#devices-container.view-list .device-card-drawer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0;
+  flex-shrink: 0;
+}
+#devices-container.view-list .last-seen {
+  margin: 0;
+  white-space: nowrap;
+}
+#devices-container.view-list .card-action-bar {
+  margin-top: 0;
+}
+#devices-container.view-list .expand-chevron {
+  display: none;
+}
+
+/* ── 4. MODE: Details (expanded rich information) ── */
+#devices-container.view-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 18px;
+}
+#devices-container.view-details .device-card {
+  padding: 20px;
+  background: var(--md-sys-color-surface-container);
+  border: 1px solid var(--md-sys-color-outline);
+}
+#devices-container.view-details .device-name {
+  font-size: 17px;
+}
+#devices-container.view-details .last-seen {
+  margin: 8px 0 14px 0;
+  font-size: 12px;
+  padding: 6px 10px;
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-small);
+}
+#devices-container.view-details .expand-chevron {
+  display: none;
+}
+
+/* ── 5. MODE: Names Only ("solo nombre de persona y celular y solo al apretar baje") ── */
+#devices-container.view-names-only {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#devices-container.view-names-only .device-card {
+  cursor: pointer;
+  padding: 12px 16px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  transition: all var(--md-sys-motion-duration-short) ease;
+}
+#devices-container.view-names-only .device-card:hover {
+  border-color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-surface-container);
+}
+#devices-container.view-names-only .device-header {
+  margin-bottom: 0;
+  align-items: center;
+}
+#devices-container.view-names-only .expand-chevron {
+  display: inline-block;
+}
+/* En estado colapsado (por defecto en solo nombre) */
+#devices-container.view-names-only .device-card:not(.is-expanded) .device-header .status-badge,
+#devices-container.view-names-only .device-card:not(.is-expanded) .device-id-sep,
+#devices-container.view-names-only .device-card:not(.is-expanded) .device-id {
+  display: none;
+}
+#devices-container.view-names-only .device-card .device-card-drawer {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 0.28s cubic-bezier(0.2, 0, 0, 1), opacity 0.22s ease, margin-top 0.22s ease;
+  margin-top: 0;
+}
+/* En estado expandido ("al apretar baje") */
+#devices-container.view-names-only .device-card.is-expanded {
+  border-color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-surface-container);
+  box-shadow: var(--md-sys-elevation-level2);
+}
+#devices-container.view-names-only .device-card.is-expanded .expand-chevron {
+  transform: rotate(180deg);
+  color: var(--md-sys-color-primary);
+}
+#devices-container.view-names-only .device-card.is-expanded .device-card-drawer {
+  max-height: 220px;
+  opacity: 1;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--md-sys-color-outline-variant);
+}
+#devices-container.view-names-only .device-card.is-expanded .device-id-sep,
+#devices-container.view-names-only .device-card.is-expanded .device-id {
+  display: inline;
+}
+#devices-container.view-names-only .device-card.is-expanded .device-header .status-badge {
+  display: inline-flex;
+}
+
 /* ==========================================================================
    SIDEBAR (M3 Side Sheet)
    ========================================================================== */
@@ -1108,11 +1557,52 @@ button.google-btn:hover {
     grid-template-columns: 1fr !important;
     gap: 10px;
   }
+
+  #devices-container.view-list .device-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  #devices-container.view-list .device-card-drawer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  #devices-container.view-list .last-seen {
+    white-space: normal;
+  }
 }
 
 @media (max-width: 600px) {
   .screen {
     padding: 8px 10px;
+  }
+
+  .devices-view-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .devices-view-info {
+    justify-content: space-between;
+  }
+
+  .devices-view-selector {
+    width: 100%;
+    display: flex;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 2px;
+  }
+
+  .view-btn {
+    padding: 5px 8px;
+    font-size: 11px;
+    flex: 1 0 auto;
+    justify-content: center;
   }
 
   .app-header {
@@ -1351,6 +1841,20 @@ button.google-btn:hover {
 
   .header-brand h1 {
     font-size: 12px;
+  }
+
+  .devices-view-title {
+    font-size: 11.5px;
+  }
+
+  .view-btn {
+    padding: 3px 5px;
+    font-size: 9.5px;
+    gap: 2px;
+  }
+
+  .view-btn-label {
+    font-size: 9px;
   }
 
   .main-nav-btn {

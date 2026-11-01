@@ -229,6 +229,8 @@ function stopRealtimeSync() {
 function renderDevicesList(e) {
     devicesContainer.innerHTML = "";
     const t = Object.entries(e);
+    const totalBadge = document.getElementById("devices-total-badge");
+    if (totalBadge) totalBadge.textContent = t.length;
     0 !== t.length ? (t.sort((e, t) => {
         const n = field(e[1], "lastSeen", 0);
         return field(t[1], "lastSeen", 0) - n
@@ -283,7 +285,21 @@ function renderDevicesList(e) {
         }
         n.querySelector(".last-seen").textContent = s ? "Última conexión: " + new Date(s).toLocaleString("es-AR") : "Sin conexión registrada";
         const r = () => openDeviceSidebar(e, t);
-        a.addEventListener("click", r);
+        a.addEventListener("click", ev => {
+            // Si estamos en modo "solo nombre", un toque expande/colapsa el acordeón ("solo al apretar baje")
+            if (currentDevicesViewMode === "names-only") {
+                a.classList.toggle("is-expanded");
+                return;
+            }
+            r();
+        });
+        const chevron = n.querySelector(".expand-chevron");
+        if (chevron) {
+            chevron.addEventListener("click", ev => {
+                ev.stopPropagation();
+                a.classList.toggle("is-expanded");
+            });
+        }
         n.querySelector(".view-details-btn").addEventListener("click", ev => {
             ev.stopPropagation();
             r();
@@ -2022,6 +2038,76 @@ mobileMenuBtn && headerActionsMenu && (
         }
     })
 );
+
+// ── MODO CLARO / OSCURO & SELECTOR DE VISTA DE CELULARES ──
+let currentDevicesViewMode = localStorage.getItem("ls_devices_view") || "grid-large";
+
+function setDevicesViewMode(mode) {
+    currentDevicesViewMode = mode;
+    try { localStorage.setItem("ls_devices_view", mode); } catch (_) {}
+    if (devicesContainer) {
+        devicesContainer.classList.remove(
+            "view-grid-large",
+            "view-grid-small",
+            "view-list",
+            "view-details",
+            "view-names-only"
+        );
+        devicesContainer.classList.add("view-" + mode);
+    }
+    document.querySelectorAll(".devices-view-selector .view-btn").forEach(btn => {
+        btn.classList.toggle("active", btn.getAttribute("data-view") === mode);
+    });
+}
+
+function initDevicesViewSelector() {
+    const selector = document.querySelector(".devices-view-selector");
+    if (selector) {
+        selector.addEventListener("click", ev => {
+            const btn = ev.target.closest(".view-btn");
+            if (btn) {
+                const mode = btn.getAttribute("data-view");
+                if (mode) setDevicesViewMode(mode);
+            }
+        });
+    }
+    setDevicesViewMode(currentDevicesViewMode);
+}
+
+function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.classList.toggle("theme-light", theme === "light");
+    try { localStorage.setItem("ls_theme", theme); } catch (_) {}
+
+    const toggleBtn = document.getElementById("theme-toggle-btn");
+    const mobileToggleBtn = document.getElementById("mobile-theme-btn");
+    if (toggleBtn) {
+        toggleBtn.textContent = theme === "light" ? "🌙 Modo Oscuro" : "☀️ Modo Claro";
+    }
+    if (mobileToggleBtn) {
+        mobileToggleBtn.textContent = theme === "light" ? "🌙" : "☀️";
+    }
+}
+
+function initTheme() {
+    const savedTheme = localStorage.getItem("ls_theme") || "dark";
+    applyTheme(savedTheme);
+
+    const toggleBtn = document.getElementById("theme-toggle-btn");
+    const mobileToggleBtn = document.getElementById("mobile-theme-btn");
+
+    function handleToggle() {
+        const current = document.documentElement.getAttribute("data-theme") || "dark";
+        const next = current === "light" ? "dark" : "light";
+        applyTheme(next);
+    }
+
+    if (toggleBtn) toggleBtn.addEventListener("click", handleToggle);
+    if (mobileToggleBtn) mobileToggleBtn.addEventListener("click", handleToggle);
+}
+
+initTheme();
+initDevicesViewSelector();
 
 globalUpdateLocksuiteBtn.addEventListener("click", () => {
     const deviceIds = Object.keys(currentDevicesData);
