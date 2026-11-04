@@ -98,7 +98,7 @@ CAPA 3 — VISUAL (service/LockSuiteAccessibilityService.kt)
 
 ### Backend (`admin-backend/`)
 
-Firebase (Hosting + Cloud Functions v2 Node.js + Realtime Database). Proyecto: **`locksuite-nueva`** (verificado el 22/9 en `admin-backend/.firebaserc` y `public/firebase-config.js`; este documento decía `looksuite-41866`, que ya no es el que usa el repo). Cuenta dueña según los documentos anteriores: `imc112818@gmail.com` (sin verificar para el proyecto nuevo). `functions/index.js` (`sendCommandV8`, whitelist `ALLOWED_COMMANDS`), `database.rules.json`, `public/` (panel HTML/CSS/JS + instalador WebADB). Repo de código: **`github.com/CHKI541/Lock-Suite`, público** (ver Pendientes B.2 — es la recomendación de mayor impacto y menor esfuerzo de toda la lista).
+Firebase (Hosting + Cloud Functions v2 Node.js + Realtime Database). Proyecto: **`locksuite-nueva`** (verificado el 22/9 en `admin-backend/.firebaserc` y `public/firebase-config.js`; este documento decía `looksuite-41866`, que ya no es el que usa el repo). Cuenta dueña según los documentos anteriores: `imc112818@gmail.com` (sin verificar para el proyecto nuevo). `functions/index.js` (`sendCommandV8`, whitelist `ALLOWED_COMMANDS`), `database.rules.json`, `public/` (panel HTML/CSS/JS + instalador WebADB). Repo de código: **`github.com/Locksuite/Locksuite-Android`** (migrado el 4/11/2026 tras problemas en la cuenta anterior; ver B.106).
 
 **(29/10) Tienda Play (B.101):** `public/tienda.html` + `tienda.js` + `tienda_logic.js` (la lista GLOBAL con niveles, estados y acceso; la lógica es JS puro, espejo del Kotlin y probada), la sección «Tienda Play» de la ficha (`celular.html/js`), los pedidos «de la Tienda Play» en 🔔 Pedidos (`index.html`/`app.js`) y la función `checkPlayApps` (`functions/play_lookup.js`), que le pregunta a Google Play si cada paquete existe. `tools/check_store_sync.py` vigila que celular, panel y función digan lo mismo.
 
@@ -2359,24 +2359,34 @@ oBackupFilesDir y serializado al formato binario de 524 bytes Little-Endian de A
 
 ---
 
+**B.106 — MIGRACIÓN A NUEVO REPOSITORIO GITHUB (Locksuite/Locksuite-Android) Y RESTAURACIÓN DE TIENDA CLÁSICA DE APKS CON BOTÓN DISCRETO (4/11/2026). [IMPLEMENTADO Y VERIFICADO]**
+
+Pedido del dueño (4/11): la cuenta anterior de GitHub (`CHKI541/Lock-Suite`) tuvo problemas. Migrar todo el proyecto, scripts de despliegue, instalador y documentación al nuevo repositorio oficial `https://github.com/Locksuite/Locksuite-Android`. Además, devolver con un botón discreto la tienda clásica de APKs directos en el panel global (junto a la Tienda Play) alojada en el nuevo GitHub, y migrar las URLs de los 19 APKs de `storeApps` en Firebase RTDB al nuevo repositorio.
+
+Qué se hizo:
+1. **Git Remote Origin:** Se actualizó `origin` a `https://github.com/Locksuite/Locksuite-Android` (`git remote set-url origin https://github.com/Locksuite/Locksuite-Android`).
+2. **Script de Despliegue (`deploy_all.ps1`):** Se configuró el comando final de subida con `git push -u origin main` asegurando que los deploys impacten directamente en el nuevo repositorio.
+3. **Instalador Web (`admin-backend/public/installer/js/config.js`):** Se actualizaron `GITHUB_USERNAME`, `GITHUB_REPO_NAME`, `FALLBACK_GITHUB_USERNAME`, `INSTALLER_REPO_OWNER` y `INSTALLER_REPO_NAME` a `"Locksuite"` y `"Locksuite-Android"`.
+4. **Tienda Clásica de APKs en Panel Global (`index.html` y `app.js`):** Se eliminó la regla que ocultaba la tarjeta de tienda vieja y se integró un botón discreto (`#toggle-old-store-btn` "📦 Tienda clásica de APKs (GitHub)") en la tarjeta principal de Tiendas de Aplicaciones, permitiendo desplegar y ocultar a demanda el formulario y catálogo de APKs directos.
+5. **Firebase Realtime Database (`storeApps`):** Se actualizaron las 19 aplicaciones registradas en `storeApps` para que sus enlaces de descarga apunten a `https://github.com/Locksuite/Locksuite-Android/releases/download/store-apks-v1/<archivo>.apk`.
+6. **Documentación:** Se actualizó `LOCKSUITE_CONTEXTO_PARA_IA.md` y la bitácora con la nueva referencia del repositorio.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**1/11 (noche) — Gemini Flash: implementación completa de Instalación Fácil en Multimedia de Autos (B.105), guía de instalación interactiva en panel web y despliegue.**
+**4/11 (mediodía) — Antigravity: migración al nuevo repositorio GitHub (Locksuite/Locksuite-Android), reactivación discreta de tienda clásica de APKs y actualización en Firebase RTDB (B.106).**
 
 - **Pedidos del usuario:**
-  1. Ejecutar las instrucciones de `INSTRUCCIONES_GEMINI_FLASH_INSTALACION_MULTIMEDIA.md` al cambiar al modelo Gemini Flash.
-  2. Agregar en la app web un logo/botón de ayuda que explique en resumen cómo se instala LockSuite en general y una parte que detalle bien cómo se instala fácil en multimedia de autos.
-  3. Ejecutar el despliegue (`deploy_all.ps1`).
+  1. Subir todo a un nuevo repositorio en GitHub (`https://github.com/Locksuite/Locksuite-Android`) debido a problemas en la cuenta anterior.
+  2. Actualizar el script de deploy (`deploy_all.ps1`) y toda la documentación (`LOCKSUITE_CONTEXTO_PARA_IA.md`).
+  3. Devolver con un botón discreto la tienda vieja de APKs (junto a la Tienda Play) alojada en el nuevo GitHub, y migrar lo que dependa de GitHub al nuevo repositorio.
 - **Qué se hizo:**
-  - Se crearon los 8 archivos de lógica y protocolo ADB en `app/src/main/java/com/ejemplo/locksuite/provisioning/` y `.../provisioning/adb/`:
-    `AdbProtocol.kt`, `AdbFrameStream.kt`, `AdbAuthKey.kt`, `AccountAuthenticatorGateScript.kt`, `LocalAdbClient.kt`, `ClassicAdbChannelOpener.kt`, `LocalProvisioningProbe.kt`, `MultimediaDeviceOwnerActivator.kt`.
-  - Se creó el asistente visual Material Design 3 en `app/src/main/java/com/ejemplo/locksuite/ui/provisioning/MultimediaProvisioningDialog.kt`.
-  - Se integró el diálogo en las pantallas del dispositivo: `SetupPinActivity.kt` (durante el alta), `LoginActivity.kt` (botón trilingüe en pantalla previa al PIN) y `DashboardActivity.kt` (en la tarjeta de advertencia de Device Owner).
-  - Se creó la suite de tests unitarios `app/src/test/java/com/ejemplo/locksuite/provisioning/MultimediaProvisioningTest.kt` y se registró en `run_unit_tests.sh`.
-  - Se ejecutó `.\gradlew.bat testDebugUnitTest`: **230 tests ejecutados, 0 fallos, 0 errores (100% verdes)**.
-  - En el panel web (`admin-backend/public/index.html` y `app.js?v=45`), se agregó el botón `❓ ¿Cómo instalar?` en la barra de acciones superior (desktop y móvil) y el modal interactivo `#install-guide-modal` con dos secciones conmutables:
-    1. *«📱 Celulares / General»*: Alta recomendada por 6 toques en pantalla de bienvenida + código QR, y enrolamiento por cable USB / PC mediante ADB.
-    2. *«🚗 Multimedia de Autos (Sin PC)»*: Guía detallada explicando por qué no hace falta restablecer la pantalla de fábrica (para no perder mandos del volante ni cámara), instalación por pendrive, activación con Root en 1 toque, preparación del puerto 5555 y reseteo del switch de depuración USB, y preservación segura de cuentas de Google/mapas sin perder sesiones.
-  - Se corrieron los 5 scripts de verificación de sincronización (`check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `check_store_sync.py`), las pruebas de catálogo (`test_tienda_logic.js`, `test_play_lookup.js`) y `node --check`: todo 100% verde.
+  - Se configuró el remote de git: `origin` ahora apunta a `https://github.com/Locksuite/Locksuite-Android`.
+  - Se adaptó `deploy_all.ps1` para garantizar el push explícito a `origin main`.
+  - En el instalador web (`admin-backend/public/installer/js/config.js`), se actualizaron los nombres de usuario y repositorio a `Locksuite` y `Locksuite-Android`.
+  - En `admin-backend/public/index.html` y `app.js`, se reactivó la Tienda Clásica de APKs mediante un botón secundario discreto (`#toggle-old-store-btn` "📦 Tienda clásica de APKs (GitHub)") que abre y cierra la tarjeta a demanda, manteniendo la Tienda Play como la opción principal y destacada.
+  - En Firebase Realtime Database (`storeApps`), se migraron las URLs de los 19 APKs del catálogo clásico para apuntar a `https://github.com/Locksuite/Locksuite-Android/releases/download/store-apks-v1/`.
+  - Se documentó el cambio bajo el ítem B.106 de `LOCKSUITE_CONTEXTO_PARA_IA.md`.

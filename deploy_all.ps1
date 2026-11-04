@@ -113,5 +113,5 @@ try {
 Write-Host "Subiendo cambios a GitHub..." -ForegroundColor Yellow
 git add .
 git commit -m "Actualizacion automatica a version $VersionName (Codigo $newCode)"
-git push
+git push -u origin main
 Write-Host "Despliegue y actualizacion completados con exito a GitHub y Firebase!" -ForegroundColor Green

@@ -3919,6 +3919,28 @@ function explicarFalloDeHash(url, err) {
     );
 }
 
+// Conmutador discreto de la tienda clásica de APKs
+const toggleOldStoreBtn = document.getElementById("toggle-old-store-btn");
+const closeOldStoreBtn = document.getElementById("close-old-store-btn");
+const oldStoreCard = document.getElementById("old-store-card");
+
+if (toggleOldStoreBtn && oldStoreCard) {
+    toggleOldStoreBtn.addEventListener("click", () => {
+        const isHidden = oldStoreCard.style.display === "none" || !oldStoreCard.style.display;
+        oldStoreCard.style.display = isHidden ? "block" : "none";
+        toggleOldStoreBtn.textContent = isHidden ? "📦 Ocultar Tienda de APKs" : "📦 Tienda clásica de APKs (GitHub)";
+        if (isHidden) {
+            oldStoreCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+    });
+}
+if (closeOldStoreBtn && oldStoreCard) {
+    closeOldStoreBtn.addEventListener("click", () => {
+        oldStoreCard.style.display = "none";
+        if (toggleOldStoreBtn) toggleOldStoreBtn.textContent = "📦 Tienda clásica de APKs (GitHub)";
+    });
+}
+
 if (addStoreAppBtn) {
     addStoreAppBtn.addEventListener("click", async () => {
         const label = storeAppLabel.value.trim();
