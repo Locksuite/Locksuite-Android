@@ -61,6 +61,7 @@ import kotlinx.coroutines.delay
 import androidx.lifecycle.repeatOnLifecycle
 
 class LoginActivity : ComponentActivity() {
+    private val openOldStoreState = androidx.compose.runtime.mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -91,11 +92,18 @@ class LoginActivity : ComponentActivity() {
         })
 
         val openStore = intent?.getBooleanExtra("OPEN_STORE", false) ?: false
-        if (openStore) { startActivity(com.ejemplo.locksuite.ui.playstore.PlayStoreActivity.intent(this)); finish(); return }
+        val openOldStore = intent?.getBooleanExtra("OPEN_OLD_STORE", false) ?: false
+        if (openOldStore) {
+            openOldStoreState.value = true
+        } else if (openStore) {
+            startActivity(com.ejemplo.locksuite.ui.playstore.PlayStoreActivity.intent(this))
+            finish()
+            return
+        }
 
         setContent {
             LoginScreen(
-                initialOpenStore = openStore,
+                openOldStoreState = openOldStoreState,
                 onLoginSuccess = {
                     SessionManager.openSession()
                     startActivity(Intent(this, DashboardActivity::class.java))
@@ -108,6 +116,9 @@ class LoginActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getBooleanExtra("OPEN_OLD_STORE", false)) {
+            openOldStoreState.value = true
+        }
     }
 }
 
@@ -125,7 +136,7 @@ data class StoreApp(
 
 @Composable
 fun LoginScreen(
-    initialOpenStore: Boolean = false,
+    openOldStoreState: androidx.compose.runtime.MutableState<Boolean>? = null,
     onLoginSuccess: () -> Unit
 ) {
     val context = LocalContext.current
@@ -136,7 +147,13 @@ fun LoginScreen(
     var showLanguageMenu by remember { mutableStateOf(false) }
     var langUpdateKey by remember { mutableIntStateOf(0) } // Forzar recomposición al cambiar de idioma
     
-    var showStoreDialog by remember { mutableStateOf(initialOpenStore) }
+    var showStoreDialog by remember { mutableStateOf(openOldStoreState?.value ?: false) }
+    LaunchedEffect(openOldStoreState?.value) {
+        if (openOldStoreState?.value == true) {
+            showStoreDialog = true
+            openOldStoreState.value = false
+        }
+    }
     var storeAppsList by remember { mutableStateOf<List<StoreApp>>(emptyList()) }
     var allowedPackagesSet by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isStoreLoading by remember { mutableStateOf(false) }
@@ -402,6 +419,20 @@ fun LoginScreen(
                         Text(
                             text = if (LocaleManager.getLang() == "he") "חנות אפליקציות" else if (LocaleManager.getLang() == "en") "App Store" else "Tienda",
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Botón discreto para Tienda clásica (APKs directos)
+                    TextButton(
+                        onClick = { showStoreDialog = true },
+                        modifier = Modifier.padding(top = 0.dp)
+                    ) {
+                        Text(
+                            text = if (LocaleManager.getLang() == "he") "📦 חנות קלאסית (הורדה ישירה)"
+                                else if (LocaleManager.getLang() == "en") "📦 Classic Store (Direct APKs)"
+                                else "📦 Tienda clásica (APKs directos)",
+                            color = Color.White.copy(alpha = 0.65f),
+                            fontSize = 12.sp
                         )
                     }
 

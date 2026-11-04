@@ -252,6 +252,27 @@ class PlayStoreActivity : Activity() {
         scroll.addView(list, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
+        // ── Pie discreto: Acceso a la tienda clásica de APKs directos ──
+        val classicStoreBtn = TextView(this)
+        classicStoreBtn.text = if (lang == PlayStoreText.LANG_HE) "📦 חנות קלאסית (הורדה ישירה)"
+            else if (lang == PlayStoreText.LANG_EN) "📦 Classic Store (Direct APKs)"
+            else "📦 Tienda clásica (APKs directos)"
+        classicStoreBtn.textSize = 12f
+        classicStoreBtn.setTextColor(colorTextSecondary)
+        classicStoreBtn.gravity = Gravity.CENTER
+        classicStoreBtn.setPaddingRelative(dp(16), dp(10), dp(16), dp(14))
+        classicStoreBtn.isClickable = true
+        classicStoreBtn.isFocusable = true
+        classicStoreBtn.background = focusOnly(dp(8))
+        classicStoreBtn.setOnClickListener {
+            val intent = Intent(this, com.ejemplo.locksuite.ui.auth.LoginActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("OPEN_OLD_STORE", true)
+            }
+            startActivity(intent)
+        }
+        root.addView(classicStoreBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
         return root
     }
 
