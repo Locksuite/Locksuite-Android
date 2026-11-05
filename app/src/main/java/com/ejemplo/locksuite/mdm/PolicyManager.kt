@@ -1418,6 +1418,22 @@ class PolicyManager(private val context: Context) {
     }
 
     /**
+     * Bloqueo de Gemini en Google Mensajes (Capa 3).
+     * Encendido por defecto siempre (5/11/2026).
+     * Cierra el bot conversacional de Gemini vía RCS sin afectar los chats reales.
+     */
+    fun isGeminiMessagesBlocked(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("block_gemini_messages", true)
+
+    fun setGeminiMessagesBlocked(enabled: Boolean): Boolean {
+        if (deferIfSuspended("block_gemini_messages", enabled)) return true
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean("block_gemini_messages", enabled)
+            .apply()
+        return true
+    }
+
+    /**
      * Modo del bloqueo de la cuenta de Google: "normal" (por defecto) o "strict".
      *
      * ⚠️ LEER ANTES DE CAMBIAR EL VALOR POR DEFECTO. La primera versión de este
@@ -1742,6 +1758,7 @@ class PolicyManager(private val context: Context) {
         // conoce se acepta en silencio y no hace nada.
         dataObj.put("googleAccountWebBlocked", isGoogleAccountWebBlocked())
         dataObj.put("contactPhotoPickerBlocked", isContactPhotoPickerBlocked())
+        dataObj.put("geminiMessagesBlocked", isGeminiMessagesBlocked())
         dataObj.put("captivePortalGuard", isCaptivePortalGuardEnabled())
         // ⚠️ 9/9/2026 — ESTA CLAVE VIAJABA DESDE EL PANEL Y NADIE LA LEÍA.
         //
@@ -1935,6 +1952,9 @@ class PolicyManager(private val context: Context) {
             )
             setContactPhotoPickerBlocked(
                 dataObj.optBoolean("contactPhotoPickerBlocked", isContactPhotoPickerBlocked())
+            )
+            setGeminiMessagesBlocked(
+                dataObj.optBoolean("geminiMessagesBlocked", isGeminiMessagesBlocked())
             )
             setCaptivePortalGuard(
                 dataObj.optBoolean("captivePortalGuard", isCaptivePortalGuardEnabled())

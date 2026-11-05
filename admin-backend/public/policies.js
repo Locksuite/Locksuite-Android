@@ -293,6 +293,13 @@ window.LOCKSUITE_POLICIES = {
       "off": "UNBLOCK_CONTACT_PHOTO_PICKER"
     },
     {
+      "field": "geminiMessagesBlocked",
+      "label": "Bloqueo de gemini en mensajes",
+      "group": "Protecciones de Accesibilidad",
+      "on": "BLOCK_GEMINI_MESSAGES",
+      "off": "UNBLOCK_GEMINI_MESSAGES"
+    },
+    {
       "field": "localeChangeBlocked",
       "label": "Bloquear cambio de idioma del sistema",
       "group": "Protecciones de Accesibilidad",

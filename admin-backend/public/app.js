@@ -553,7 +553,7 @@ function updateSidebarUI(e, t) {
             e.checked = field(t, "whitelistSimulation", true) === false;
             return;
         }
-        const defVal = (n === "googleAccountWebBlocked" || n === "contactPhotoPickerBlocked"
+        const defVal = (n === "googleAccountWebBlocked" || n === "contactPhotoPickerBlocked" || n === "geminiMessagesBlocked"
                         || n === "whitelistSharedCdn" || n === "nokiaTouchEnabled");
         e.checked = field(t, n, defVal) === true;
     });
@@ -1842,6 +1842,7 @@ saveNameBtn.addEventListener("click", async () => {
             whitelistEnforce: ["SET_WHITELIST_ENFORCE", "SET_WHITELIST_SIMULATION"],
             whitelistSharedCdn: ["ENABLE_WHITELIST_SHARED_CDN", "DISABLE_WHITELIST_SHARED_CDN"],
             contactPhotoPickerBlocked: ["BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER"],
+            geminiMessagesBlocked: ["BLOCK_GEMINI_MESSAGES", "UNBLOCK_GEMINI_MESSAGES"],
             localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
             accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],
@@ -3009,6 +3010,7 @@ if (savePresetBtn) {
             captivePortalGuard: dev.captivePortalGuard !== false,
             captivePortalCoverImages: dev.captivePortalCoverImages !== false,
             contactPhotoPickerBlocked: dev.contactPhotoPickerBlocked !== false,
+            geminiMessagesBlocked: dev.geminiMessagesBlocked !== false,
             accBounceSettings: !!dev.accBounceSettings,
             accNag: !!dev.accNag,
             accSuspendAll: !!dev.accSuspendAll,
@@ -3639,6 +3641,7 @@ if (groupSidebar) {
             captivePortalGuard: ["ENABLE_CAPTIVE_PORTAL_GUARD", "DISABLE_CAPTIVE_PORTAL_GUARD"],
             captivePortalCoverImages: ["ENABLE_CAPTIVE_PORTAL_IMAGES", "DISABLE_CAPTIVE_PORTAL_IMAGES"],
             contactPhotoPickerBlocked: ["BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER"],
+            geminiMessagesBlocked: ["BLOCK_GEMINI_MESSAGES", "UNBLOCK_GEMINI_MESSAGES"],
             localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
             accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],

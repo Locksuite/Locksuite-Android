@@ -1142,6 +1142,11 @@ fun PoliciesTabContent(context: Context) {
                     isChecked = remember(refreshKey) { policyManager.isContactPhotoPickerBlocked() },
                     onCheckedChange = { policyManager.setContactPhotoPickerBlocked(it).also { refreshKey++ } }
                 )
+                PolicySwitchRow(
+                    label = "Bloqueo de gemini en mensajes",
+                    isChecked = remember(refreshKey) { policyManager.isGeminiMessagesBlocked() },
+                    onCheckedChange = { policyManager.setGeminiMessagesBlocked(it).also { refreshKey++ } }
+                )
                 // 4/9 (tarde) — el modo. En NORMAL se puede seguir administrando la
                 // cuenta (datos, seguridad, dispositivos) y se bloquea solo el
                 // historial/actividad; en ESTRICTO no se abre ninguna pantalla de la

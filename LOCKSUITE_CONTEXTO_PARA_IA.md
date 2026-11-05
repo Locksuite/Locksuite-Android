@@ -2384,20 +2384,58 @@ Qué se hizo:
 
 ---
 
+**B.108 — BLOQUEO DE GEMINI EN GOOGLE MENSAJES VÍA CAPA 3 Y SWITCH ACTIVADO POR DEFECTO (5/11/2026). [IMPLEMENTADO Y VERIFICADO EN UNIT TESTS]**
+
+Pedido del dueño (5/11): la app Google Mensajes (`com.google.android.apps.messaging`) incluye la opción de chatear con la IA Gemini por RCS. Averiguar si usa dominios DNS independientes o cómo bloquearlo sin arruinar nada más; implementar un switch activado por defecto siempre llamado `"Bloqueo de gemini en mensajes"` y garantizar que se cierre/rebote al entrar a Gemini sin tocar chats normales, contactos humanos ni la bandeja de entrada.
+
+Qué se descubrió y cómo funciona:
+1. **Análisis de Capa 2 (DNS / Red):**
+   - Gemini en Google Mensajes funciona como un bot RCS Business Messaging (RBM) dentro de la misma sesión RCS del usuario sobre la infraestructura Jibe Cloud (`*.jibe.google.com`) y Google APIs (`*.googleapis.com`).
+   - No tiene dominio DNS propio ni IP dedicada. Filtrar por DNS rompería todos los chats RCS de las personas (mensajes enriquecidos, cifrado E2EE, fotos en alta resolución, confirmaciones de entrega) o servicios esenciales de Google. Por lo tanto, el bloqueo debe ser visual en **Capa 3** (Accesibilidad).
+2. **Arquitectura y Detección Estructural en Capa 3 (`GeminiMessagesPolicy.kt`):**
+   - Se diseñó un motor de política funcional puro desacoplado de Android (`GeminiMessagesPolicy.kt`) con `Retrato`, `evaluar(retrato)` y `motivo(retrato)`.
+   - **Diferenciación exacta y 0 falsos positivos:**
+     - *Pantalla de bienvenida:* título "Chatear con Gemini", botón "Aceptar" / "Acepto" y descargo legal explícito ("no están encriptados de extremo a extremo"), sin botones de llamada telefónica.
+     - *Conversación activa con Gemini:* barra superior con nombre "Gemini" pero **SIN botón de llamada telefónica** (`action_call`) y **SIN botón de videollamada** (`action_video_call` / Meet); o bien campo de texto con sugerencia (hint) `"Preguntar a Gemini..."`, `"Mensaje a Gemini"` o `"Ask Gemini"`; o elementos de vista internos con ID `penpal`.
+     - *Contactos humanos:* Si alguien tiene un contacto llamado "Gemini" o "Géminis", ese chat cuenta con botones de llamada y videollamada y un hint normal ("Mensaje de RCS" o "Mensaje de texto"), por lo que **NUNCA** se bloquea.
+     - *Mensajes que mencionan "gemini":* El contenido de los mensajes de la conversación no forma parte del retrato estructural evaluado, eliminando cualquier falso positivo en conversaciones normales.
+     - *Bandeja de entrada / Ajustes:* Poseen el FAB de nuevo chat o la interfaz de configuración general; nunca se tocan.
+3. **Switch activado por defecto y sincronización punta a punta:**
+   - **Nombre:** `"Bloqueo de gemini en mensajes"` (`geminiMessagesBlocked`, default: `true`).
+   - `PolicyManager.kt`: métodos `isGeminiMessagesBlocked()` y `setGeminiMessagesBlocked(enabled)` integrados al preset JSON.
+   - `EnrollmentProfiles.kt`: `geminiMessagesBlocked to true` en todos los perfiles de enrolamiento.
+   - `DashboardActivity.kt`: fila `PolicySwitchRow` en la sección "Protecciones de Accesibilidad".
+   - `FirebaseDeviceSync.kt`: reporte automático del estado hacia Firebase RTDB.
+   - `CommandProcessor.kt`: soporte para comandos remotos `BLOCK_GEMINI_MESSAGES` y `UNBLOCK_GEMINI_MESSAGES`.
+   - `LockSuiteAccessibilityService.kt`: intercepción de eventos para `com.google.android.apps.messaging` y rebote automático hacia atrás (`GLOBAL_ACTION_BACK`).
+   - `admin-backend/functions/index.js`: comandos agregados a `ALLOWED_COMMANDS`.
+   - `admin-backend/public/app.js`: valor por defecto, snapshot de dispositivo y mapeo de comandos en individual y grupo.
+   - `admin-backend/public/index.html`: interruptor agregado en sidebar de dispositivo y en políticas de grupo.
+   - `admin-backend/public/policies.js`: regenerado y validado con `tools/gen_policies_js.py`.
+4. **Verificación y Pruebas:**
+   - 13 pruebas unitarias en `GeminiMessagesPolicyTest.kt` validando todos los escenarios de detección positiva y todas las garantías contra falsos positivos.
+   - Sincronización 100% validada con `check_profile_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `check_whitelist_sync.py` y `gen_policies_js.py --check`.
+   - Compilación completa de la app y ejecución de toda la suite de tests en verde (`BUILD SUCCESSFUL`).
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**5/11 (tarde) — Antigravity: subida de APKs a GitHub Releases (store-apks-v1), sincronización de hashes en RTDB y filtro estricto de paquetes permitidos en la tienda clásica (B.107).**
+**5/11 (tarde) — Antigravity: Bloqueo de Gemini en Google Mensajes vía Capa 3 y switch activado por defecto (B.108).**
 
 - **Pedidos del usuario:**
-  1. La tienda no anda: verificar y subir los APKs al nuevo GitHub oficial (`Locksuite/Locksuite-Android`).
-  2. Recordar permitir únicamente los paquetes permitidos habilitados por el administrador en la app.
-  3. Actualizar `LOCKSUITE_CONTEXTO_PARA_IA.md`.
+  1. Revisar si la interacción con Gemini en Google Mensajes por RCS puede bloquearse sin romper nada más, analizando si usa dominios DNS dedicados o cómo se ve la pantalla.
+  2. Implementar un switch activado por defecto siempre llamado `"Bloqueo de gemini en mensajes"`.
+  3. Bloquear el ingreso a Gemini mediante rebote (Capa 3 / Accesibilidad), asegurando cero falsos positivos con contactos humanos llamados Gemini, conversaciones que discutan el tema, la bandeja de chats o los ajustes.
+  4. Sincronizar punta a punta (app, panel web, Cloud Functions, perfiles, RTDB).
+  5. Actualizar `LOCKSUITE_CONTEXTO_PARA_IA.md` y realizar commit explicativo.
 - **Qué se hizo:**
-  - Se creó el release oficial `store-apks-v1` en `https://github.com/Locksuite/Locksuite-Android/releases/tag/store-apks-v1`.
-  - Se cargaron los 15 APKs verificados (Waze, WhatsApp, Chat, Ajdut Kosher, Tfilon, Rav-Kav, HebDate, Moovit, Mesira, OpenCamera, Cuando SUBO, SimpleCallApp, Gboard y stubs AA) con verificación HTTP 200 directa.
-  - Se sincronizaron las huellas SHA-256 en Firebase Realtime Database (`storeApps`).
-  - En `LoginActivity.kt`, se filtró el catálogo clásico (`visibleStoreApps`) para mostrar únicamente las aplicaciones que están en `allowedPackagesSet` (+ stubs AA).
-  - Se verificó compilación Kotlin, 230 unit tests en verde, y sincronización de catálogos y comandos.
-  - Se ejecutó el script de despliegue (`deploy_all.ps1`), publicando la versión actualizada y commiteando a GitHub.
+  - Se confirmó que Gemini en Mensajes corre como bot RBM sobre Jibe Cloud (`*.jibe.google.com`) y Google APIs, por lo que bloquear por DNS rompería RCS para todos los chats legítimos.
+  - Se creó el motor funcional puro `GeminiMessagesPolicy.kt` con detección por firma estructural (ausencia de botones de llamada telefónica/Meet + título Gemini, hints "Preguntar a Gemini" / "Ask Gemini", IDs de penpal y pantalla de bienvenida con disclaimer legal).
+  - Se implementaron 13 unit tests en `GeminiMessagesPolicyTest.kt` cubriendo detección y ausencia de falsos positivos en chats normales, contactos humanos y bandeja principal.
+  - Se agregó el switch `"Bloqueo de gemini en mensajes"` activado por defecto en `PolicyManager.kt`, `EnrollmentProfiles.kt`, `DashboardActivity.kt`, `FirebaseDeviceSync.kt`, `CommandProcessor.kt`, `LockSuiteAccessibilityService.kt`, `admin-backend/functions/index.js`, `admin-backend/public/app.js`, `admin-backend/public/index.html` y `admin-backend/public/policies.js`.
+  - Se verificaron todos los scripts de sincronización (`check_profile_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `check_whitelist_sync.py`, `gen_policies_js.py --check`) con resultado 100% OK.
+  - Se ejecutó `.\gradlew.bat testDebugUnitTest` con resultado `BUILD SUCCESSFUL` (0 fallos).
+

@@ -828,6 +828,8 @@ class CommandProcessor(private val context: Context) {
                 }
                 "BLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(true)
                 "UNBLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(false)
+                "BLOCK_GEMINI_MESSAGES" -> policyManager.setGeminiMessagesBlocked(true)
+                "UNBLOCK_GEMINI_MESSAGES" -> policyManager.setGeminiMessagesBlocked(false)
                 "ENABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(true)
                 "DISABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(false)
                 "ENABLE_ACC_NAG" -> policyManager.setAccNag(true)

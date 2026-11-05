@@ -957,6 +957,7 @@ object FirebaseDeviceSync {
                     // de diagnóstico. Ver mdm/Layer3Audit.kt.
                     "layer3Audit" to policyManager.getLayer3Audit(),
                     "contactPhotoPickerBlocked" to policyManager.isContactPhotoPickerBlocked(),
+                    "geminiMessagesBlocked" to policyManager.isGeminiMessagesBlocked(),
                     "kosherLauncherEnabled" to policyManager.isKosherLauncherEnabled(),
                     "stealthModeEnabled" to isStealth,
 
