@@ -2373,20 +2373,31 @@ Qué se hizo:
 
 ---
 
+**B.107 — SUBIDA DE APKS A GITHUB RELEASES (store-apks-v1), HASHES CRIPTOGRÁFICOS EN RTDB Y FILTRO ESTRICTO DE PAQUETES PERMITIDOS (5/11/2026). [IMPLEMENTADO Y VERIFICADO]**
+
+Pedido del dueño (5/11): la tienda clásica no descargaba apps porque los binarios APK no estaban subidos en el nuevo GitHub (`Locksuite/Locksuite-Android`). Además, asegurar que en la app los usuarios solo tengan/vean los paquetes permitidos habilitados por el administrador, y actualizar la documentación de contexto.
+
+Qué se hizo:
+1. **Creación de Release y Subida de APKs:** Se creó el release oficial `store-apks-v1` en `https://github.com/Locksuite/Locksuite-Android/releases/tag/store-apks-v1` con el CLI `gh`. Se subieron los 15 APKs verificados: Waze, WhatsApp oficial, Google Chat, Ajdut Kosher, Tfilon, Rav-Kav Online, HebDate, Moovit, Mesira, OpenCamera, Cuando SUBO CABA, SimpleCallApp, Gboard y los 2 stubs de Android Auto.
+2. **Actualización de Huellas SHA-256 en Firebase RTDB:** Se actualizaron las huellas SHA-256 de `storeApps` con los hashes exactos de los binarios subidos, asegurando que `ApkChecksum` en Android valide la descarga y no rechace la instalación.
+3. **Filtro Estricto de Paquetes en Diálogo de la App (`LoginActivity.kt`):** Se implementó el filtrado reactivo `visibleStoreApps` en base a `allowedPackagesSet` (+ stubs de Android Auto). Los usuarios de los celulares ven **única y exclusivamente** las aplicaciones que el administrador habilitó en la lista blanca de su dispositivo o global. Se eliminó del diálogo clásico la opción de pedir aplicaciones arbitrarias, dejando el diálogo limpio y centrado únicamente en la instalación de las apps permitidas.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**4/11 (mediodía) — Antigravity: migración al nuevo repositorio GitHub (Locksuite/Locksuite-Android), reactivación discreta de tienda clásica de APKs y actualización en Firebase RTDB (B.106).**
+**5/11 (tarde) — Antigravity: subida de APKs a GitHub Releases (store-apks-v1), sincronización de hashes en RTDB y filtro estricto de paquetes permitidos en la tienda clásica (B.107).**
 
 - **Pedidos del usuario:**
-  1. Subir todo a un nuevo repositorio en GitHub (`https://github.com/Locksuite/Locksuite-Android`) debido a problemas en la cuenta anterior.
-  2. Actualizar el script de deploy (`deploy_all.ps1`) y toda la documentación (`LOCKSUITE_CONTEXTO_PARA_IA.md`).
-  3. Devolver con un botón discreto la tienda vieja de APKs (junto a la Tienda Play) alojada en el nuevo GitHub, y migrar lo que dependa de GitHub al nuevo repositorio.
+  1. La tienda no anda: verificar y subir los APKs al nuevo GitHub oficial (`Locksuite/Locksuite-Android`).
+  2. Recordar permitir únicamente los paquetes permitidos habilitados por el administrador en la app.
+  3. Actualizar `LOCKSUITE_CONTEXTO_PARA_IA.md`.
 - **Qué se hizo:**
-  - Se configuró el remote de git: `origin` ahora apunta a `https://github.com/Locksuite/Locksuite-Android`.
-  - Se adaptó `deploy_all.ps1` para garantizar el push explícito a `origin main`.
-  - En el instalador web (`admin-backend/public/installer/js/config.js`), se actualizaron los nombres de usuario y repositorio a `Locksuite` y `Locksuite-Android`.
-  - En `admin-backend/public/index.html` y `app.js`, se reactivó la Tienda Clásica de APKs mediante un botón secundario discreto (`#toggle-old-store-btn` "📦 Tienda clásica de APKs (GitHub)") que abre y cierra la tarjeta a demanda, manteniendo la Tienda Play como la opción principal y destacada.
-  - En Firebase Realtime Database (`storeApps`), se migraron las URLs de los 19 APKs del catálogo clásico para apuntar a `https://github.com/Locksuite/Locksuite-Android/releases/download/store-apks-v1/`.
-  - Se documentó el cambio bajo el ítem B.106 de `LOCKSUITE_CONTEXTO_PARA_IA.md`.
+  - Se creó el release oficial `store-apks-v1` en `https://github.com/Locksuite/Locksuite-Android/releases/tag/store-apks-v1`.
+  - Se cargaron los 15 APKs verificados (Waze, WhatsApp, Chat, Ajdut Kosher, Tfilon, Rav-Kav, HebDate, Moovit, Mesira, OpenCamera, Cuando SUBO, SimpleCallApp, Gboard y stubs AA) con verificación HTTP 200 directa.
+  - Se sincronizaron las huellas SHA-256 en Firebase Realtime Database (`storeApps`).
+  - En `LoginActivity.kt`, se filtró el catálogo clásico (`visibleStoreApps`) para mostrar únicamente las aplicaciones que están en `allowedPackagesSet` (+ stubs AA).
+  - Se verificó compilación Kotlin, 230 unit tests en verde, y sincronización de catálogos y comandos.
+  - Se ejecutó el script de despliegue (`deploy_all.ps1`), publicando la versión actualizada y commiteando a GitHub.

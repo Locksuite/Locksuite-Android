@@ -892,17 +892,23 @@ fun LoginScreen(
             },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
+                val visibleStoreApps = remember(storeAppsList, allowedPackagesSet) {
+                    storeAppsList.filter { app ->
+                        val esStubAa = com.ejemplo.locksuite.mdm.AndroidAutoStubs.esEntradaDeStub(app.packageName, app.sha256)
+                        allowedPackagesSet.contains(app.packageName) || esStubAa
+                    }
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(290.dp),
+                        .height(300.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     if (isStoreLoading) {
                         CircularProgressIndicator(color = accentOrange)
-                    } else if (storeAppsList.isEmpty()) {
+                    } else if (visibleStoreApps.isEmpty()) {
                         Text(
-                            text = if (LocaleManager.getLang() == "he") "אין אפליקציות בחנות כרגע" else if (LocaleManager.getLang() == "en") "No apps available in the store" else "No hay aplicaciones disponibles en la tienda.",
+                            text = if (LocaleManager.getLang() == "he") "אין אפליקציות מורשות בחנות כרגע" else if (LocaleManager.getLang() == "en") "No permitted apps available in store" else "No hay aplicaciones permitidas disponibles en la tienda.",
                             color = Color.White.copy(alpha = 0.7f),
                             textAlign = TextAlign.Center
                         )
@@ -911,8 +917,8 @@ fun LoginScreen(
                             modifier = Modifier.fillMaxSize(),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            items(storeAppsList.size) { index ->
-                                val app = storeAppsList[index]
+                            items(visibleStoreApps.size) { index ->
+                                val app = visibleStoreApps[index]
                                 // B.88 — los stubs de Android Auto se instalan sin pedirlos, en
                                 // cualquier equipo: son apps vacías. Se reconocen por la huella
                                 // EXACTA del archivo (AndroidAutoStubs.APK_SHA256), no por el
@@ -985,11 +991,6 @@ fun LoginScreen(
                                     }
 
                                     val isDownloadingThis = storeDownloadingPackage == app.packageName
-                                    // B.59 — ¿ya la pidió y está esperando respuesta?
-                                    val yaPedida = appRequests.any {
-                                        it.packageName == app.packageName &&
-                                            it.estado != com.ejemplo.locksuite.mdm.AppRequestManager.RECHAZADA
-                                    }
                                     Button(
                                         onClick = {
                                             if (isAllowed && hasChecksum && !stubTapadoPorAppReal && storeDownloadingPackage == null) {
@@ -1017,40 +1018,10 @@ fun LoginScreen(
                                                         Toast.makeText(context, "${app.label} instalado correctamente.", Toast.LENGTH_LONG).show()
                                                     }
                                                 }
-                                            } else if (!isAllowed) {
-                                                // B.59 — el usuario pide la app. Toda la decisión vive
-                                                // en AppRequestManager (Kotlin puro, con banco de
-                                                // pruebas); acá solo se muestra el resultado.
-                                                val v = com.ejemplo.locksuite.util.FirebaseDeviceSync.enviarSolicitudApp(
-                                                    context, app.packageName, app.label, null,
-                                                    allowedPackagesSet, appRequests
-                                                )
-                                                requestMsg = com.ejemplo.locksuite.mdm.AppRequestManager
-                                                    .motivo(v, LocaleManager.getLang())
-                                                if (v == com.ejemplo.locksuite.mdm.AppRequestManager.Veredicto.OK) {
-                                                    // Se refleja en el acto para que el botón pase a
-                                                    // "Pedida" sin esperar la vuelta de Firebase. Solo
-                                                    // si el pedido entró DE VERDAD: si el veredicto
-                                                    // fue un "no", pintar "Pedida" sería mentirle al
-                                                    // usuario sobre algo que no se escribió.
-                                                    appRequests = appRequests + com.ejemplo.locksuite.mdm.AppRequestManager.Solicitud(
-                                                        packageName = app.packageName,
-                                                        label = app.label,
-                                                        estado = com.ejemplo.locksuite.mdm.AppRequestManager.PENDIENTE,
-                                                        pedidaEnMs = System.currentTimeMillis()
-                                                    )
-                                                }
                                             }
                                         },
-                                        // Sin checksum no se instala (B.6/B.58) y tampoco se pide: la
-                                        // app YA está permitida, lo que falta es que el administrador
-                                        // calcule la huella. Pedirla otra vez no arregla eso.
-                                        enabled = if (isAllowed) {
-                                            hasChecksum && !stubTapadoPorAppReal &&
-                                                (storeDownloadingPackage == null || isDownloadingThis)
-                                        } else {
-                                            !yaPedida
-                                        },
+                                        enabled = isAllowed && hasChecksum && !stubTapadoPorAppReal &&
+                                            (storeDownloadingPackage == null || isDownloadingThis),
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = accentOrange,
                                             contentColor = navyDark,
@@ -1063,16 +1034,8 @@ fun LoginScreen(
                                         Text(
                                             text = if (isDownloadingThis) {
                                                 if (LocaleManager.getLang() == "he") "מוריד: ${storeProgress}%" else if (LocaleManager.getLang() == "en") "Downloading: ${storeProgress}%" else "Descargando: ${storeProgress}%"
-                                            } else if (isAllowed) {
-                                                if (LocaleManager.getLang() == "he") "הורד" else if (LocaleManager.getLang() == "en") "Download" else "Instalar"
-                                            } else if (yaPedida) {
-                                                // B.59 — antes acá decía "Bloqueada" y era el final del
-                                                // camino: el usuario veía la app, no podía instalarla y
-                                                // no tenía forma de decir nada. Ahora "Bloqueada" ya no
-                                                // existe como estado final.
-                                                if (LocaleManager.getLang() == "he") "נשלחה בקשה" else if (LocaleManager.getLang() == "en") "Requested" else "Pedida"
                                             } else {
-                                                if (LocaleManager.getLang() == "he") "בקש" else if (LocaleManager.getLang() == "en") "Request" else "Pedir"
+                                                if (LocaleManager.getLang() == "he") "הורד" else if (LocaleManager.getLang() == "en") "Download" else "Instalar"
                                             },
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold
@@ -1084,99 +1047,7 @@ fun LoginScreen(
                     }
                 }
 
-                // ─── B.59: pedir una app que NO está en la Tienda ───
-                //
-                // El botón "Pedir" de cada tarjeta cubre lo que el administrador ya
-                // cargó. Esto cubre el resto, que es el caso que de verdad importa: el
-                // usuario necesita algo en lo que nadie pensó. Va detrás de un toque
-                // ("Pedir otra app…") y no siempre visible, porque escribir un nombre
-                // de paquete es la excepción y no queremos que sea lo primero que se ve.
-                Spacer(modifier = Modifier.height(8.dp))
-                if (requestMsg.isNotEmpty()) {
-                    Text(
-                        text = requestMsg,
-                        color = accentOrange,
-                        fontSize = 12.sp,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                }
-                if (!showOtherPkgInput) {
-                    TextButton(onClick = { showOtherPkgInput = true; requestMsg = "" }) {
-                        Text(
-                            text = if (LocaleManager.getLang() == "he") "בקש אפליקציה אחרת…"
-                                else if (LocaleManager.getLang() == "en") "Request another app…"
-                                else "Pedir otra app…",
-                            color = accentOrange,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                } else {
-                    OutlinedTextField(
-                        value = otherPkgInput,
-                        onValueChange = { otherPkgInput = it },
-                        singleLine = true,
-                        placeholder = {
-                            Text(
-                                // El ejemplo va en el placeholder a propósito: sin él,
-                                // "nombre del paquete" no le dice nada a nadie.
-                                if (LocaleManager.getLang() == "en") "Package name, e.g. com.whatsapp"
-                                else "Nombre del paquete, ej. com.whatsapp",
-                                color = Color.Gray,
-                                fontSize = 12.sp
-                            )
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = accentOrange,
-                            unfocusedBorderColor = Color.White.copy(alpha = 0.4f),
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Button(
-                        onClick = {
-                            val v = com.ejemplo.locksuite.util.FirebaseDeviceSync.enviarSolicitudApp(
-                                context, otherPkgInput, otherPkgInput, null,
-                                allowedPackagesSet, appRequests
-                            )
-                            requestMsg = com.ejemplo.locksuite.mdm.AppRequestManager
-                                .motivo(v, LocaleManager.getLang())
-                            if (v == com.ejemplo.locksuite.mdm.AppRequestManager.Veredicto.OK) {
-                                val norm = com.ejemplo.locksuite.mdm.AppRequestManager
-                                    .normalizarPaquete(otherPkgInput)
-                                if (norm != null) {
-                                    appRequests = appRequests + com.ejemplo.locksuite.mdm.AppRequestManager.Solicitud(
-                                        packageName = norm,
-                                        label = norm,
-                                        estado = com.ejemplo.locksuite.mdm.AppRequestManager.PENDIENTE,
-                                        pedidaEnMs = System.currentTimeMillis()
-                                    )
-                                }
-                                otherPkgInput = ""
-                                showOtherPkgInput = false
-                            }
-                        },
-                        enabled = otherPkgInput.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = accentOrange,
-                            contentColor = navyDark,
-                            disabledContainerColor = Color.White.copy(alpha = 0.1f),
-                            disabledContentColor = Color.White.copy(alpha = 0.4f)
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(
-                            text = if (LocaleManager.getLang() == "he") "שלח בקשה"
-                                else if (LocaleManager.getLang() == "en") "Send request"
-                                else "Enviar pedido",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
+
                 }
             },
             confirmButton = {
