@@ -151,6 +151,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         private const val CANDIDATE_WAIT_MS = 2_500L
         /** Cuántos candidatos distintos se prueban antes de rendirse. */
         private const val MAX_CANDIDATES = 6
+        /** Máximo de avisos emergentes/hojas (ej. Asistente IA, Play Points) que se descartan por sesión. */
+        private const val MAX_DISMISSALS = 3
         /** Cuántos padres se suben como máximo buscando quién acepta el clic. */
         private const val CLICK_PARENT_DEPTH = 6
 
@@ -3204,6 +3206,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var updateSessionTreeSeenAt = 0L
     private var updateSessionLastClickAt = 0L
     private var updateSessionCandidatesTried = 0
+    private var updateSessionDismissalsCount = 0
     private val updateSessionTriedKeys = HashSet<String>(8)
     private var lastStoreRelaunchAt = 0L
     /** Primera vez que la ficha tuvo contenido dibujado (no una pantalla en blanco). */
@@ -3244,6 +3247,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         updateSessionTreeSeenAt = 0L
         updateSessionLastClickAt = 0L
         updateSessionCandidatesTried = 0
+        updateSessionDismissalsCount = 0
         updateSessionTriedKeys.clear()
         lastStoreRelaunchAt = 0L
         updateSessionRenderedAt = 0L
@@ -3900,6 +3904,29 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return
         }
 
+        // ── 4b. Descartar avisos u hojas emergentes que tapan la ficha ──
+        // (ej. Asistente de IA, Google Play Points, etc. en Play Store v53+)
+        if (scan.actions.isEmpty() && scan.dialogs.isEmpty() && scan.dismissals.isNotEmpty() &&
+            updateSessionDismissalsCount < MAX_DISMISSALS && cooledDown
+        ) {
+            val d = scan.dismissals.first()
+            if (performClickOnNode(d.node)) {
+                updateSessionDismissalsCount++
+                updateSessionLastClickAt = now
+                Log.i(TAG, "Cerrando aviso emergente de Google Play: ${d.reason}")
+                UpdateFlowManager.step(
+                    ctx, UpdateStepLog.ACT,
+                    "Cerré aviso emergente de Google Play: «${nodeLabel(d.node)}» (${d.reason})."
+                )
+                return
+            } else {
+                UpdateFlowManager.step(
+                    ctx, UpdateStepLog.WARN,
+                    "No pude cerrar aviso emergente «${nodeLabel(d.node)}»."
+                )
+            }
+        }
+
         // ── 5. Probar el próximo candidato a "Actualizar" ──
         //
         // Este paso SUBIÓ de lugar el 3/9/2026: antes venía después de las dos
@@ -4003,11 +4030,19 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         ) {
             val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
             if (UpdateFlowManager.isInstallMode(ctx)) {
-                // B.101 — instalando: si la ficha dice "Abrir", Google Play cree que la app
+                // B.101 / B.110 — instalando: si la ficha dice "Abrir", Google Play cree que la app
                 // YA está instalada. Si el sistema también la ve instalada, el paso 1 ya
                 // habría cerrado el flujo con éxito; si llegamos acá, el sistema NO la ve
-                // (por ejemplo, está oculta por una regla del administrador). Eso no es un
-                // éxito ni una app "al día": se dice lo que pasa.
+                // (por ejemplo, está oculta por una regla del administrador).
+                // Pero si ya se habían probado candidatos (pudo haberse navegado a otra pantalla
+                // por error) y aún no se relanzó la tienda, reabrimos la ficha antes de fallar.
+                if (updateSessionCandidatesTried > 0 && updateSessionRelaunches < 2) {
+                    noteStoreRelaunch("pantalla con 'Abrir' tras intentos de clic en modo instalación")
+                    UpdateFlowManager.openStore(ctx, updatingPkg)
+                    updateSessionTreeSeenAt = now
+                    updateSessionRenderedAt = 0L
+                    return
+                }
                 Log.w(TAG, "Instalando $updatingPkg: Google Play muestra 'Abrir' pero el sistema no ve el paquete")
                 UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
                 UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_ERROR,

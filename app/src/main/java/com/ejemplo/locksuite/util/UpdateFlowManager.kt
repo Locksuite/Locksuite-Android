@@ -614,7 +614,12 @@ object UpdateFlowManager {
     }
 
     fun versionCodeOf(context: Context, packageName: String): Long = try {
-        val info = context.packageManager.getPackageInfo(packageName, 0)
+        val info = try {
+            context.packageManager.getPackageInfo(packageName, 0)
+        } catch (e: Exception) {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.MATCH_UNINSTALLED_PACKAGES)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode
         else @Suppress("DEPRECATION") info.versionCode.toLong()
     } catch (e: Exception) {
@@ -622,7 +627,13 @@ object UpdateFlowManager {
     }
 
     fun versionNameOf(context: Context, packageName: String): String = try {
-        context.packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+        val info = try {
+            context.packageManager.getPackageInfo(packageName, 0)
+        } catch (e: Exception) {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.MATCH_UNINSTALLED_PACKAGES)
+        }
+        info.versionName ?: ""
     } catch (e: Exception) {
         ""
     }

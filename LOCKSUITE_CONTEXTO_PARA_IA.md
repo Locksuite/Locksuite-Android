@@ -2419,7 +2419,7 @@ Qué se descubrió y cómo funciona:
 
 ---
 
-**B.109 — TRAS REINICIAR EL CELULAR, LA ACCESIBILIDAD FIGURA INACTIVA ("ACCESSIBILITYRUNNING: FALSE") Y EL SWITCH EN AJUSTES ESTÁ "ACTIVADO" (ESTADO ZOMBIE / MCRASHEDSERVICES EN ANDROID AMS). [DIAGNOSTICADO A FONDO, RED DE CAPTURA FORENSE DE CRASH, DETECCIÓN ZOMBIE Y GUÍA AL USUARIO IMPLEMENTADAS Y VERIFICADAS EN TESTS (5/11/2026)]**
+**B.109 — TRAS REINICIAR EL CELULAR, LA ACCESIBILIDAD FIGURA INACTIVA ("ACCESSIBILITYRUNNING: FALSE") Y EL SWITCH EN AJUSTES ESTÁ "ACTIVADO" (ESTADO ZOMBIE / MCRASHEDSERVICES EN ANDROID AMS). [RESUELTO Y CONFIRMADO EN EQUIPO REAL (5/11/2026)]**
 
 Reporte del dueño: en el celular `058d4e4ac999401a` (Q-Tel Q1, Android 11 / API 30, teclado Nokia), al reiniciar el teléfono la app muestra que la accesibilidad no está activa, y hay que ir a los Ajustes del sistema, apagar el interruptor y volverlo a encender para que funcione.
 
@@ -2433,7 +2433,9 @@ Diagnóstico forense y causa raíz comprobada a nivel de AOSP:
      }
      ```
    - Mientras el componente permanece en `mCrashedServices`, el sistema operativo **se niega a enlazar el servicio**, aunque en `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` siga listado y en la pantalla de Ajustes el switch figure visualmente como "Activado" (ON).
-   - Por diseño estricto de seguridad de Android para evitar bucles de reinicio del sistema, la **única** forma en que AOSP quita un componente de `mCrashedServices` sin reinstalar el paquete es cuando el usuario **apaga manualmente el switch en Ajustes** (lo que dispara `mCrashedServices.remove(componentName)`) y luego lo **vuelve a encender**.
+   - Por diseño estricto de seguridad de Android para evitar bucles de reinicio del sistema, la forma en que AOSP quita un componente de `mCrashedServices` es:
+     (a) Cuando el usuario apaga manualmente el switch en Ajustes y luego lo vuelve a encender.
+     (b) Cuando se actualiza o reinstala el paquete (`onPackageUpdateFinished` / `ACTION_PACKAGE_REPLACED`), donde AMS limpia automáticamente `mCrashedServices` para ese paquete y re-enlaza el servicio.
 
 2. **Evidencia forense en la base de datos de Firebase:**
    - En `058d4e4ac999401a` y en `809f004e7d9934c7` (ambos Q-Tel Q1 con MediaTek MT6761/65):
@@ -2466,6 +2468,46 @@ Qué se implementó y solucionó:
    - En la ficha del celular, si `accessibilityZombie` es true, el chip de Accesibilidad muestra `"detenida por sistema (zombie)"` con tooltip explicativo.
    - Se añade un aviso prioritario en la cabecera explicando que el servicio quedó en cuarentena por el sistema y debe ciclarse (apagar y prender) en Ajustes.
    - En "Última salida", si hay traza disponible (`lastExitTrace`), se despliega un bloque `<details>` con el stack trace completo legible con scroll.
+6. **Confirmación en equipo real (5/11/2026):**
+   - Se desplegó la versión 140 (`0.6.77`) con el comando `UPDATE_LOCKSUITE`.
+   - El equipo `058d4e4ac999401a` tomó el comando, descargó e instaló la versión 140 de forma silenciosa por Device Owner (`lastExitReason: USER_REQUESTED`, `lastExitDetail: stop com.ejemplo.locksuite due to installPackageLI`).
+   - Tras el reemplazo de paquete, AMS limpió automáticamente `mCrashedServices`, re-enlazó el servicio de accesibilidad (`accessibilityRunning: true`, `accessibilityZombie: false`) y la pantalla de bloqueo se retiró sola sin intervención del usuario. Confirmado funcionando por el dueño.
+
+---
+
+**B.110 — AUTOMATIZACIÓN DE GOOGLE PLAY STORE EN TIENDA PLAY: COMPATIBILIDAD CON GOOGLE PLAY v53+ (COMPOSE / MATERIAL 3 / SHEETS IA), PROTECCIÓN DE TOOLBAR Y ELIMINACIÓN DE FALSOS POSITIVOS CON "PLAY". [RESUELTO (5/11/2026)]**
+
+Reporte del dueño: en el celular `7073099b55af5fd6` (Q-Touch QEMAY-QM01 del dueño, "yo"), la instalación de aplicaciones desde Tienda Play funciona perfecto. Sin embargo, en el celular `745f34cdf2e452a0` (QM de Elias, `https://locksuite-nueva.web.app/celular.html?id=745f34cdf2e452a0`), al intentar instalar una app (ej. DiDi Rider) con el overlay negro, la automatización tocaba botones equivocados por debajo, cerraba o cancelaba la ficha y terminaba en error.
+
+Diagnóstico forense y causa raíz comprobada:
+1. **Diferencia de versiones de Play Store:**
+   - En el QM del usuario (`7073099b55af5fd6`): Play Store v35.0.15-21 (interfaz clásica con View IDs tradicionales como `buy_button` y botones estándar de View hierarchy).
+   - En el QM de Elias (`745f34cdf2e452a0`): Play Store v53.8.11-31 (interfaz moderna en Jetpack Compose / Material 3 con hojas emergentes dinámicas como el Asistente de IA de Google Play).
+2. **Secuencia del fallo en el árbol de accesibilidad (`updateFlowSteps` en RTDB):**
+   - Al abrir la ficha de DiDi Rider (`com.didiglobal.passenger`), Google Play v53 desplegó un BottomSheet informativo con el título `"un asistente de ia para usar en conjunto @0px!"`.
+   - `PlayButtonFinder` no detectó ningún texto coincidente con `ACTION_WORDS` debido a que la hoja tapaba el contenido y a que los botones en Compose no tenían texto tradicional, cayendo en la selección por posición (`SCORE_POSITION = 40`) ordenada por `.thenBy { it.top }`.
+   - **Intento 1:** Clickeó el botón de la hoja emergente `«Cerrar hoja» (posicion top=33)`. La hoja se cerró.
+   - **Intento 2:** En la siguiente pasada, el siguiente elemento clickeable más alto (`top=33`) era el botón de navegación hacia atrás (`<-`) de la barra de herramientas superior (Toolbar). Al apretarlo, sacó a Google Play de la ficha de DiDi y volvió a la pantalla principal (feed) de la tienda.
+   - **Intento 3 (el falso positivo):** En el feed de inicio, la palabra `"play"` estaba erróneamente incluida en la lista de `OPEN_WORDS`, por lo que `"Google Play"` fue detectado como un botón "Abrir" legítimo (`scan.opens.isNotEmpty()`).
+   - Al estar en modo instalación (`isInstallMode == true`) y con el paquete ausente en el sistema (`versionCodeOf == -1`), el paso 8 abortó con error: *"Google Play dice que DiDi Rider ya está instalada, pero el sistema no la encuentra (Ficha con 'Abrir' y paquete no visible para el sistema)"*.
+
+Qué se implementó y solucionó:
+1. **Protección estricta de la barra superior (Toolbar Guard):**
+   - Se definió `TOOLBAR_TOP_DP = 68f` y `BAND_TOP_FRACTION = 0.08f` en `PlayButtonFinder.kt`. Ningún elemento ubicado en la barra de herramientas (`top < bandTop`) es considerado candidato de acción, protegiendo las flechas de navegación, búsqueda y menús.
+   - Se añadieron palabras de navegación a `FORBIDDEN_WORDS`: `"atras"`, `"back"`, `"navigate up"`, `"navegar hacia arriba"`, `"volver"`, `"regresar"`, `"buscar"`, `"compartir"`, etc.
+2. **Detección y descarte inteligente de hojas emergentes (`dismissals` / `DISMISS_WORDS`):**
+   - Se añadió un clasificador de descarte con términos como `"cerrar hoja"`, `"cerrar"`, `"close"`, `"no gracias"`, `"ahora no"`, `"not now"`, `"omitir"`, `"skip"`, en español, inglés, hebreo y árabe.
+   - En `LockSuiteAccessibilityService.kt`, se introdujo el paso **4b**: si no hay candidatos de acción ni diálogos de confirmación, pero hay una hoja emergente (`scan.dismissals.isNotEmpty()`), se descarta automáticamente (`updateSessionDismissalsCount < MAX_DISMISSALS`) sin consumir intentos de candidatos de instalación (`updateSessionCandidatesTried`).
+3. **Eliminación del falso positivo con la marca de la tienda ("Google Play"):**
+   - Se retiró la palabra `"play"` de `OPEN_WORDS`. La presencia del nombre de la propia tienda ("Google Play", "Play Store", "Play Pass") ya no puede confundirse jamás con el botón de "Abrir" una aplicación.
+   - Se añadió una verificación explícita `!isStoreBranding` para descartar cualquier nodo de marca.
+4. **Adaptación a Jetpack Compose en Google Play v53:**
+   - En Compose, los botones suelen tener `text` vacío y colocar `"Instalar [Nombre de la app]"` en `contentDescription`. Se extendió la longitud permitida (`maxAllowedLen = 80`) para palabras de acción.
+   - Puntuación escalonada por zona: 80 en franja preferida, 70 en franja tolerada (hasta 480dp), y 60 en el resto de la pantalla visible.
+5. **Auto-recuperación ante desorientación de pantalla:**
+   - En el paso 8 de `LockSuiteAccessibilityService.kt`, si en modo instalación aparece un supuesto botón "Abrir" tras haber probado clics (`updateSessionCandidatesTried > 0`) y el sistema aún no ve el paquete, en vez de abortar se relanza automáticamente la ficha con `UpdateFlowManager.openStore(ctx, updatingPkg)`.
+6. **Soporte de paquetes desinstalados/archivados en `UpdateFlowManager`:**
+   - En `versionCodeOf` y `versionNameOf`, si la consulta estándar falla, se reintenta con `PackageManager.MATCH_UNINSTALLED_PACKAGES` para evitar falsos negativos con paquetes archivados o desinstalados con datos conservados.
 
 ---
 
@@ -2473,24 +2515,21 @@ Qué se implementó y solucionó:
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**5/11 (noche) — Antigravity: Diagnóstico del servicio de accesibilidad inactivo tras reiniciar (mCrashedServices), red de captura forense de crashes y guía al usuario en pantalla de bloqueo (B.109).**
+**5/11 (noche) — Antigravity: Compatibilidad universal de Tienda Play con Google Play Store v53+ (Compose / Material 3 / Sheets IA), protección de Toolbar y confirmación de recuperación de accesibilidad zombie (B.109, B.110).**
 
 - **Pedidos del usuario:**
-  1. Revisar el celular `058d4e4ac999401a` (`https://locksuite-nueva.web.app/celular.html?id=058d4e4ac999401a`) porque al reiniciarlo aparece que no está activa la accesibilidad, y hay que desactivarla y activarla en Ajustes del teléfono para que funcione.
-  2. Determinar la causa raíz del comportamiento.
-  3. Actualizar `LOCKSUITE_CONTEXTO_PARA_IA.md` (sección B agregando lo nuevo encontrado, sección C reemplazando con el resumen de la sesión).
-  4. Realizar commit explicativo con los cambios y su justificación.
+  1. Revisar y solucionar la accesibilidad inactiva en el celular de R Shaul Said (`058d4e4ac999401a`). (Confirmado y verificado en equipo real: funcionando 100%).
+  2. Diagnosticar por qué en el QM de Elias (`745f34cdf2e452a0`) la Tienda Play no funciona al instalar apps (ej. DiDi Rider) mientras que en el QM del dueño (`7073099b55af5fd6`) funciona perfecto.
+  3. Diseñar e implementar una solución robusta que funcione siempre sin importar la versión de Google Play Store.
+  4. Ejecutar el script de despliegue (`deploy_all.ps1`) y actualizar el documento de contexto (`LOCKSUITE_CONTEXTO_PARA_IA.md`).
 - **Qué se descubrió:**
-  - Extracción y análisis de los metadatos de `058d4e4ac999401a` en Firebase RTDB: es un `Q-Tel Q1` (MediaTek MT6761/65, Android 11 / API 30, modo teclado Nokia) corriendo la versión desactualizada 130 (`0.6.67`).
-  - El dispositivo registró `lastExitReason: "CRASH"` con `lastExitImportance: 125` (`IMPORTANCE_FOREGROUND_SERVICE`).
-  - Al cruzar los datos de los 29 dispositivos en Firebase, el 100% de los Q-Tel Q1 que sufrieron un crash tenían `accessibilityRunning: false`.
-  - En AOSP framework (`AccessibilityManagerService.java`), cuando un servicio de accesibilidad sufre un crash o muere inesperadamente (`binderDied`), el sistema lo confina en `mCrashedServices` para evitar bucles de reinicio. Mientras esté en esa lista, AMS se niega rotundamente a volver a enlazarlo aunque `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` mantenga el switch visualmente en "Activado".
-  - La única forma en que Android limpia `mCrashedServices` es cuando el usuario desactiva el switch en Ajustes y luego lo vuelve a activar.
+  - El dispositivo del dueño posee Google Play Store v35 (interfaz View clásica), mientras que el QM de Elias tiene Google Play Store v53 (Compose / Material 3).
+  - Al abrir DiDi Rider en Play Store v53, se desplegó una hoja emergente del Asistente de IA.
+  - Al no haber botones de acción clásicos, la búsqueda por posición clickeó primero la hoja y luego la flecha atrás de la Toolbar (`top=33`), regresando al inicio de la tienda.
+  - En el feed de inicio, la palabra `"play"` en `OPEN_WORDS` provocó un falso positivo con "Google Play", abortando la instalación con el error *"Ficha con 'Abrir' y paquete no visible para el sistema"*.
 - **Qué se implementó y solucionó:**
-  - Se agregó `AccessibilityEnforcer.isZombie(context)` para detectar inequívocamente este estado (`inSecure && !isServiceRunning`) y se reporta en Firebase como `accessibilityZombie`.
-  - Se adaptó `BlockAccessibilityActivity.kt` y `LocaleManager.kt` para mostrar instrucciones exactas (en español, inglés y hebreo) cuando el servicio está en estado zombie, guiando al usuario a apagar y encender el switch en Ajustes en lugar de mostrar un confuso mensaje genérico.
-  - Se enriqueció `FirebaseDeviceSync.kt` (`getLatestProcessExitInfoApi30`) leyendo `exit.traceInputStream` y publicando `lastExitTrace` y `lastExitDetail` descriptivo en lugar del opaco `"crash"`.
-  - Se instaló un manejador global de crashes en `LockSuiteApplication.kt` que persiste el stack trace completo en disco antes de la muerte del proceso.
-  - Se actualizó el panel web (`celular.js`) para mostrar el chip `"detenida por sistema (zombie)"`, el aviso de acción correctiva y el visor del stack trace de la última salida.
-  - Se compilaron y ejecutaron las pruebas unitarias completas del proyecto con Gradle (`BUILD SUCCESSFUL`).
+  - `PlayButtonFinder.kt`: Se añadió `TOOLBAR_TOP_DP = 68f` y `BAND_TOP_FRACTION = 0.08f` para blindar la barra superior contra clics accidentales. Se sumaron palabras de navegación a `FORBIDDEN_WORDS`. Se removió `"play"` de `OPEN_WORDS` y se añadió filtro `!isStoreBranding`. Se crearon `DISMISS_WORDS` y la lista de `dismissals` para BottomSheets. Se amplió el soporte para etiquetas largas en Compose (`contentDescription`).
+  - `LockSuiteAccessibilityService.kt`: Se añadió el paso 4b para descartar hojas emergentes sin penalizar los intentos de candidatos. En el paso 8 se agregó recuperación automática relanzando la ficha de la tienda si se detecta desorientación.
+  - `UpdateFlowManager.kt`: Se incluyó `MATCH_UNINSTALLED_PACKAGES` en `versionCodeOf` y `versionNameOf` como salvaguarda ante paquetes archivados.
+  - Pruebas unitarias de Gradle ejecutadas y validadas. Despliegue completo efectuado con `deploy_all.ps1`.
 

@@ -81,11 +81,18 @@ object PlayButtonFinder {
      * PREFERRED es donde está en la enorme mayoría de los casos; BAND es hasta
      * dónde se la sigue aceptando (con menos puntaje) antes de darla por perdida.
      */
-    private const val PREFERRED_BOTTOM_DP = 260f
-    private const val BAND_BOTTOM_DP = 340f
+    private const val PREFERRED_BOTTOM_DP = 320f
+    private const val BAND_BOTTOM_DP = 480f
 
+    /**
+     * Borde superior mínimo en dp para descartar la barra de estado y la barra de herramientas (toolbar).
+     * En Android, la barra de estado (~24dp) + toolbar (~56dp) ocupan ~80dp.
+     * Ningún botón de instalación o actualización de una app está jamás en esta zona.
+     * En esa franja solo viven la flecha Atrás (<-), la búsqueda y el menú.
+     */
+    private const val TOOLBAR_TOP_DP = 68f
     /** Nunca se considera botón lo que está pegado al borde de arriba (toolbar). */
-    private const val BAND_TOP_FRACTION = 0.05f
+    private const val BAND_TOP_FRACTION = 0.08f
     /** Ni lo que está pegado al borde de abajo (barra de navegación / gestos). */
     private const val BAND_BOTTOM_MAX_FRACTION = 0.95f
 
@@ -135,17 +142,29 @@ object PlayButtonFinder {
      * la señal de "la app ya está al día".
      *
      * ⚠️ Acá NO puede entrar ninguna palabra que también aparezca en la pantalla de
-     * iniciar sesión de Play Store. "iniciar" estaba en esta lista hasta el 3/9/2026
-     * y hacía que "Iniciar sesión" —la pantalla que ve un equipo SIN cuenta de
-     * Google, que es exactamente cómo se instala LockSuite— se leyera como el botón
-     * "Abrir", con lo cual el flujo cerraba a los 1,5 s informando "la app ya está
-     * actualizada". Un falso éxito, en el equipo donde justamente nunca se iba a
-     * poder actualizar nada. Si hay que agregar un idioma, agregá el verbo "abrir",
-     * no el verbo "entrar/iniciar/acceder".
+     * iniciar sesión de Play Store ni el nombre de la propia tienda ("play").
+     * La palabra "play" causaba falsos positivos masivos con "Google Play",
+     * "Play Store", "Play Pass", etc., cerrando prematuramente el flujo con error.
      */
     private val OPEN_WORDS = setOf(
         "abrir", "open", "ouvrir", "aprire", "offnen", "oeffnen",
-        "открыть", "פתח", "פתיחה", "فتح", "launch", "jugar", "play"
+        "открыть", "פתח", "פתיחה", "فتح", "launch", "jugar"
+    )
+
+    /**
+     * Acciones para descartar hojas emergentes, avisos promocionales o BottomSheets
+     * que tapan la ficha (ej. "Descubre el asistente de IA", Google Play Points, etc.).
+     *
+     * IMPORTANTE: No se descarta una hoja si contiene un botón de DIALOG_WORDS o ACTION_WORDS
+     * (por ejemplo, si la hoja es para confirmar la descarga por datos móviles).
+     */
+    private val DISMISS_WORDS = setOf(
+        "cerrar hoja", "cerrar", "close", "close sheet",
+        "no gracias", "no, gracias", "no thanks",
+        "ahora no", "not now", "quizas mas tarde", "maybe later", "mas tarde",
+        "omitir", "skip", "ignorar", "dismiss",
+        "סגור", "לא עכשיו", "לא תודה", "דלג",
+        "إغلاق", "ليس الآن", "لا شكرا", "تخطي"
     )
 
     private val DIALOG_WORDS = setOf(
@@ -173,7 +192,10 @@ object PlayButtonFinder {
         // abre el administrador de almacenamiento del sistema. Apretarlo saca al
         // usuario de la tienda y lo deja en Ajustes con la pantalla tapada.
         "liberar espacio", "liberar espaco", "free up space", "manage storage",
-        "administrar almacenamiento", "gestionar almacenamiento"
+        "administrar almacenamiento", "gestionar almacenamiento",
+        // Navegación de la barra superior: NUNCA retroceder ni salir de la ficha
+        "atras", "back", "navigate up", "navegar hacia arriba", "volver", "regresar",
+        "buscar", "search", "mas opciones", "more options", "compartir", "share"
     )
 
     // ──────────────────────────────────────────────
@@ -287,6 +309,8 @@ object PlayButtonFinder {
         val opens: List<Candidate>,
         /** Botones de diálogos de confirmación. */
         val dialogs: List<Candidate>,
+        /** Botones para cerrar/descartar hojas emergentes o avisos promocionales que obstruyen la ficha. */
+        val dismissals: List<Candidate> = emptyList(),
         val sawProgressBar: Boolean,
         /**
          * Hay una barra de progreso DENTRO de la franja de botones (26/10/2026, B.97).
@@ -342,7 +366,7 @@ object PlayButtonFinder {
          */
         val progressSignature: String = ""
     ) {
-        val isEmpty: Boolean get() = actions.isEmpty() && opens.isEmpty() && dialogs.isEmpty()
+        val isEmpty: Boolean get() = actions.isEmpty() && opens.isEmpty() && dialogs.isEmpty() && dismissals.isEmpty()
         /** true si la ficha ya tiene contenido dibujado (no es una pantalla en blanco). */
         val rendered: Boolean get() = renderedNodes >= PlayButtonFinder.MIN_RENDERED_NODES
     }
@@ -368,13 +392,14 @@ object PlayButtonFinder {
         val actions = ArrayList<Candidate>(8)
         val opens = ArrayList<Candidate>(4)
         val dialogs = ArrayList<Candidate>(4)
+        val dismissals = ArrayList<Candidate>(4)
         val labels = ArrayList<String>(24)
         val notices = ArrayList<String>(24)
         val state = WalkState(screenWidth, screenHeight, density)
 
         if (root != null) {
             try {
-                walk(root, 0, state, actions, opens, dialogs, labels, notices)
+                walk(root, 0, state, actions, opens, dialogs, dismissals, labels, notices)
             } catch (e: Exception) {
                 // Un árbol de accesibilidad puede desarmarse mientras se lo recorre.
                 // Se devuelve lo que se alcanzó a juntar en vez de perder el ciclo.
@@ -382,7 +407,7 @@ object PlayButtonFinder {
         }
 
         val byConfidence = compareByDescending<Candidate> { it.score }
-            .thenBy { it.top }        // filas de más arriba primero
+            .thenBy { it.top }        // filas de más arriba primero (toolbar ya excluida por bandTop)
             .thenByDescending { it.left }  // dentro de la fila, el de más a la derecha:
                                            // en toda variante de Play Store el botón
                                            // primario es ese, y el secundario
@@ -394,6 +419,7 @@ object PlayButtonFinder {
             actions = actions.sortedWith(byConfidence),
             opens = opens.sortedWith(byConfidence),
             dialogs = dialogs.sortedWith(byConfidence),
+            dismissals = dismissals.sortedWith(byConfidence),
             sawProgressBar = state.sawProgressBar,
             progressInBand = state.progressInBand,
             bandProgressPct = state.bandProgressPct,
@@ -445,8 +471,11 @@ object PlayButtonFinder {
 
         private val dp = if (density > 0f) density else 1f
 
-        /** Borde superior: se descarta la barra de estado y la de búsqueda. */
-        val bandTop = (screenHeight * BAND_TOP_FRACTION).toInt()
+        /** Borde superior: se descarta la barra de estado y la barra de herramientas (toolbar). */
+        val bandTop = maxOf(
+            (TOOLBAR_TOP_DP * dp).toInt(),
+            (screenHeight * BAND_TOP_FRACTION).toInt()
+        )
 
         /**
          * Franja preferida y franja tolerada, medidas en dp desde arriba y topeadas
@@ -491,6 +520,7 @@ object PlayButtonFinder {
         actions: MutableList<Candidate>,
         opens: MutableList<Candidate>,
         dialogs: MutableList<Candidate>,
+        dismissals: MutableList<Candidate>,
         labels: MutableList<String>,
         notices: MutableList<String>
     ) {
@@ -551,35 +581,46 @@ object PlayButtonFinder {
         }
 
         if (!forbidden) {
-            // 1. Por ID de vista — lo más confiable donde existe.
-            if (viewId in ACTION_VIEW_IDS && onScreen) {
+            // 1. Por ID de vista — lo más confiable donde existe (excluyendo barra de toolbar).
+            if (viewId in ACTION_VIEW_IDS && onScreen && top >= state.bandTop) {
                 actions.add(Candidate(node, SCORE_VIEW_ID, "viewId=$viewId", top, left))
-            } else if (probe.isNotEmpty() && probe.length <= MAX_LABEL_LEN) {
-                // 2. Por palabra completa. El tope de caracteres evita que un
-                //    párrafo de la descripción de la app entre como candidato.
-                //
-                //    Las palabras de acción se exigen DENTRO de la franja tolerada:
-                //    es lo que impide agarrar el "Instalar" de un carrusel de "apps
-                //    similares" que está más abajo (bug 4 de B.9). Con la franja
-                //    ahora medida en dp, eso sigue protegiendo en un teléfono
-                //    normal sin descartar el botón bueno en una pantalla chica.
-                when {
-                    ACTION_WORDS.any { containsWord(probe, it) } ->
-                        if (inBand || !onScreen) {
-                            actions.add(
-                                Candidate(
-                                    node,
-                                    if (inPreferred || !onScreen) SCORE_WORD else SCORE_WORD - 10,
-                                    "texto='$probe'", top, left
-                                )
-                            )
+            } else if (probe.isNotEmpty()) {
+                val isActionWord = ACTION_WORDS.any { containsWord(probe, it) }
+                // En Compose, el contentDescription puede ser "Instalar [Nombre de la app]" (más de 40 chars).
+                val maxAllowedLen = if (isActionWord) 80 else MAX_LABEL_LEN
+                if (probe.length <= maxAllowedLen) {
+                    when {
+                        isActionWord -> {
+                            // Un botón que dice explícitamente "Instalar" o "Actualizar":
+                            // Si está en la franja preferida: score 80.
+                            // Si está en la franja tolerada (hasta 480dp): score 70.
+                            // Si está más abajo en pantalla (pero antes del 85% para evitar sugerencias al pie): score 60.
+                            val onScreenNotBottom = onScreen && top >= state.bandTop && top <= (state.screenHeight * 0.85f).toInt()
+                            if (inBand || onScreenNotBottom) {
+                                val score = when {
+                                    inPreferred -> SCORE_WORD
+                                    inBand -> SCORE_WORD - 10
+                                    else -> SCORE_WORD - 20
+                                }
+                                actions.add(Candidate(node, score, "texto='$probe'", top, left))
+                            }
                         }
-                    OPEN_WORDS.any { containsWord(probe, it) } ->
-                        if (inBand) opens.add(Candidate(node, SCORE_WORD, "texto='$probe'", top, left))
-                    DIALOG_WORDS.any { containsWord(probe, it) } ->
-                        // Los diálogos y hojas inferiores aparecen abajo, así que
-                        // acá NO se exige estar en la franja de botones.
-                        if (clickable) dialogs.add(Candidate(node, SCORE_WORD, "dialogo='$probe'", top, left))
+                        OPEN_WORDS.any { containsWord(probe, it) } -> {
+                            // Para que sea "Abrir", debe estar dentro de la franja y NO puede ser
+                            // el título/marca de la tienda ("Google Play", "Play Store", etc.)
+                            val isStoreBranding = probe.contains("google play") || probe.contains("play store") ||
+                                probe.contains("play pass") || probe.contains("play juegos")
+                            if (inBand && !isStoreBranding) {
+                                opens.add(Candidate(node, SCORE_WORD, "texto='$probe'", top, left))
+                            }
+                        }
+                        DIALOG_WORDS.any { containsWord(probe, it) } ->
+                            // Los diálogos y confirmaciones aparecen abajo o al centro
+                            if (clickable) dialogs.add(Candidate(node, SCORE_WORD, "dialogo='$probe'", top, left))
+                        DISMISS_WORDS.any { containsWord(probe, it) } ->
+                            // Hojas emergentes y banners publicitarios (ej. "Cerrar hoja", "No gracias")
+                            if (clickable) dismissals.add(Candidate(node, SCORE_WORD, "descartar='$probe'", top, left))
+                    }
                 }
             }
 
@@ -588,9 +629,12 @@ object PlayButtonFinder {
             //    verificación posterior deciden cuál es. Fuera de la franja
             //    preferida entra igual pero con menos puntaje, así que solo se
             //    prueba cuando no hay nada mejor.
-            if (inBand && clickable && width >= state.minWidth &&
+            //    Excluimos explícitamente cualquier cosa en la toolbar (top < bandTop),
+            //    así como botones de descarte o apertura ya reconocidos.
+            if (inBand && clickable && width >= state.minWidth && top >= state.bandTop &&
                 actions.none { it.node == node } &&
-                opens.none { it.node == node }
+                opens.none { it.node == node } &&
+                dismissals.none { it.node == node }
             ) {
                 val score = if (inPreferred) SCORE_POSITION else SCORE_POSITION_WIDE
                 actions.add(Candidate(node, score, "posicion top=$top", top, left))
@@ -598,7 +642,7 @@ object PlayButtonFinder {
         }
 
         for (i in 0 until node.childCount) {
-            walk(node.getChild(i), depth + 1, state, actions, opens, dialogs, labels, notices)
+            walk(node.getChild(i), depth + 1, state, actions, opens, dialogs, dismissals, labels, notices)
         }
     }
 
