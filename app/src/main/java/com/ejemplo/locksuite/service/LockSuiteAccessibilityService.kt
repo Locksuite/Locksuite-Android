@@ -531,6 +531,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     // Configuración del servicio
     // ──────────────────────────────────────────────
     override fun onServiceConnected() {
+        // 6/11/2026 (B.110): rastro para el panel de que el servicio se enlazó.
+        com.ejemplo.locksuite.diag.DiagLog.i("a11y", "Servicio de accesibilidad conectado")
         // LockSuite purgado: el equipo ya fue liberado y la app está por desinstalarse.
         // No se arranca nada y el servicio se saca solo de la lista de activos. La marca
         // la ponen DeviceRelease/EmergencyActivity (locksuite_purged).
@@ -4187,9 +4189,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         Log.w(TAG, "⚠️ LockSuiteAccessibilityService interrumpido")
+        com.ejemplo.locksuite.diag.DiagLog.w("a11y", "El sistema interrumpió el servicio de accesibilidad (onInterrupt)")
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        com.ejemplo.locksuite.diag.DiagLog.w("a11y", "Servicio de accesibilidad desvinculado (onUnbind)")
         if (instance === this) instance = null
         val appCtx = applicationContext
         try {
@@ -4209,6 +4213,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        com.ejemplo.locksuite.diag.DiagLog.w("a11y", "Servicio de accesibilidad destruido (onDestroy)")
         if (instance === this) instance = null
         stopCaptiveWatch()
 

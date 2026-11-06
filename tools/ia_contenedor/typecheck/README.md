@@ -8,7 +8,7 @@ seguridad barata para no entregar código que ni siquiera cierra los tipos.
 | Script | Qué hace | Tarda |
 |---|---|---|
 | `typecheck.sh` | Compila (sin generar APK) todo el Kotlin de `app/` contra el `android.jar` real de la API 36 + stubs mínimos de Firebase/androidx. Imprime `archivo:línea: error: …` y `TIPOS: N errores`. | ~45 s |
-| `run_unit_tests.sh` | Compila con el `kotlinc` de Gradle las clases Kotlin "puras" y corre sus tests con JUnit. 11 archivos de test, **204 pruebas** (desde B.104; antes 173). | ~17 s |
+| `run_unit_tests.sh` | Compila con el `kotlinc` de Gradle las clases Kotlin "puras" y corre sus tests con JUnit. 18 suites, **277 pruebas** (6 suites y 67 pruebas nuevas del paquete `diag` desde B.110; antes 210). | ~17 s |
 | `gen_r.py` | Lo usa `typecheck.sh`: arma un `R.java` de mentira desde `app/src/main/res` (si agregás un drawable/layout/id, aparece solo). | — |
 | `common.sh` | Detecta `android.jar` y los `.jar` del compilador de Kotlin. | — |
 | `stubs/` | Firmas escritas a mano de lo que no se puede bajar (Firebase, WorkManager, androidx, las Activities de Compose). Si el código usa una API nueva de esas librerías y el chequeo se queja, **falta agregarla acá** (no es un bug del código). | — |
@@ -17,7 +17,7 @@ seguridad barata para no entregar código que ni siquiera cierra los tipos.
 
 ```bash
 bash tools/ia_contenedor/typecheck/typecheck.sh          # esperado: «TIPOS: 0 errores»
-bash tools/ia_contenedor/typecheck/run_unit_tests.sh     # esperado: «OK (204 tests)»
+bash tools/ia_contenedor/typecheck/run_unit_tests.sh     # esperado: «OK (277 tests)»
 bash tools/ia_contenedor/typecheck/run_unit_tests.sh PlayStoreCatalogTest   # solo una suite
 ```
 

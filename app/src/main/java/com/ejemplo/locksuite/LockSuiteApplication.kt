@@ -154,6 +154,12 @@ class LockSuiteApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // 6/11/2026 (B.110) — Registro de diagnóstico remoto: lo PRIMERO, antes de cualquier otra
+        // inicialización, para que queden anotadas también las fallas del arranque. Usa el
+        // almacenamiento protegido del dispositivo (anda en Arranque Directo) y nunca lanza.
+        // Ver diag/DiagLog.kt.
+        com.ejemplo.locksuite.diag.DiagLog.init(this)
+
         // Red de seguridad forense: capturar excepciones no controladas antes de que
         // maten el proceso, guardando el stack trace en disco para que el próximo arranque
         // o sincronización con Firebase lo reporte al panel.
@@ -398,6 +404,9 @@ class LockSuiteApplication : Application() {
         try {
             val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                // 6/11/2026 (B.110): primero al registro de diagnóstico (que sí anda en Arranque
+                // Directo, a diferencia de las preferencias de abajo). No lanza.
+                com.ejemplo.locksuite.diag.DiagLog.fatal(thread, throwable)
                 try {
                     val sw = java.io.StringWriter()
                     val pw = java.io.PrintWriter(sw)

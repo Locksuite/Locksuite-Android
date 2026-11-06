@@ -2253,6 +2253,8 @@ if (sidebarDeleteBtn) {
         try {
             await database.ref(`devices/${selectedDeviceId}`).remove();
             await database.ref(`deviceSecrets/${selectedDeviceId}`).remove().catch(() => {});
+            // 6/11/2026 (B.110): "todos los datos del dispositivo" incluye su registro de errores.
+            await database.ref(`deviceDiag/${selectedDeviceId}`).remove().catch(() => {});
             sidebarStatusMsg.textContent = "✔ Dispositivo eliminado.";
             closeDeviceSidebar();
         } catch (e) {
@@ -3842,6 +3844,8 @@ async function deleteArchivedDevicePermanently(deviceId, name, button) {
     try {
         await database.ref(`archivedDevices/${deviceId}`).remove();
         await database.ref(`deviceSecrets/${deviceId}`).remove().catch(() => {});
+        // 6/11/2026 (B.110): también su registro de errores (el aviso promete borrar "todos los registros").
+        await database.ref(`deviceDiag/${deviceId}`).remove().catch(() => {});
     } catch (err) {
         alert("Error al eliminar dispositivo: " + err.message);
         button.disabled = false;

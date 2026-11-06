@@ -17,6 +17,9 @@ class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
+        // 6/11/2026 (B.110): rastro del arranque / actualización para el panel (anda también en
+        // Arranque Directo: el registro vive en el almacenamiento protegido del dispositivo).
+        com.ejemplo.locksuite.diag.DiagLog.i("boot", "Broadcast de sistema: $action")
 
         if (!com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(context)) {
             android.util.Log.i("BootReceiver", "Almacenamiento bloqueado (Direct Boot) en $action. Esperando ACTION_BOOT_COMPLETED.")

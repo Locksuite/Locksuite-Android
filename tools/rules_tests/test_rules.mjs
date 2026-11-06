@@ -65,6 +65,22 @@ await check("alta: publica commandSecret D2", set(ref(devNew, "deviceSecrets/D2/
 await check("alta: secretos ANTES que el nodo (D3)", update(ref(devNew, "deviceSecrets/D3"), { ownerUid: "devNew", pinHash: "h", pinSalt: "s" }), true);
 await check("alta: después crea devices/D3", update(ref(devNew, "devices/D3"), { ownerUid: "devNew" }), true);
 
+// ── registro de diagnóstico remoto (6/11/2026, B.110): deviceDiag/<id> ──
+// El celular dueño de devices/<id> escribe SU registro; nadie más escribe; solo el panel lee.
+await check("diag: el celular sube renglones + meta", update(ref(dev, "deviceDiag/D1"), {
+  "events/e0000000001": { t: 1, l: "E", g: "vpn", m: "boom" }, "meta/lastSeq": 1, "meta/lastUploadAt": serverTimestamp() }), true);
+await check("diag: el celular borra renglones viejos", update(ref(dev, "deviceDiag/D1"), { "events/e0000000001": null }), true);
+await check("diag: el celular sube un diagnóstico completo", set(ref(dev, "deviceDiag/D1/snapshots/s00000001"), {
+  t: serverTimestamp(), at: 1, system: "x", logcat: "y" }), true);
+await check("diag: el celular NO lee su registro (solo el panel)", get(ref(dev, "deviceDiag/D1")), false);
+await check("diag: el celular NO escribe el registro de otro equipo", set(ref(dev, "deviceDiag/D2/events/e1"), { t: 1, l: "I", g: "a", m: "x" }), false);
+await check("diag ATAQUE: ajeno no escribe en el registro de D1", set(ref(evil, "deviceDiag/D1/events/e9"), { t: 1, l: "E", g: "a", m: "falso" }), false);
+await check("diag ATAQUE: ajeno no lee el registro de D1", get(ref(evil, "deviceDiag/D1")), false);
+await check("diag ATAQUE: sin sesión no escribe", set(ref(anon, "deviceDiag/D1/events/e9"), { t: 1 }), false);
+await check("diag ATAQUE: equipo sin nodo devices (D9) no tiene dueño", set(ref(evil, "deviceDiag/D9/events/e1"), { t: 1 }), false);
+await check("diag: el panel lee el registro", get(ref(adm, "deviceDiag/D1")), true);
+await check("diag: el panel puede vaciar el registro de un equipo", remove(ref(adm, "deviceDiag/D1/events")), true);
+
 // ── ataques que TIENEN que fallar ──
 await check("ATAQUE: secuestrar devices/D1 (fcmToken)", update(ref(evil, "devices/D1"), { ownerUid: "evil", fcmToken: "robado" }), false);
 await check("ATAQUE: escribir pinHash de D1", update(ref(evil, "deviceSecrets/D1"), { ownerUid: "evil", pinHash: "x" }), false);

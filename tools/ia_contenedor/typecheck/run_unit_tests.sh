@@ -31,6 +31,13 @@ SUITES=(
   "com.ejemplo.locksuite.mdm.PinCloudSyncPolicyTest|mdm/PinCloudSyncPolicy.kt|mdm/PinCloudSyncPolicyTest.kt"
   "com.ejemplo.locksuite.util.SignInGateTest|util/SignInGate.kt|util/SignInGateTest.kt"
   "com.ejemplo.locksuite.provisioning.MultimediaProvisioningTest|provisioning/adb/AdbProtocol.kt provisioning/adb/AdbFrameStream.kt provisioning/adb/AdbAuthKey.kt provisioning/adb/AccountAuthenticatorGateScript.kt|provisioning/MultimediaProvisioningTest.kt"
+  # 6/11/2026 (B.110) — registro de diagnóstico remoto (paquete diag, solo la parte pura)
+  "com.ejemplo.locksuite.diag.DiagEventTest|diag/DiagEvent.kt|diag/DiagEventTest.kt"
+  "com.ejemplo.locksuite.diag.DiagSanitizerTest|diag/DiagSanitizer.kt|diag/DiagSanitizerTest.kt"
+  "com.ejemplo.locksuite.diag.DiagRingAndLimiterTest|diag/DiagEvent.kt diag/DiagRing.kt diag/DiagRateLimiter.kt|diag/DiagRingAndLimiterTest.kt"
+  "com.ejemplo.locksuite.diag.DiagUploadPolicyTest|diag/DiagEvent.kt diag/DiagUploadPolicy.kt|diag/DiagUploadPolicyTest.kt"
+  "com.ejemplo.locksuite.diag.DiagExitsAndLogcatTest|diag/DiagEvent.kt diag/DiagSanitizer.kt diag/DiagExits.kt diag/DiagLogcatParser.kt|diag/DiagExitsAndLogcatTest.kt"
+  "com.ejemplo.locksuite.diag.StackTraceGrouperTest|diag/StackTraceGrouper.kt|diag/StackTraceGrouperTest.kt"
 )
 
 declare -A SEEN=()

@@ -100,6 +100,42 @@ existe, PIN «1234»: 412 `PIN_REQUIRED` sin PIN, 403 `PIN_INCORRECT` con otro).
 - ⚠️ `openDeviceSidebar` espera a que alguien escriba el PIN: en un test hay que llamarla SIN
   `return` dentro de `page.evaluate`, o la prueba se cuelga esperando su promesa.
 
+`test_diag.js` **(6/11/2026, B.110)** — el **Registro de errores** de la ficha (tarjeta
+`#c-diag-remoto` de `celular.html`: `diag_logic.js` + `diag_remoto.js`). Escenarios:
+
+- **A** — suscripción perezosa: mientras la sección «Diagnóstico» no está abierta NO hay
+  ningún listener sobre `deviceDiag/<id>` (ni eventos, ni diagnósticos, ni `meta`); se
+  engancha al abrirla y se suelta al irse. Los límites son `limitToLast(400)` y `(3)`.
+- **B** — el estado del celular (versión del registro, interruptor, error de subida,
+  última subida) y la lista de renglones: más nuevo arriba, nivel, etiqueta, hora, `×N`.
+- **C** — texto hostil que viene del celular (`<img onerror>`, `<script>`, comillas): se ve
+  como texto, **nada se ejecuta** (todo pasa por `LS.esc` / `textContent`).
+- **D / D2** — filtros (nivel, ventana, etiqueta, texto); volver a tocar el filtro que ya
+  está elegido NO redibuja la lista, y un renglón con el `<details>` abierto sigue abierto
+  cuando llega un renglón nuevo.
+- **E** — el visor del diagnóstico completo (Sistema, Cierres, logcat, Apps) y el selector
+  de los últimos 3.
+- **F** — «Pedir diagnóstico ahora» manda `COLLECT_DIAGNOSTICS` **sin PIN** (con los
+  paquetes normalizados, máximo 6, avisando los inválidos); el interruptor manda
+  `SET_DIAGNOSTICS_UPLOAD` `{enabled}` **con** PIN y pide confirmación para apagarlo.
+- **G** — los demás estados: celular sin registro todavía, interruptor apagado, error de
+  subida, y `permission_denied` (las reglas todavía no desplegadas) con su aviso claro.
+- **H** — el informe para pegarle a Claude (`DiagLogic.buildReport`): encabezado, lo que contó
+  el usuario, renglones del más viejo al más nuevo, secciones del diagnóstico y la leyenda
+  «Cómo leer esto» solo con las etiquetas usadas.
+- **I** — a 390 px de ancho la tarjeta no se desborda de costado.
+- **J** — ningún error en la consola del navegador en todo el recorrido.
+
+`fake-firebase.js` acepta `window.__denyPaths` (rutas para las que `on()` llama al callback de
+error con `PERMISSION_DENIED`) y `fake-function.js` trae `COLLECT_DIAGNOSTICS` en `EXENTOS`
+(el comando que la Function real no le pide PIN). 61 verificaciones, deben terminar en «TODO VERDE».
+
+`test_diag_borrado.js` **(6/11/2026, B.110)** — `index.html` + `app.js`: «Eliminar dispositivo»
+(barra lateral) y «Eliminar definitivamente» (de los archivados) borran TAMBIÉN `deviceDiag/<id>` (los
+avisos prometen borrar «todos los datos»: sin esto el registro quedaría huérfano), no tocan el de los
+demás equipos, y «Archivar» lo CONSERVA (los datos archivados se pueden restaurar). Se acepta cada
+`confirm` desde la prueba. `tools/check_diag_sync.py` vigila lo mismo de forma estática.
+
 ## Control negativo
 
 Copiar el `app.js` viejo (`git show <commit>:admin-backend/public/app.js`) a la carpeta

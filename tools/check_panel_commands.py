@@ -57,6 +57,8 @@ POLICY_SPEC = os.path.join(RAIZ, "app", "src", "main", "java", "com", "ejemplo",
 PANTALLAS = [
     os.path.join(RAIZ, "admin-backend", "public", "celular.js"),
     os.path.join(RAIZ, "admin-backend", "public", "dominios.js"),
+    # 6/11/2026 (B.110): el registro de errores de la ficha manda COLLECT_DIAGNOSTICS y SET_DIAGNOSTICS_UPLOAD.
+    os.path.join(RAIZ, "admin-backend", "public", "diag_remoto.js"),
 ]
 POLICIES_JS = os.path.join(RAIZ, "admin-backend", "public", "policies.js")
 

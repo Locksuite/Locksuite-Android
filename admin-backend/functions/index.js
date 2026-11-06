@@ -202,6 +202,15 @@ const ALLOWED_COMMANDS = new Set([
   "BLOCK_OUTGOING_BEAM", "UNBLOCK_OUTGOING_BEAM",
   "BLOCK_UNMUTE_MICROPHONE", "UNBLOCK_UNMUTE_MICROPHONE",
   "BLOCK_REMOVE_MANAGED_PROFILE", "UNBLOCK_REMOVE_MANAGED_PROFILE",
+  // ── DIAGNÓSTICO REMOTO (6/11/2026, B.110) — ver app/diag/ ──
+  // COLLECT_DIAGNOSTICS: el celular junta su logcat, los últimos cierres del proceso, el
+  //   estado del sistema y el de las apps de `packages` (opcional) y lo sube a
+  //   deviceDiag/<id>/snapshots. Es de SOLO LECTURA: no cambia ninguna política, por eso
+  //   NO exige el PIN del celular (ver la excepción de PIN más abajo): quien lo necesita es un
+  //   usuario con un problema, y con el PIN sin publicar (B.104) no se podría diagnosticar
+  //   justo el caso que más lo requiere.
+  // SET_DIAGNOSTICS_UPLOAD: interruptor de la subida del registro (`enabled`). Sí exige PIN.
+  "COLLECT_DIAGNOSTICS", "SET_DIAGNOSTICS_UPLOAD",
 ]);
 
 function canonicalCommandPayload(payload) {
@@ -259,6 +268,8 @@ const ACTION_COMMANDS = new Set([
   "SYNC_WHITELIST", "SYNC_APP_REQUESTS", "CLEAR_WHITELIST_AUDIT", "CLEAR_IAB_AUDIT",
   // "Releé la tienda": el equipo lee el catálogo VIGENTE, no el de cuando se mandó.
   "SYNC_PLAY_STORE",
+  // Un diagnóstico pedido y no levantado en un día ya no describe el problema que se reportó.
+  "COLLECT_DIAGNOSTICS",
 ]);
 // Modos de la Tienda Play (app/mdm/PlayStoreCatalog.kt, MODES). Ver SET_PLAY_STORE_MODE.
 const PLAY_STORE_MODES = new Set(["cerrada", "kosher", "trabajo", "lite"]);
@@ -405,8 +416,12 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     // contraparte, y si para cancelar hiciera falta el PIN, un equipo con una
     // pantalla de actualizacion trabada no se podria destrabar desde el panel
     // — justo el caso en que mas urge poder hacerlo.
+    // COLLECT_DIAGNOSTICS (6/11/2026, B.110) entra en la misma excepción: es de SOLO LECTURA
+    // (el celular sube su registro y su estado; no cambia ninguna política) y se pide justo
+    // cuando un usuario tiene un problema —a veces con el PIN todavía sin publicar (B.104)—.
+    // SET_DIAGNOSTICS_UPLOAD (el interruptor) NO está acá: sí exige PIN.
     if (command !== "UPDATE_LOCKSUITE" && command !== "UPDATE_APP" &&
-        command !== "CANCEL_UPDATE_APP") {
+        command !== "CANCEL_UPDATE_APP" && command !== "COLLECT_DIAGNOSTICS") {
       await verifyDevicePin(deviceId, deviceRef, deviceData, adminUid, devicePin, rememberDevice);
     }
 
@@ -470,7 +485,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       payload.packages = clean.join(",");
       await deviceRef.child("allowedPackages").set(clean);
       await deviceRef.child("info/allowedPackages").set(clean).catch(() => {});
-    } else if (command === "SET_HIDE_SUSPENDED_APPS") {
+    } else if (command === "SET_HIDE_SUSPENDED_APPS" || command === "SET_DIAGNOSTICS_UPLOAD") {
       if (typeof enabled !== "boolean") {
         res.status(400).json({ error: "Falta el valor enabled para la política." });
         return;

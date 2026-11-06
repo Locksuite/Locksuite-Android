@@ -161,6 +161,13 @@ class CommandProcessor(private val context: Context) {
         }
         if (rejection != null) {
             android.util.Log.w("LockSuiteFCM", "Comando FCM rechazado ($rejection): $command")
+            // 6/11/2026 (B.110): rastro para el panel. REPLAY es el mismo comando llegando por la
+            // otra vía (normal): no se anota. Una firma mala es la señal de secreto desincronizado.
+            if (rejection == "BAD_SIGNATURE") {
+                com.ejemplo.locksuite.diag.DiagLog.e("cmd", "Comando rechazado (BAD_SIGNATURE): $command, vía ${source.name}")
+            } else if (rejection != "REPLAY") {
+                com.ejemplo.locksuite.diag.DiagLog.w("cmd", "Comando rechazado ($rejection): $command, vía ${source.name}")
+            }
             // Un commandId ausente o en blanco no da dónde escribir el ack.
             //
             // 26/10/2026 (B.95): REPLAY tampoco escribe. Es el MISMO comando que ya se
@@ -227,10 +234,14 @@ class CommandProcessor(private val context: Context) {
             "VERIFY_PIN", "CHANGE_PIN", "CANCEL_UPDATE_APP",
             // Borrar LockSuite tiene que poder pedirse esté o no suspendido: un equipo
             // ya suspendido ("sin restricciones") igual hay que poder sacárselo de encima.
-            "UNINSTALL_LOCKSUITE"
+            "UNINSTALL_LOCKSUITE",
+            // 6/11/2026 (B.110): el diagnóstico es de solo lectura y no cambia ninguna política;
+            // un usuario con LockSuite suspendido también puede reportar un problema.
+            "COLLECT_DIAGNOSTICS", "SET_DIAGNOSTICS_UPLOAD"
         )
         if (command !in allowedWhileSuspended && policyManager.isLockSuiteSuspended()) {
             commandErrorReason = "LockSuite está suspendido en este equipo. Desactivá la suspensión antes de cambiar políticas."
+            com.ejemplo.locksuite.diag.DiagLog.w("cmd", "Comando ignorado porque LockSuite está suspendido: $command")
             sendCommandAck(commandId, command, false, commandErrorReason)
             return
         }
@@ -792,6 +803,33 @@ class CommandProcessor(private val context: Context) {
                     }
                     true
                 }
+                // ── DIAGNÓSTICO REMOTO (6/11/2026, B.110) ──
+                //
+                // COLLECT_DIAGNOSTICS: «juntá tu logcat, los últimos cierres del proceso, el estado del
+                // sistema y el de estas apps, y subilo». Es de SOLO LECTURA: no toca ninguna política
+                // (por eso la Function no pide PIN para este comando). Corre en una corrutina porque
+                // lee el logcat y espera a Firebase (hasta ~30 s); el ack lo escribe ella al terminar.
+                "COLLECT_DIAGNOSTICS" -> {
+                    val idToAck = commandId
+                    commandId = null
+                    val pkgs = packagesList
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val (ok, reason) = try {
+                            com.ejemplo.locksuite.diag.DiagUploader.collectAndUpload(applicationContext, pkgs)
+                        } catch (t: Throwable) {
+                            false to (t.message ?: t.toString())
+                        }
+                        sendCommandAck(idToAck, "COLLECT_DIAGNOSTICS", ok, reason)
+                    }
+                    true
+                }
+                // SET_DIAGNOSTICS_UPLOAD: interruptor de la subida del registro (por defecto encendido).
+                // Apagado: nada del registro sale del teléfono. Sí exige PIN (lo decide la Function).
+                "SET_DIAGNOSTICS_UPLOAD" -> {
+                    val enabled = data["enabled"]?.toBoolean() ?: true
+                    com.ejemplo.locksuite.diag.DiagLog.setUploadEnabled(applicationContext, enabled)
+                    true
+                }
                 "CLEAR_WHITELIST_AUDIT" -> {
                     com.ejemplo.locksuite.mdm.WhitelistManager.clearAudit()
                     com.ejemplo.locksuite.util.FirebaseDeviceSync.syncWhitelistState(applicationContext, force = true)
@@ -942,6 +980,13 @@ class CommandProcessor(private val context: Context) {
             e.printStackTrace()
             commandErrorReason = e.message ?: e.toString()
             success = false
+            com.ejemplo.locksuite.diag.DiagLog.e("cmd", "Excepción ejecutando $command", e)
+        }
+
+        // 6/11/2026 (B.110): si el comando falló, el motivo queda también en el registro de
+        // diagnóstico (el ack del panel se pisa con el siguiente comando; esto no).
+        if (!success) {
+            com.ejemplo.locksuite.diag.DiagLog.e("cmd", "El comando $command falló: ${commandErrorReason ?: "sin motivo"}")
         }
 
         // Registrar confirmación de ejecución del comando (Command ACK).

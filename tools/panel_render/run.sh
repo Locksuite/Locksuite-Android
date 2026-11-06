@@ -12,7 +12,7 @@ mkdir -p "$DEST"
 PUB="$RAIZ/admin-backend/public"
 cp "$PUB"/*.html "$PUB"/*.js "$PUB"/*.css "$DEST"/
 cp -r "$PUB/images" "$DEST"/ 2>/dev/null || true
-cp "$AQUI"/fake-firebase.js "$AQUI"/fake-function.js "$AQUI"/test_panel.js "$AQUI"/test_ficha.js "$AQUI"/test_tienda.js "$DEST"/
+cp "$AQUI"/fake-firebase.js "$AQUI"/fake-function.js "$AQUI"/test_panel.js "$AQUI"/test_ficha.js "$AQUI"/test_tienda.js "$AQUI"/test_diag.js "$AQUI"/test_diag_borrado.js "$DEST"/
 # El firebase-config.js real apunta al proyecto de verdad: acá se reemplaza.
 echo "firebase.initializeApp({});" > "$DEST/firebase-config.js"
 python3 - "$DEST" <<'PY'
@@ -36,3 +36,7 @@ echo "== Ficha completa (celular.html + comun.js + celular.js)"
 node test_ficha.js
 echo "== Tienda Play (tienda.html + tienda_logic.js + tienda.js)"
 node test_tienda.js
+echo "== Registro de errores (celular.html + diag_logic.js + diag_remoto.js)"
+node test_diag.js
+echo "== Eliminar / archivar borra (o conserva) el registro de errores (index.html + app.js)"
+node test_diag_borrado.js

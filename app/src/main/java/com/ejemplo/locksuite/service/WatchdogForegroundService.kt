@@ -334,6 +334,7 @@ class WatchdogForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        com.ejemplo.locksuite.diag.DiagLog.i("watchdog", "Servicio de vigilancia (Watchdog) creado")
         createNotificationChannel()
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -671,6 +672,7 @@ class WatchdogForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        com.ejemplo.locksuite.diag.DiagLog.w("watchdog", "Servicio de vigilancia (Watchdog) destruido")
         if (instance === this) instance = null
         // El listener en vivo del buzón cuelga de este servicio (ver checkRunnable).
         try {

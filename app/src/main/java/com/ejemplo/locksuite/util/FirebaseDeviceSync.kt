@@ -169,6 +169,14 @@ object FirebaseDeviceSync {
                     } catch (ex: Exception) {
                         ex.printStackTrace()
                     }
+                    // 6/11/2026 (B.110): el latido pasó, o sea que hay sesión y red: es el momento de
+                    // subir el registro de diagnóstico si la política lo permite (casi siempre
+                    // contesta «nada que subir» sin tocar disco ni red). Ver diag/DiagUploader.kt.
+                    try {
+                        syncHandler.post { com.ejemplo.locksuite.diag.DiagUploader.flushIfDue(context) }
+                    } catch (ex: Exception) {
+                        ex.printStackTrace()
+                    }
                 }
                 .addOnFailureListener { e ->
                     e.printStackTrace()
@@ -1059,6 +1067,9 @@ object FirebaseDeviceSync {
                 // el panel sin tocar este archivo.
                     + policyManager.extraRestrictionsStatus()
                     + getLatestProcessExitInfo(context)
+                    // 6/11/2026 (B.110): versión del registro de diagnóstico e interruptor de subida,
+                    // para que el panel sepa si este celular lo tiene y si está encendido.
+                    + com.ejemplo.locksuite.diag.DiagLog.deviceFields()
             )
             syncAppsListInternal(context)
         }

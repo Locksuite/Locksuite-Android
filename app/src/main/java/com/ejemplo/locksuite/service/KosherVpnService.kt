@@ -604,6 +604,7 @@ class KosherVpnService : VpnService() {
             }
             if (establishedInterface == null) {
                 android.util.Log.e("KosherVPN", "Android did not authorize the VPN interface; filter not started.")
+                com.ejemplo.locksuite.diag.DiagLog.e("vpn", "Android no autorizó la interfaz VPN: el filtro DNS NO arrancó")
                 // ARREGLO 1/9/2026 (V-7): si el túnel no levanta, el arranque protegido se
                 // entera recién cuando vence su techo de 120 s — dos minutos sin internet
                 // evitables. Acá ya sabemos que no va a haber filtro.
@@ -648,8 +649,10 @@ class KosherVpnService : VpnService() {
             lastNetworkRestartAtMs = android.os.SystemClock.elapsedRealtime()
             Thread({ runFilterLoop() }, "LockSuiteDnsFilter").start()
             android.util.Log.i("KosherVPN", "Servicio VPN iniciado exitosamente.")
+            com.ejemplo.locksuite.diag.DiagLog.i("vpn", "Túnel DNS establecido")
         } catch (e: Exception) {
             android.util.Log.e("KosherVPN", "Error al iniciar VPN: ${e.message}")
+            com.ejemplo.locksuite.diag.DiagLog.e("vpn", "Error al iniciar la VPN", e)
             stopVpn()
             stopSelf()
         }
@@ -1382,10 +1385,12 @@ class KosherVpnService : VpnService() {
         // sistema ya está desmontando la interfaz por su cuenta: crear la nueva encima
         // es pisarse con el propio desmontaje. Ver scheduleRestart().
         android.util.Log.w("KosherVPN", "onRevoke(): la VPN fue revocada externamente. Reestableciendo.")
+        com.ejemplo.locksuite.diag.DiagLog.w("vpn", "La VPN fue revocada externamente (otra VPN o el sistema); se reintenta")
         scheduleRestart(RESTART_SETTLE_MS, "la VPN fue revocada externamente")
     }
 
     override fun onDestroy() {
+        com.ejemplo.locksuite.diag.DiagLog.i("vpn", "Servicio VPN destruido (onDestroy)")
         restartHandler.removeCallbacks(pendingStart)
         restartPendingUntilMs = 0L
         unregisterNetworkWatcher()

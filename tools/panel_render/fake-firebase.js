@@ -56,7 +56,15 @@
       key: split(path).slice(-1)[0] || null,
       path,
       child: (p) => ref(path + "/" + p),
-      on: (ev, cb, err) => { listeners.push({ path, cb, ev }); setTimeout(() => cb(snap(path)), 0); return cb; },
+      on: (ev, cb, err) => {
+        // 6/11/2026 (B.110): `window.__denyPaths = ["deviceDiag"]` imita las reglas de la base
+        // negando la lectura (el oyente se cancela y avisa por el callback de error, como el real).
+        if ((window.__denyPaths || []).some((d) => path === d || path.startsWith(d + "/"))) {
+          setTimeout(() => { if (err) err({ code: "PERMISSION_DENIED", message: "permission_denied at /" + path + ": Client doesn't have permission to access the desired data." }); }, 0);
+          return cb;
+        }
+        listeners.push({ path, cb, ev }); setTimeout(() => cb(snap(path)), 0); return cb;
+      },
       off: (ev, cb) => { for (let i = listeners.length - 1; i >= 0; i--) if (listeners[i].path === path && (!cb || listeners[i].cb === cb)) listeners.splice(i, 1); },
       once: (ev) => Promise.resolve(snap(path)),
       set: (v) => { setAt(path, v); notify(path); return Promise.resolve(); },

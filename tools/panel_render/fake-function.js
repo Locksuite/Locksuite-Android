@@ -21,12 +21,13 @@
     if (String(url).includes("sendcommandv8")) {
       const body = JSON.parse(opts.body);
       window.__calls.push(body);
-      // Puerta del PIN de la Function real (B.104): salvo UPDATE_LOCKSUITE, UPDATE_APP y
-      // CANCEL_UPDATE_APP, todo comando pasa por verifyDevicePin ANTES de escribir nada.
+      // Puerta del PIN de la Function real (B.104): salvo UPDATE_LOCKSUITE, UPDATE_APP,
+      // CANCEL_UPDATE_APP y (6/11/2026, B.110) COLLECT_DIAGNOSTICS —de solo lectura—, todo
+      // comando pasa por verifyDevicePin ANTES de escribir nada.
       //   "pin_no_publicado": la nube no tiene el verificador → 412 DEVICE_PIN_NOT_ENROLLED.
       //   "pin_requerido":    tiene verificador (PIN "1234") → 412 PIN_REQUIRED sin PIN, 403 PIN_INCORRECT si no coincide.
       // Pasada la puerta se contesta como "fcm_new".
-      const EXENTOS = ["UPDATE_LOCKSUITE", "UPDATE_APP", "CANCEL_UPDATE_APP"];
+      const EXENTOS = ["UPDATE_LOCKSUITE", "UPDATE_APP", "CANCEL_UPDATE_APP", "COLLECT_DIAGNOSTICS"];
       const modo0 = window.__fnMode;
       if ((modo0 === "pin_no_publicado" || modo0 === "pin_requerido") && !EXENTOS.includes(body.command)) {
         const fallo = (status, error) => new Response(JSON.stringify({ error }), { status, headers: { "Content-Type": "application/json" } });
