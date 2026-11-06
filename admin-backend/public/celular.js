@@ -946,10 +946,13 @@
       kv("Accesibilidad", accActiva === true
         ? '<span class="ls-chip ok">activa</span>'
         : accActiva === false
-          ? '<span class="ls-chip bad">caída</span>' : "—") +
+          ? (campo("accessibilityZombie", false)
+              ? '<span class="ls-chip bad" title="Detenida por Android tras reinicio/crash: el switch figura ON pero el sistema no la ejecuta. Desactivar y volver a activar en Ajustes">detenida por sistema (zombie)</span>'
+              : '<span class="ls-chip bad">caída</span>')
+          : "—") +
       kv("Dominios en el filtro", esc(String(campo("whitelistDomainCount", "—")))) +
       kv("Canal de comandos", canalDeComandos()) +
-      (exitReason ? kv("Última salida", esc(String(exitReason)) + (exitTs ? " · " + LS.fecha(exitTs) : "")) : "");
+      (exitReason ? kv("Última salida", esc(String(exitReason)) + (campo("lastExitDetail") ? " · " + esc(String(campo("lastExitDetail"))) : "") + (exitTs ? " · " + LS.fecha(exitTs) : "") + (campo("lastExitTrace") ? '<br><details style="font-size:11px;margin-top:4px;"><summary style="cursor:pointer;color:var(--ls-primary,#3498db)">Ver stack trace del crash</summary><pre style="white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;background:rgba(0,0,0,0.15);padding:6px;border-radius:4px;font-family:monospace;">' + esc(String(campo("lastExitTrace"))) + '</pre></details>' : "")) : "");
 
     const m = MODOS.find((x) => x.id === modoActual());
     const perfil = campo("masterProfileId", null);
@@ -966,7 +969,11 @@
       avisos.push(["bad", "LockSuite está SUSPENDIDO en este equipo: no hay ninguna protección activa."]);
     }
     if (accActiva === false) {
-      avisos.push(["bad", "El servicio de Accesibilidad está caído: el filtro visual (Capa 3) no está funcionando."]);
+      if (campo("accessibilityZombie", false)) {
+        avisos.push(["bad", "El servicio de Accesibilidad fue detenido por Android tras un reinicio/crash (en Ajustes del celular figura como Activado, pero el sistema no lo está ejecutando). Hay que desactivarlo y volverlo a activar en Ajustes del teléfono para que funcione."]);
+      } else {
+        avisos.push(["bad", "El servicio de Accesibilidad está caído: el filtro visual (Capa 3) no está funcionando."]);
+      }
     }
     if (salud && salud !== "OK" && salud !== "SIN_DATOS") {
       avisos.push(["warn", "El túnel DNS reporta «" + salud + "»: el filtro de dominios puede no estar filtrando."]);

@@ -985,6 +985,8 @@ object FirebaseDeviceSync {
                     // el reconciliador (AccessibilityManager, no la cadena de Settings).
                     "accessibilityRunning" to
                         com.ejemplo.locksuite.util.AccessibilityEnforcer.isServiceRunning(context),
+                    "accessibilityZombie" to
+                        com.ejemplo.locksuite.util.AccessibilityEnforcer.isZombie(context),
                     // Bloqueo de cambio de idioma: la defensa más barata contra la
                     // evasión por cambio de idioma del sistema.
                     "localeChangeBlocked" to policyManager.isLocaleChangeBlocked(),
@@ -1171,12 +1173,51 @@ object FirebaseDeviceSync {
             android.app.ApplicationExitInfo.REASON_OTHER -> "OTHER"
             else -> "REASON_${exit.reason}"
         }
+
+        var traceSnippet = ""
+        try {
+            exit.traceInputStream?.use { stream ->
+                val reader = java.io.BufferedReader(java.io.InputStreamReader(stream))
+                val sb = StringBuilder()
+                var lines = 0
+                var line = reader.readLine()
+                while (line != null && lines < 35 && sb.length < 1500) {
+                    if (sb.isNotEmpty()) sb.append("\n")
+                    sb.append(line)
+                    lines++
+                    line = reader.readLine()
+                }
+                traceSnippet = sb.toString()
+            }
+        } catch (_: Throwable) { }
+
+        // Si ApplicationExitInfo no trajo traza (o falló el stream), consultar si
+        // LockSuiteApplication guardó una traza fatal antes de morir.
+        if (traceSnippet.isBlank()) {
+            try {
+                val saved = PrefsHelper.getMdmPrefs(context)
+                    .getString("last_fatal_crash_trace", null)
+                if (!saved.isNullOrBlank()) {
+                    traceSnippet = saved.take(1500)
+                }
+            } catch (_: Throwable) { }
+        }
+
+        var detail = exit.description?.take(250) ?: ""
+        if ((detail.isBlank() || detail.equals("crash", ignoreCase = true)) && traceSnippet.isNotBlank()) {
+            val firstLine = traceSnippet.lines().firstOrNull { it.isNotBlank() } ?: ""
+            detail = firstLine.take(250)
+        }
+
         val res = mutableMapOf<String, Any>(
             "lastExitReason" to reasonStr,
             "lastExitTimestamp" to exit.timestamp,
             "lastExitImportance" to exit.importance,
-            "lastExitDetail" to (exit.description?.take(250) ?: "")
+            "lastExitDetail" to detail
         )
+        if (traceSnippet.isNotBlank()) {
+            res["lastExitTrace"] = traceSnippet.take(1500)
+        }
         return res
     }
 

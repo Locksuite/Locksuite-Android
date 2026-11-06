@@ -153,7 +153,14 @@ object AccessibilityEnforcer {
                 val inSecure = secureServices.contains("com.ejemplo.locksuite/.service.LockSuiteAccessibilityService") ||
                     secureServices.contains("com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService")
                 if (!inSecure) return false
-                return com.ejemplo.locksuite.service.LockSuiteAccessibilityService.instance != null
+                val alive = com.ejemplo.locksuite.service.LockSuiteAccessibilityService.instance != null
+                if (!alive) {
+                    android.util.Log.w(
+                        TAG,
+                        "Accesibilidad en estado ZOMBIE: habilitada en Settings.Secure pero no enlazada por AMS (posible mCrashedServices tras reinicio/crash)"
+                    )
+                }
+                return alive
             }
         } catch (e: Exception) {
             android.util.Log.w(TAG, "AccessibilityManager falló, usando la preferencia: ${e.message}")
@@ -169,6 +176,29 @@ object AccessibilityEnforcer {
                 enabled.contains("com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService")
             inSecure && com.ejemplo.locksuite.service.LockSuiteAccessibilityService.instance != null
         } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * ¿Está el servicio en estado "ZOMBIE"?
+     *
+     * Ocurre cuando en `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` figura como habilitado
+     * (el switch visual en Ajustes está en "Activado"), pero Android AMS (AccessibilityManagerService)
+     * lo puso en su lista interna `mCrashedServices` tras un reinicio o crash del proceso.
+     * En ese estado el sistema se niega a re-enlazarlo hasta que el usuario lo desactive y
+     * vuelva a activar en Ajustes.
+     */
+    fun isZombie(context: Context): Boolean {
+        return try {
+            val secureServices = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: ""
+            val inSecure = secureServices.contains("com.ejemplo.locksuite/.service.LockSuiteAccessibilityService") ||
+                secureServices.contains("com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService")
+            inSecure && !isServiceRunning(context)
+        } catch (_: Exception) {
             false
         }
     }

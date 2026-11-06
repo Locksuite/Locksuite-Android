@@ -55,6 +55,7 @@ fun BlockAccessibilityScreen() {
     val context = LocalContext.current
     val alertDarkRed = Color(0xFF7B241C)
     val accentYellow = Color(0xFFF1C40F)
+    var isZombie by remember { mutableStateOf(com.ejemplo.locksuite.util.AccessibilityEnforcer.isZombie(context)) }
 
     // Verificar si el servicio está realmente corriendo (Settings.Secure + proceso vivo / instancia)
     fun isAccessibilityServiceEnabled(context: Context): Boolean {
@@ -85,6 +86,8 @@ fun BlockAccessibilityScreen() {
                     }
                     Toast.makeText(context, "Servicio de accesibilidad activado.", Toast.LENGTH_SHORT).show()
                     (context as? Activity)?.finish()
+                } else {
+                    isZombie = com.ejemplo.locksuite.util.AccessibilityEnforcer.isZombie(context)
                 }
                 delay(1000L)
             }
@@ -100,19 +103,19 @@ fun BlockAccessibilityScreen() {
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = LocaleManager.t("block_acc_title").uppercase(),
+            text = (if (isZombie) LocaleManager.t("block_acc_zombie_title") else LocaleManager.t("block_acc_title")).uppercase(),
             color = accentYellow,
-            fontSize = 22.sp,
+            fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center
         )
         
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
         
         Text(
-            text = LocaleManager.t("block_acc_desc"),
+            text = if (isZombie) LocaleManager.t("block_acc_zombie_desc") else LocaleManager.t("block_acc_desc"),
             color = Color.White,
-            fontSize = 16.sp,
+            fontSize = 15.sp,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 8.dp)
         )

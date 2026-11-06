@@ -2419,23 +2419,78 @@ Qué se descubrió y cómo funciona:
 
 ---
 
+**B.109 — TRAS REINICIAR EL CELULAR, LA ACCESIBILIDAD FIGURA INACTIVA ("ACCESSIBILITYRUNNING: FALSE") Y EL SWITCH EN AJUSTES ESTÁ "ACTIVADO" (ESTADO ZOMBIE / MCRASHEDSERVICES EN ANDROID AMS). [DIAGNOSTICADO A FONDO, RED DE CAPTURA FORENSE DE CRASH, DETECCIÓN ZOMBIE Y GUÍA AL USUARIO IMPLEMENTADAS Y VERIFICADAS EN TESTS (5/11/2026)]**
+
+Reporte del dueño: en el celular `058d4e4ac999401a` (Q-Tel Q1, Android 11 / API 30, teclado Nokia), al reiniciar el teléfono la app muestra que la accesibilidad no está activa, y hay que ir a los Ajustes del sistema, apagar el interruptor y volverlo a encender para que funcione.
+
+Diagnóstico forense y causa raíz comprobada a nivel de AOSP:
+1. **La cuarentena de AOSP (`mCrashedServices`):**
+   - En el código fuente de Android (`AccessibilityManagerService.java` y `AccessibilityUserState.java`), cuando el proceso de un servicio de accesibilidad sufre un crash no capturado (`REASON_CRASH`) o muere inesperadamente estando enlazado (`binderDied()`), el sistema operativo añade automáticamente el componente a una colección interna: `userState.mCrashedServices`.
+   - En el bucle de enlace de AMS (`manageServicesLocked`):
+     ```java
+     if (userState.getCrashedServicesLocked().contains(componentName)) {
+         continue; // ¡Omite el binding completamente!
+     }
+     ```
+   - Mientras el componente permanece en `mCrashedServices`, el sistema operativo **se niega a enlazar el servicio**, aunque en `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` siga listado y en la pantalla de Ajustes el switch figure visualmente como "Activado" (ON).
+   - Por diseño estricto de seguridad de Android para evitar bucles de reinicio del sistema, la **única** forma en que AOSP quita un componente de `mCrashedServices` sin reinstalar el paquete es cuando el usuario **apaga manualmente el switch en Ajustes** (lo que dispara `mCrashedServices.remove(componentName)`) y luego lo **vuelve a encender**.
+
+2. **Evidencia forense en la base de datos de Firebase:**
+   - En `058d4e4ac999401a` y en `809f004e7d9934c7` (ambos Q-Tel Q1 con MediaTek MT6761/65):
+     - `lastExitReason: "CRASH"`
+     - `lastExitImportance: 125` (`IMPORTANCE_FOREGROUND_SERVICE`, con `WatchdogForegroundService` corriendo)
+     - `accessibilityRunning: false`
+   - El relevamiento de los 29 dispositivos de la flota demostró que **el 100% de los Q-Tel Q1 que sufrieron un crash tenían `accessibilityRunning: false`**, mientras que los que salieron limpiamente o sufrieron ANR tenían `accessibilityRunning: true`.
+   - Tras el crash en el arranque, `WatchdogForegroundService` se reinició automáticamente por `START_STICKY`, pero AMS se negó a re-enlazar `LockSuiteAccessibilityService`.
+   - `AccessibilityEnforcer.isServiceRunning()` detectó que la instancia viva era `null` y que AMS no lo tenía en `getEnabledAccessibilityServiceList()`, reportando `accessibilityRunning: false` y disparando la pantalla roja de bloqueo y las notificaciones insistentes (`accNag`).
+
+3. **Deficiencia de diagnóstico previa en `FirebaseDeviceSync.kt`:**
+   - `FirebaseDeviceSync` solo leía `exit.description`. En crashes Java, Android 11 asigna la cadena literal `"crash"` a `exit.description`, ocultando la traza real del error.
+   - La traza completa residía en `exit.traceInputStream`, la cual no era leída.
+   - Tampoco existía un `Thread.UncaughtExceptionHandler` global que registrara excepciones fatales en hilos secundarios o corrutinas.
+
+Qué se implementó y solucionó:
+1. **Detección del estado Zombie (`AccessibilityEnforcer.isZombie(context)`):**
+   - Se identifica con exactitud cuando `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` contiene a LockSuite pero el servicio no está enlazado (`!isServiceRunning`).
+   - Se reporta a Firebase como `"accessibilityZombie" to isZombie(context)` en la sincronización del dispositivo.
+2. **Guía trilingüe contextual en la pantalla de emergencia (`BlockAccessibilityActivity.kt` y `LocaleManager.kt`):**
+   - Cuando se detecta el estado Zombie, la pantalla ya no muestra el mensaje genérico confuso de "active el servicio en Ajustes" (que hacía que el usuario encontrara el switch ya encendido y no supiera qué hacer).
+   - Muestra el aviso específico:
+     *"Android detuvo el servicio tras reiniciar el celular (en Ajustes figura como 'Activado', pero el sistema no lo está ejecutando). Para reactivarlo: 1. Toque 'Ir a Ajustes' abajo. 2. Busque LockSuite MDM y apague el interruptor. 3. Vuelva a encenderlo."* (con traducciones en español, inglés y hebreo).
+3. **Captura forense profunda de crashes (`FirebaseDeviceSync.kt`):**
+   - En `getLatestProcessExitInfoApi30()`, si el motivo es `CRASH` o `ANR`, se lee el stream `exit.traceInputStream` (hasta 35 líneas / 1500 caracteres), poblando `lastExitTrace` y resumiendo la primera línea de la excepción en `lastExitDetail`.
+   - Si el stream del sistema no está disponible, consulta la traza guardada por la aplicación (`last_fatal_crash_trace`).
+4. **Manejador global de crashes en `LockSuiteApplication.kt`:**
+   - Se instaló un `Thread.setDefaultUncaughtExceptionHandler` que captura cualquier excepción fatal en cualquier hilo o corrutina, formatea la traza completa, la escribe de forma síncrona en disco (`commit()`) respetando Direct Boot, y la delega al manejador original del sistema.
+5. **Visibilidad en el panel web (`celular.js`):**
+   - En la ficha del celular, si `accessibilityZombie` es true, el chip de Accesibilidad muestra `"detenida por sistema (zombie)"` con tooltip explicativo.
+   - Se añade un aviso prioritario en la cabecera explicando que el servicio quedó en cuarentena por el sistema y debe ciclarse (apagar y prender) en Ajustes.
+   - En "Última salida", si hay traza disponible (`lastExitTrace`), se despliega un bloque `<details>` con el stack trace completo legible con scroll.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**5/11 (tarde) — Antigravity: Bloqueo de Gemini en Google Mensajes vía Capa 3 y switch activado por defecto (B.108).**
+**5/11 (noche) — Antigravity: Diagnóstico del servicio de accesibilidad inactivo tras reiniciar (mCrashedServices), red de captura forense de crashes y guía al usuario en pantalla de bloqueo (B.109).**
 
 - **Pedidos del usuario:**
-  1. Revisar si la interacción con Gemini en Google Mensajes por RCS puede bloquearse sin romper nada más, analizando si usa dominios DNS dedicados o cómo se ve la pantalla.
-  2. Implementar un switch activado por defecto siempre llamado `"Bloqueo de gemini en mensajes"`.
-  3. Bloquear el ingreso a Gemini mediante rebote (Capa 3 / Accesibilidad), asegurando cero falsos positivos con contactos humanos llamados Gemini, conversaciones que discutan el tema, la bandeja de chats o los ajustes.
-  4. Sincronizar punta a punta (app, panel web, Cloud Functions, perfiles, RTDB).
-  5. Actualizar `LOCKSUITE_CONTEXTO_PARA_IA.md` y realizar commit explicativo.
-- **Qué se hizo:**
-  - Se confirmó que Gemini en Mensajes corre como bot RBM sobre Jibe Cloud (`*.jibe.google.com`) y Google APIs, por lo que bloquear por DNS rompería RCS para todos los chats legítimos.
-  - Se creó el motor funcional puro `GeminiMessagesPolicy.kt` con detección por firma estructural (ausencia de botones de llamada telefónica/Meet + título Gemini, hints "Preguntar a Gemini" / "Ask Gemini", IDs de penpal y pantalla de bienvenida con disclaimer legal).
-  - Se implementaron 13 unit tests en `GeminiMessagesPolicyTest.kt` cubriendo detección y ausencia de falsos positivos en chats normales, contactos humanos y bandeja principal.
-  - Se agregó el switch `"Bloqueo de gemini en mensajes"` activado por defecto en `PolicyManager.kt`, `EnrollmentProfiles.kt`, `DashboardActivity.kt`, `FirebaseDeviceSync.kt`, `CommandProcessor.kt`, `LockSuiteAccessibilityService.kt`, `admin-backend/functions/index.js`, `admin-backend/public/app.js`, `admin-backend/public/index.html` y `admin-backend/public/policies.js`.
-  - Se verificaron todos los scripts de sincronización (`check_profile_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `check_whitelist_sync.py`, `gen_policies_js.py --check`) con resultado 100% OK.
-  - Se ejecutó `.\gradlew.bat testDebugUnitTest` con resultado `BUILD SUCCESSFUL` (0 fallos).
+  1. Revisar el celular `058d4e4ac999401a` (`https://locksuite-nueva.web.app/celular.html?id=058d4e4ac999401a`) porque al reiniciarlo aparece que no está activa la accesibilidad, y hay que desactivarla y activarla en Ajustes del teléfono para que funcione.
+  2. Determinar la causa raíz del comportamiento.
+  3. Actualizar `LOCKSUITE_CONTEXTO_PARA_IA.md` (sección B agregando lo nuevo encontrado, sección C reemplazando con el resumen de la sesión).
+  4. Realizar commit explicativo con los cambios y su justificación.
+- **Qué se descubrió:**
+  - Extracción y análisis de los metadatos de `058d4e4ac999401a` en Firebase RTDB: es un `Q-Tel Q1` (MediaTek MT6761/65, Android 11 / API 30, modo teclado Nokia) corriendo la versión desactualizada 130 (`0.6.67`).
+  - El dispositivo registró `lastExitReason: "CRASH"` con `lastExitImportance: 125` (`IMPORTANCE_FOREGROUND_SERVICE`).
+  - Al cruzar los datos de los 29 dispositivos en Firebase, el 100% de los Q-Tel Q1 que sufrieron un crash tenían `accessibilityRunning: false`.
+  - En AOSP framework (`AccessibilityManagerService.java`), cuando un servicio de accesibilidad sufre un crash o muere inesperadamente (`binderDied`), el sistema lo confina en `mCrashedServices` para evitar bucles de reinicio. Mientras esté en esa lista, AMS se niega rotundamente a volver a enlazarlo aunque `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` mantenga el switch visualmente en "Activado".
+  - La única forma en que Android limpia `mCrashedServices` es cuando el usuario desactiva el switch en Ajustes y luego lo vuelve a activar.
+- **Qué se implementó y solucionó:**
+  - Se agregó `AccessibilityEnforcer.isZombie(context)` para detectar inequívocamente este estado (`inSecure && !isServiceRunning`) y se reporta en Firebase como `accessibilityZombie`.
+  - Se adaptó `BlockAccessibilityActivity.kt` y `LocaleManager.kt` para mostrar instrucciones exactas (en español, inglés y hebreo) cuando el servicio está en estado zombie, guiando al usuario a apagar y encender el switch en Ajustes en lugar de mostrar un confuso mensaje genérico.
+  - Se enriqueció `FirebaseDeviceSync.kt` (`getLatestProcessExitInfoApi30`) leyendo `exit.traceInputStream` y publicando `lastExitTrace` y `lastExitDetail` descriptivo en lugar del opaco `"crash"`.
+  - Se instaló un manejador global de crashes en `LockSuiteApplication.kt` que persiste el stack trace completo en disco antes de la muerte del proceso.
+  - Se actualizó el panel web (`celular.js`) para mostrar el chip `"detenida por sistema (zombie)"`, el aviso de acción correctiva y el visor del stack trace de la última salida.
+  - Se compilaron y ejecutaron las pruebas unitarias completas del proyecto con Gradle (`BUILD SUCCESSFUL`).
 

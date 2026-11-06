@@ -100,6 +100,12 @@ object LocaleManager {
         // Accessibility/Emergency
         "block_acc_title" to mapOf("es" to "Servicio de Accesibilidad Requerido", "en" to "Accessibility Service Required", "he" to "נדרש שירות נגישות"),
         "block_acc_desc" to mapOf("es" to "LockSuite MDM necesita que el Servicio de Accesibilidad esté habilitado para poder aplicar las políticas de seguridad y protección empresarial.\n\nPor favor, actívelo en Ajustes.", "en" to "LockSuite MDM needs the Accessibility Service to be enabled to apply enterprise security and protection policies.\n\nPlease enable it in Settings.", "he" to "LockSuite MDM צריך ששירות הנגישות יהיה פעיל כדי להחיל מדיניות אבטחה והגנה ארגונית.\n\nאנא הפעל אותו בהגדרות."),
+        "block_acc_zombie_title" to mapOf("es" to "Servicio detenido por el sistema", "en" to "Service halted by system", "he" to "שירות הופסק על ידי המערכת"),
+        "block_acc_zombie_desc" to mapOf(
+            "es" to "Android detuvo el servicio tras reiniciar el celular (en Ajustes figura como 'Activado', pero el sistema no lo está ejecutando).\n\nPara reactivarlo:\n1. Toque 'Ir a Ajustes' abajo.\n2. Busque LockSuite MDM y apague el interruptor.\n3. Vuelva a encenderlo.",
+            "en" to "Android halted the service after restarting the phone (it appears 'On' in Settings, but the system is not running it).\n\nTo reactivate:\n1. Tap 'Go to Settings' below.\n2. Find LockSuite MDM and turn the switch OFF.\n3. Turn it back ON.",
+            "he" to "מערכת אנדרואיד עצרה את השירות לאחר הפעלה מחדש (בהגדרות מופיע כ'מופעל', אך המערכת אינה מריצה אותו).\n\nלהפעלה מחדש:\n1. לחץ על 'עבור להגדרות' למטה.\n2. מצא את LockSuite MDM וכבה את המתג.\n3. הפעל אותו שוב."
+        ),
         "block_acc_btn" to mapOf("es" to "Ir a Ajustes", "en" to "Go to Settings", "he" to "עבור להגדרות"),
         "emerg_title" to mapOf("es" to "MENÚ DE EMERGENCIA MDM", "en" to "MDM EMERGENCY MENU", "he" to "תפריט חירום MDM"),
         // Corregido: executeFullPurge() nunca borra datos ni apps del usuario, solo

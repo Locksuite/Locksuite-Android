@@ -154,6 +154,11 @@ class LockSuiteApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // Red de seguridad forense: capturar excepciones no controladas antes de que
+        // maten el proceso, guardando el stack trace en disco para que el próximo arranque
+        // o sincronización con Firebase lo reporte al panel.
+        installGlobalCrashHandler()
+
         // 0. Motor de reglas DNS. Los objetos se construyen SIEMPRE (ver cabecera):
         //    son `lateinit` y medio proyecto los consulta. Lo que se difiere si el
         //    equipo todavía no se desbloqueó es leerlas del disco.
@@ -380,6 +385,39 @@ class LockSuiteApplication : Application() {
             packageReceiverRegistered = true
         } catch (e: Exception) {
             android.util.Log.w(TAG, "No se pudo registrar el receptor de instalaciones: ${e.message}")
+        }
+    }
+
+    /**
+     * Capturador de excepciones no controladas.
+     * Permite que cualquier error fatal en hilos secundarios o corrutinas deje su
+     * traza registrada en las preferencias antes de terminar el proceso, para que
+     * FirebaseDeviceSync la suba a Firebase y el panel la muestre en vez de un "crash" mudo.
+     */
+    private fun installGlobalCrashHandler() {
+        try {
+            val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                try {
+                    val sw = java.io.StringWriter()
+                    val pw = java.io.PrintWriter(sw)
+                    throwable.printStackTrace(pw)
+                    val stackTrace = sw.toString().take(2000)
+                    android.util.Log.e(TAG, "FATAL UNCAUGHT EXCEPTION on thread ${thread.name}: $stackTrace")
+                    if (isStorageUnlocked(this)) {
+                        try {
+                            com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+                                .edit()
+                                .putString("last_fatal_crash_trace", stackTrace)
+                                .putLong("last_fatal_crash_time", System.currentTimeMillis())
+                                .commit()
+                        } catch (_: Throwable) {}
+                    }
+                } catch (_: Throwable) {}
+                defaultHandler?.uncaughtException(thread, throwable)
+            }
+        } catch (e: Throwable) {
+            android.util.Log.w(TAG, "No se pudo instalar el manejador global de crashes: ${e.message}")
         }
     }
 }
