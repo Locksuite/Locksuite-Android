@@ -2514,7 +2514,7 @@ Qué se implementó y solucionó:
 
 ---
 
-**B.111 — DESDE EL PANEL NO SE PUEDE VER EL ERROR REAL DE UN CELULAR («NO ME ABRE…», «SE ME CORTÓ…»): HACÍA FALTA ALGO PARECIDO A TENERLO CONECTADO POR DEPURACIÓN USB, SIN MOLESTAR AL USUARIO, SIN GASTAR BATERÍA Y SIN QUE SE VEA NADA EN EL CELULAR. [IMPLEMENTADO Y VERIFICADO EN EL CONTENEDOR Y COMPILADO CON GRADLE (6/11/2026)]**
+**B.111 — DESDE EL PANEL NO SE PUEDE VER EL ERROR REAL DE UN CELULAR («NO ME ABRE…», «SE ME CORTÓ…»): HACÍA FALTA ALGO PARECIDO A TENERLO CONECTADO POR DEPURACIÓN USB, SIN MOLESTAR AL USUARIO, SIN GASTAR BATERÍA Y SIN QUE SE VEA NADA EN EL CELULAR. [IMPLEMENTADO, VERIFICADO EN EQUIPO REAL Y EN PRODUCCIÓN (6/11/2026)]**
 
 Pedido del dueño (5/11, 23:39): cuando un usuario escribe «no me abre…» o «se me cortó…», desde el panel no se sabe cuál fue el error real. Pidió «una especie de sistema para ver los errores en cada dispositivo (como tenerlos conectados en depuración USB)», sin molestar al usuario, sin consumir batería y sin que se vea nada en el celular, para poder mandarle el error a Claude y que diagnostique con exactitud. A las 23:42 pidió además que **no se toque el repo** porque Antigravity estaba trabajando en otra cosa: los cambios se entregaron como parche en un zip (ver `INSTRUCCIONES_ANTIGRAVITY_2026-11-06_DIAGNOSTICO_REMOTO.md`) y el dueño pedirá aplicarlos después.
 
@@ -2578,23 +2578,56 @@ Cada subida borra en la MISMA escritura la clave `seq-400` de cada renglón que 
 
 ---
 
+---
+
+**B.112 — ACCESIBILIDAD «ZOMBI» TRAS CRASH: CRASH FATAL EN `WatchdogForegroundService` POR WORKMANAGER NO INICIALIZADO (`IllegalStateException: WorkManager is not initialized properly`) [SOLUCIONADO Y COMPILADO CON GRADLE (6/11/2026)]**
+
+**Síntoma reportado (6/11, tarde):**
+En el celular de R shaul said (`058d4e4ac999401a`, Q-Tel Q1, Android 11), el panel web mostraba la advertencia roja: *"El servicio de Accesibilidad fue detenido por Android tras un reinicio/crash (en Ajustes del celular figura como Activado, pero el sistema no lo está ejecutando). Hay que desactivarlo y volverlo a activar en Ajustes del teléfono para que funcione."*
+
+**Causa raíz capturada por el nuevo sistema de diagnóstico remoto (B.111):**
+Al pedir el informe de diagnóstico desde el panel, el logcat forense reveló la causa exacta del crash de las 12:44:12:
+```text
+FATAL EXCEPTION: main
+Process: com.ejemplo.locksuite, PID: 1460
+java.lang.RuntimeException: Unable to create service com.ejemplo.locksuite.service.WatchdogForegroundService: 
+java.lang.IllegalStateException: WorkManager is not initialized properly. 
+You have explicitly disabled WorkManagerInitializer in your manifest, have not manually called WorkManager#initialize at this point, 
+or your Application does not implement Configuration.Provider.
+```
+1. `WatchdogForegroundService.kt` llamaba directamente en su `onCreate()` a `scheduleWorkManagerWatchdog()`, el cual invocaba `WorkManager.getInstance(this)` sin ninguna guarda de Direct Boot (`isStorageUnlocked`) y **sin un bloque `try-catch`**.
+2. En arranques antes de desbloqueo o en dispositivos MediaTek donde los servicios se instancian antes de que `InitializationProvider` de `androidx.startup` complete, `WorkManager.getInstance()` lanzaba `IllegalStateException`.
+3. Al estrellarse el servicio durante `onCreate()`, el hilo principal moría (`FATAL EXCEPTION`).
+4. En Android AOSP, cuando el proceso muere con un crash, `AccessibilityManagerService` (AMS) pone el servicio en su lista interna `mCrashedServices` y rehúsa enlazarlo en siguientes arranques del proceso, dejando la accesibilidad en estado "zombi".
+
+**Cómo se solucionó:**
+1. **Reactivación automática inmediata:** Se constató que al enviar una actualización OTA de LockSuite (`UPDATE_LOCKSUITE`), el gestor de paquetes de Android (`installPackageLI`) ejecuta `onPackageUpdateFinished` y **limpia automáticamente la lista `mCrashedServices` de AMS**, restableciendo la accesibilidad sin que el usuario tenga que ingresar a Ajustes.
+2. **Blindaje de inicialización en `LockSuiteApplication.kt`:** Implementó `androidx.work.Configuration.Provider` para permitir inicialización bajo demanda de WorkManager con logging configurado.
+3. **Protección en `WatchdogForegroundService.kt`:**
+   - Guarda `if (!LockSuiteApplication.isStorageUnlocked(this)) return` para no llamar a WorkManager en Direct Boot (la base de datos de Room no existe en almacenamiento cifrado).
+   - Bloque `try-catch (e: Throwable)` envolviendo toda la llamada a WorkManager con log en `DiagLog.w(...)`, garantizando que ninguna anomalía de WorkManager pueda tirar abajo el servicio de vigilancia ni el proceso.
+   - Reintento automático en el bucle de 20 s (`checkRunnable`): si en el arranque no se pudo programar el `WatchdogWorker`, se programa automáticamente en cuanto el usuario desbloquea el equipo.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**5/11 (noche) a 6/11 (madrugada) � Antigravity & Claude: Compatibilidad universal de Tienda Play con Google Play Store v53+ (Compose / Material 3 / Sheets IA, B.110) e integraci�n del Sistema de Diagn�stico y Registro de Errores Remoto por celular (B.111).**
+**6/11 (tarde) — Antigravity & Claude: Diagnóstico remoto en vivo, resolución del estado zombi de accesibilidad en R Shaul Said y blindaje de WorkManager en Watchdog (B.110, B.111, B.112).**
 
 - **Pedidos del usuario:**
-  1. Solucionar y verificar accesibilidad inactiva en el equipo de R Shaul Said ( 58d4e4ac999401a) (B.109: verificado 100% en equipo real).
-  2. Diagnosticar fallo en QM Elias (745f34cdf2e452a0) al instalar apps en Tienda Play (DiDi Rider) vs QM del due�o (7073099b55af5fd6).
-  3. Dise�ar e implementar soluci�n universal y robusta para cualquier versi�n de Google Play Store (B.110).
-  4. Agregar al panel web un sistema de diagn�stico remoto para ver los errores reales de cada dispositivo (�como tenerlos conectados por depuraci�n USB�) sin molestar al usuario, sin consumo de bater�a y sin mostrar nada en el celular (B.111).
-  5. Ejecutar despliegue completo (deploy_all.ps1) y actualizar la documentaci�n de contexto.
-- **Qu� se descubri� y diagnostic�:**
-  - **Google Play v53 (B.110):** Play Store v53 usa Jetpack Compose y despliega BottomSheets del Asistente de IA. Al cerrarla, la selecci�n posicional oprim�a la flecha atr�s de la Toolbar (	op=33), volviendo al feed de la tienda, donde "play" en OPEN_WORDS provocaba un falso positivo con "Google Play", abortando la instalaci�n.
-  - **Diagn�stico Remoto (B.111):** No existe depuraci�n USB a distancia sin ADB/READ_LOGS. Cada celular debe registrar sus propios eventos t�cnicos (DiagLog, DiagStore en almacenamiento protegido para funcionar en Arranque Directo) y subirlos enganchados en el latido existente sin crear procesos ni alarmas en segundo plano. Hay 178 e.printStackTrace() en el c�digo que se capturan envolviendo System.err con DiagErrTee.
-- **Qu� se implement� y solucion�:**
-  - **Play Store v53 (B.110):** Blindaje de Toolbar (TOOLBAR_TOP_DP = 68f, BAND_TOP_FRACTION = 0.08f), palabras de navegaci�n en FORBIDDEN_WORDS, descarte inteligente de BottomSheets (DISMISS_WORDS / paso 4b en LockSuiteAccessibilityService), eliminaci�n de "play" de OPEN_WORDS y !isStoreBranding, soporte de contentDescription largo en Compose y auto-recuperaci�n ante desorientaci�n.
-  - **Diagn�stico Remoto (B.111):** Paquete diag/ en Android (13 archivos: DiagLog, DiagStore, DiagSanitizer, DiagErrTee, DiagCollector, DiagUploader, etc.). Comandos COLLECT_DIAGNOSTICS (sin PIN) y SET_DIAGNOSTICS_UPLOAD (con PIN). Reglas en database.rules.json para deviceDiag/<id>. En la web: tarjeta �Registro de errores� en celular.html (diag_logic.js, diag_remoto.js) con filtros, solicitud de diagn�stico y bot�n para copiar informe formateado para Claude/IA. Borrado del registro al eliminar dispositivo en pp.js.
-  - **Compilaci�n y verificaci�n:** Pruebas unitarias de Gradle ejecutadas (BUILD SUCCESSFUL), compilaci�n release, despliegue a Firebase Hosting, Database y Functions, y sincronizaci�n con GitHub.
+  1. Diseñar un sistema de diagnóstico remoto pasivo para ver errores en cada dispositivo sin molestar al usuario ni gastar batería (B.111).
+  2. Resolver la accesibilidad caída ("zombi") en el equipo de R Shaul Said (`058d4e4ac999401a`) sin requerir que el usuario opere los Ajustes del celular (B.112).
+  3. Probar en vivo el diagnóstico remoto en el panel web.
+  4. Generar un informe completo con todos los errores y soluciones para revisión de Claude (`INFORME_ERRORES_Y_SOLUCIONES_2026-11-06.md`).
+  5. Ejecutar despliegue completo y actualizar documentación.
 
+- **Qué se descubrió y diagnosticó:**
+  - **Diagnóstico Remoto (B.111):** Integrado exitosamente en cliente Android (13 archivos en `com.ejemplo.locksuite.diag`) y panel web (`diag_logic.js`, `diag_remoto.js`, reglas RTDB). Probado en vivo en dispositivo `Yo` (`7073099b55af5fd6`) y en `R shaul said` (`058d4e4ac999401a`).
+  - **Accesibilidad Zombi en R Shaul Said (B.112):** La actualización OTA a la versión 142 limpió `mCrashedServices` en Android AMS y restauró la accesibilidad automáticamente (`accessibilityRunning: true`, `accessibilityZombie: false`).
+  - **Causa raíz del crash (B.112):** El logcat forense capturado por el nuevo diagnóstico reveló un crash en `WatchdogForegroundService.onCreate()` por `IllegalStateException: WorkManager is not initialized properly`.
+
+- **Qué se implementó y solucionó:**
+  - **WorkManager y Watchdog (B.112):** `LockSuiteApplication` ahora implementa `Configuration.Provider`. `WatchdogForegroundService` cuenta con guarda `isStorageUnlocked`, bloque `try-catch` y reintento diferido en su ciclo continuo de 20 segundos.
+  - **Compilación y verificación:** Pruebas unitarias de Gradle ejecutadas (`testDebugUnitTest`: BUILD SUCCESSFUL en 4m 49s, 0 errores, 0 fallas).

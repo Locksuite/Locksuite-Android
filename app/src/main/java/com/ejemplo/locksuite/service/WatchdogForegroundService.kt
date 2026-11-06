@@ -104,6 +104,7 @@ class WatchdogForegroundService : Service() {
     private var nagArmed = false
     /** Cuántos avisos van en esta racha. Solo para que el texto cambie en cada uno. */
     private var nagCount = 0
+    @Volatile private var workManagerScheduled = false
     private var accessibilityObserver: android.database.ContentObserver? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -326,6 +327,10 @@ class WatchdogForegroundService : Service() {
                 com.ejemplo.locksuite.util.CommandMailbox.ensureLiveChannel(applicationContext)
             } catch (e: Exception) {
                 e.printStackTrace()
+            }
+
+            if (!workManagerScheduled) {
+                scheduleWorkManagerWatchdog()
             }
 
             handler.postDelayed(this, 20000L)
@@ -648,19 +653,37 @@ class WatchdogForegroundService : Service() {
     }
 
     private fun scheduleWorkManagerWatchdog() {
-        val workRequest = PeriodicWorkRequestBuilder<WatchdogWorker>(15, TimeUnit.MINUTES)
-            .setConstraints(
-                Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
-                    .build()
+        if (workManagerScheduled) return
+        if (!com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(this)) {
+            com.ejemplo.locksuite.diag.DiagLog.w(
+                "watchdog",
+                "Arranque Directo: almacenamiento bloqueado, difiriendo programacion de WorkManager"
             )
-            .build()
-            
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "LockSuiteWatchdog",
-            ExistingPeriodicWorkPolicy.KEEP,
-            workRequest
-        )
+            return
+        }
+        try {
+            val workRequest = PeriodicWorkRequestBuilder<WatchdogWorker>(15, TimeUnit.MINUTES)
+                .setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
+                        .build()
+                )
+                .build()
+
+            WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                "LockSuiteWatchdog",
+                ExistingPeriodicWorkPolicy.KEEP,
+                workRequest
+            )
+            workManagerScheduled = true
+            com.ejemplo.locksuite.diag.DiagLog.i("watchdog", "WatchdogWorker programado exitosamente con WorkManager")
+        } catch (e: Throwable) {
+            com.ejemplo.locksuite.diag.DiagLog.w(
+                "watchdog",
+                "No se pudo programar el WatchdogWorker con WorkManager: ${e.message}"
+            )
+            android.util.Log.w("WatchdogForegroundService", "No se pudo programar el WatchdogWorker", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

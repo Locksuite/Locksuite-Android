@@ -16,6 +16,7 @@ import com.ejemplo.locksuite.dns.DomainRuleManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import androidx.work.Configuration
 
 /**
  * Punto de entrada del proceso.
@@ -70,7 +71,12 @@ import kotlinx.coroutines.launch
  * - **Nada en este método puede lanzar hacia afuera.** Es el punto de entrada del
  *   proceso entero: una excepción acá no rompe una función, mata la app.
  */
-class LockSuiteApplication : Application() {
+class LockSuiteApplication : Application(), Configuration.Provider {
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setMinimumLoggingLevel(android.util.Log.INFO)
+            .build()
 
     companion object {
         private const val TAG = "LockSuiteApplication"
