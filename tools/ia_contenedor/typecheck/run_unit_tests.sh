@@ -38,6 +38,9 @@ SUITES=(
   "com.ejemplo.locksuite.diag.DiagUploadPolicyTest|diag/DiagEvent.kt diag/DiagUploadPolicy.kt|diag/DiagUploadPolicyTest.kt"
   "com.ejemplo.locksuite.diag.DiagExitsAndLogcatTest|diag/DiagEvent.kt diag/DiagSanitizer.kt diag/DiagExits.kt diag/DiagLogcatParser.kt|diag/DiagExitsAndLogcatTest.kt"
   "com.ejemplo.locksuite.diag.StackTraceGrouperTest|diag/StackTraceGrouper.kt|diag/StackTraceGrouperTest.kt"
+  # 7/11/2026 (B.112) — autorreparación del zombi de accesibilidad y red para hilos de trabajo
+  "com.ejemplo.locksuite.util.ZombieHealPolicyTest|util/ZombieHealPolicy.kt|util/ZombieHealPolicyTest.kt"
+  "com.ejemplo.locksuite.util.CrashNetPolicyTest|util/CrashNetPolicy.kt|util/CrashNetPolicyTest.kt"
 )
 
 declare -A SEEN=()

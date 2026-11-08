@@ -82,7 +82,10 @@ class WatchdogForegroundService : Service() {
             // así que no hay nada que "esperar a confirmar".
             com.ejemplo.locksuite.util.AccessibilityEnforcer.resetDebounce()
             svc.handler.post {
-                svc.checkAccessibilityStatus()
+                // 7/11/2026 (B.112): en el hilo principal; una excepción acá mataba el proceso.
+                com.ejemplo.locksuite.util.Safe.guard("Watchdog.requestImmediateCheck") {
+                    svc.checkAccessibilityStatus()
+                }
                 // Re-armar el ciclo con el ritmo que corresponda al estado nuevo.
                 svc.handler.removeCallbacks(svc.enforcerRunnable)
                 svc.handler.postDelayed(svc.enforcerRunnable, ENFORCER_FAST_MS)
@@ -120,11 +123,19 @@ class WatchdogForegroundService : Service() {
      */
     private val nagRunnable = object : Runnable {
         override fun run() {
-            if (!shouldNag()) {
-                cancelNag()
+            // 7/11/2026 (B.112): cada paso con su red. Si `showAccessibilityNag()` lanzaba, además
+            // de matar el proceso el aviso no se volvía a encolar nunca (`nagArmed` quedaba en true).
+            val hayQueAvisar = try {
+                shouldNag()
+            } catch (t: Throwable) {
+                com.ejemplo.locksuite.util.Safe.report("Watchdog.shouldNag", t)
+                false
+            }
+            if (!hayQueAvisar) {
+                com.ejemplo.locksuite.util.Safe.guard("Watchdog.cancelNag") { cancelNag() }
                 return
             }
-            showAccessibilityNag()
+            com.ejemplo.locksuite.util.Safe.guard("Watchdog.showAccessibilityNag") { showAccessibilityNag() }
             // Se re-encola siempre acá, no desde el ciclo de 20 s del Watchdog: así el
             // ritmo del aviso es exactamente NAG_INTERVAL_MS y no queda a merced de
             // cuándo le toque correr al Watchdog.
@@ -167,6 +178,9 @@ class WatchdogForegroundService : Service() {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+            // 7/11/2026 (B.112) — Autorreparación del zombi (habilitada en Ajustes pero sin enlazar).
+            // Con la accesibilidad bien es una consulta al AccessibilityManager. Nunca lanza.
+            com.ejemplo.locksuite.util.AccessibilityZombieHealer.tick(applicationContext)
             val violada = com.ejemplo.locksuite.util.AccessibilityEnforcer.lastVerdict ==
                 com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.VIOLATED
             handler.postDelayed(this, if (violada) ENFORCER_FAST_MS else ENFORCER_IDLE_MS)
@@ -174,7 +188,22 @@ class WatchdogForegroundService : Service() {
     }
 
     private val checkRunnable = object : Runnable {
+        /**
+         * 7/11/2026 (B.112): el ciclo se re-encola en un `finally`. Antes el `postDelayed` era la
+         * última línea del cuerpo, así que una excepción en cualquier paso, además de matar el
+         * proceso, cortaba para siempre el latido, el arranque protegido y la vigilancia de la VPN.
+         */
         override fun run() {
+            try {
+                runCycle()
+            } catch (t: Throwable) {
+                com.ejemplo.locksuite.util.Safe.report("Watchdog.checkRunnable", t)
+            } finally {
+                handler.postDelayed(this, 20000L)
+            }
+        }
+
+        private fun runCycle() {
             // Arranque protegido: liberar la red si el filtro ya está listo, o si venció
             // la ventana de seguridad. Ver util/BootGate.kt.
             try {
@@ -332,8 +361,6 @@ class WatchdogForegroundService : Service() {
             if (!workManagerScheduled) {
                 scheduleWorkManagerWatchdog()
             }
-
-            handler.postDelayed(this, 20000L)
         }
     }
 
@@ -354,6 +381,10 @@ class WatchdogForegroundService : Service() {
         } catch (e: Exception) {
             startForeground(NOTIFICATION_ID, buildNotification())
         }
+        // 7/11/2026 (B.112) — si este proceso nació con el equipo bloqueado, completar YA la
+        // inicialización (Firebase, idioma, etc.) en vez de esperar a ACTION_USER_UNLOCKED.
+        // Ver LockSuiteApplication.ensureUnlockedInit.
+        com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(this, "Watchdog creado")
         if (com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)) {
             stopSelf()
             return
@@ -371,7 +402,10 @@ class WatchdogForegroundService : Service() {
                 // accesibilidad, incluidas las intermedias de una transición. Por eso NO
                 // se salta el antirrebote: se limita a despertar la revisión, y quien
                 // decide si el estado cambió de verdad es el reconciliador.
-                checkAccessibilityStatus()
+                // 7/11/2026 (B.112): con red. Este aviso llega justo en el arranque y en cada
+                // transición, que es cuando el DevicePolicyManager más falla, y una excepción
+                // acá mataba el proceso —con la accesibilidad recién enlazada—.
+                com.ejemplo.locksuite.util.Safe.guard("Watchdog.onChange") { checkAccessibilityStatus() }
                 // Re-armar el ciclo con el ritmo que corresponda al estado nuevo.
                 handler.removeCallbacks(enforcerRunnable)
                 handler.postDelayed(enforcerRunnable, 1_500L)
@@ -687,7 +721,13 @@ class WatchdogForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)) {
+        val purgado = try {
+            com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)
+        } catch (t: Throwable) {
+            com.ejemplo.locksuite.util.Safe.report("Watchdog.onStartCommand", t)
+            false
+        }
+        if (purgado) {
             stopSelf()
             return START_NOT_STICKY
         }

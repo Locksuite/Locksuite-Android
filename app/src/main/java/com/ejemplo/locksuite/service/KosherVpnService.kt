@@ -462,6 +462,9 @@ class KosherVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        // 7/11/2026 (B.112): la VPN siempre activa la arranca el sistema al desbloquear; si el
+        // proceso nació bloqueado, completar la inicialización. Ver LockSuiteApplication.
+        com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(this, "VPN creada")
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         // Cargar la lista de bloqueo de anuncios de forma asíncrona al iniciar
         AdBlocker.loadAsync(applicationContext)
@@ -1309,7 +1312,15 @@ class KosherVpnService : VpnService() {
                     android.util.Log.i("KosherVPN", "Cambio la red fisica por defecto; reestableciendo tunel VPN.")
                     // ARREGLO 1/9/2026 (V-3): el handle se anota SOLO si el
                     // reestablecimiento efectivamente ocurrió o quedó agendado.
-                    if (restartVpn()) {
+                    // 7/11/2026 (B.112): este callback corre en el ConnectivityThread (un hilo CON
+                    // Looper): una excepción acá mataba el proceso. Ver util/CrashNetPolicy.kt.
+                    val reestablecido = try {
+                        restartVpn()
+                    } catch (t: Throwable) {
+                        com.ejemplo.locksuite.util.Safe.report("vpn.onAvailable", t)
+                        false
+                    }
+                    if (reestablecido) {
                         lastNetworkHandle = handle
                     }
                 }

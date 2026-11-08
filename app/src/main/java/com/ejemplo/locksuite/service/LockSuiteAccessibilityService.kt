@@ -287,9 +287,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var lastImageScrollAt = 0L
 
     private val whatsappScanRunnable = Runnable {
-        val f = flags()
-        if (f.waStatus || f.waChannels) {
-            scanForUpdatesTab(f.waStatus, f.waChannels)
+        // 7/11/2026 (B.112): hilo principal; una excepción acá mataba el proceso con el servicio enlazado.
+        com.ejemplo.locksuite.util.Safe.guard("a11y.whatsappScan") {
+            val f = flags()
+            if (f.waStatus || f.waChannels) {
+                scanForUpdatesTab(f.waStatus, f.waChannels)
+            }
         }
     }
 
@@ -501,18 +504,21 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private val updateTickRunnable = object : Runnable {
         override fun run() {
-            val ctx = applicationContext
-            val pkg = UpdateFlowManager.currentPackage(ctx)
-            // B.97: solo la ruta de Google Play tiene ciclo; la de la Tienda no toca la pantalla.
-            if (pkg.isNullOrBlank() || !UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
-                return   // sin re-encolar: el flujo terminó (o no es de Google Play)
+            // 7/11/2026 (B.112): hilo principal; una excepción acá mataba el proceso con el servicio enlazado.
+            com.ejemplo.locksuite.util.Safe.guard("a11y.updateTick") {
+                val ctx = applicationContext
+                val pkg = UpdateFlowManager.currentPackage(ctx)
+                // B.97: solo la ruta de Google Play tiene ciclo; la de la Tienda no toca la pantalla.
+                if (pkg.isNullOrBlank() || !UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
+                    return   // sin re-encolar: el flujo terminó (o no es de Google Play)
+                }
+                try {
+                    scanAndAct(pkg)
+                } catch (e: Exception) {
+                    Log.w(TAG, "tick de actualización: ${e.message}")
+                }
+                mainHandler.postDelayed(this, UPDATE_TICK_MS)
             }
-            try {
-                scanAndAct(pkg)
-            } catch (e: Exception) {
-                Log.w(TAG, "tick de actualización: ${e.message}")
-            }
-            mainHandler.postDelayed(this, UPDATE_TICK_MS)
         }
     }
 
@@ -533,6 +539,32 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         // 6/11/2026 (B.110): rastro para el panel de que el servicio se enlazó.
         com.ejemplo.locksuite.diag.DiagLog.i("a11y", "Servicio de accesibilidad conectado")
+        // 7/11/2026 (B.112) — LA CARRERA DEL ARRANQUE. Al desbloquear, Android enlaza este
+        // servicio ANTES de mandar ACTION_USER_UNLOCKED: si el proceso nació con el equipo
+        // bloqueado, a esta altura todavía no corrió la inicialización completa (Firebase,
+        // idioma, receptores…). Se la completa acá. Ver LockSuiteApplication.ensureUnlockedInit.
+        com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(this, "servicio de accesibilidad conectado")
+        connectServiceWithRetry(1)
+    }
+
+    /**
+     * 7/11/2026 (B.112) — red de seguridad de la conexión. Una excepción en `onServiceConnected`
+     * mataba el proceso EN EL MOMENTO MISMO en que Android acababa de enlazar el servicio: la
+     * receta exacta del zombi. Ahora se anota y se reintenta (3 intentos, cada 3 s); mientras no
+     * se complete, `onAccessibilityEvent` sale temprano porque `overlayManager` no existe.
+     */
+    private fun connectServiceWithRetry(intento: Int) {
+        try {
+            connectService()
+        } catch (t: Throwable) {
+            com.ejemplo.locksuite.util.Safe.report("a11y.onServiceConnected (intento $intento)", t)
+            if (intento < 3) {
+                mainHandler.postDelayed({ connectServiceWithRetry(intento + 1) }, 3_000L)
+            }
+        }
+    }
+
+    private fun connectService() {
         // LockSuite purgado: el equipo ya fue liberado y la app está por desinstalarse.
         // No se arranca nada y el servicio se saca solo de la lista de activos. La marca
         // la ponen DeviceRelease/EmergencyActivity (locksuite_purged).
@@ -973,8 +1005,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var lastScrollPkg: String? = null
 
     private val strictScrollSettleRunnable = Runnable {
-        overlayManager.setStrictCover(null)
-        lastScrollPkg?.let { handleImageBlocking(it) }
+        // 7/11/2026 (B.112): hilo principal; una excepción acá mataba el proceso con el servicio enlazado.
+        com.ejemplo.locksuite.util.Safe.guard("a11y.strictScrollSettle") {
+            overlayManager.setStrictCover(null)
+            lastScrollPkg?.let { handleImageBlocking(it) }
+        }
     }
 
     private fun handleScrollEvent(ev: AccessibilityEvent, packageName: String, f: Flags) {
@@ -1574,26 +1609,29 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         listOf(250L, 800L, 1800L).forEach { delay ->
             val retryRunnable = object : Runnable {
                 override fun run() {
-                    webViewRetryRunnables.remove(this)
-                    if (webViewBlockInProgress) return
-                    val current = rootInActiveWindow ?: return
-                    val currentPkg = current.packageName?.toString() ?: run {
-                        current.recycle()
-                        return
-                    }
-                    val relevantPkg = currentPkg == packageName ||
-                                      WEBVIEW_PROVIDER_PACKAGES.contains(currentPkg)
+                    // 7/11/2026 (B.112): hilo principal; una excepción acá mataba el proceso con el servicio enlazado.
+                    com.ejemplo.locksuite.util.Safe.guard("a11y.webViewRetry") {
+                        webViewRetryRunnables.remove(this)
+                        if (webViewBlockInProgress) return
+                        val current = rootInActiveWindow ?: return
+                        val currentPkg = current.packageName?.toString() ?: run {
+                            current.recycle()
+                            return
+                        }
+                        val relevantPkg = currentPkg == packageName ||
+                                          WEBVIEW_PROVIDER_PACKAGES.contains(currentPkg)
 
-                    if (!relevantPkg) {
-                        current.recycle()
-                        return
-                    }
+                        if (!relevantPkg) {
+                            current.recycle()
+                            return
+                        }
 
-                    val found = containsWebView(current)
-                    current.recycle()
-                    if (found) {
-                        Log.w(TAG, "🚫 WebView detectado con retraso de ${delay}ms para $packageName")
-                        triggerBlock(packageName)
+                        val found = containsWebView(current)
+                        current.recycle()
+                        if (found) {
+                            Log.w(TAG, "🚫 WebView detectado con retraso de ${delay}ms para $packageName")
+                            triggerBlock(packageName)
+                        }
                     }
                 }
             }
@@ -2264,50 +2302,53 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private val captiveTickRunnable = object : Runnable {
         override fun run() {
-            if (captiveOpenedAt == 0L) return  // sin re-encolar: la ventana ya no está
-            val ahora = SystemClock.elapsedRealtime()
-            val abierta = ahora - captiveOpenedAt
-            val inactiva = ahora - captiveLastActivityAt
+            // 7/11/2026 (B.112): hilo principal; una excepción acá mataba el proceso con el servicio enlazado.
+            com.ejemplo.locksuite.util.Safe.guard("a11y.captiveTick") {
+                if (captiveOpenedAt == 0L) return  // sin re-encolar: la ventana ya no está
+                val ahora = SystemClock.elapsedRealtime()
+                val abierta = ahora - captiveOpenedAt
+                val inactiva = ahora - captiveLastActivityAt
 
-            // 1. La red validó: la ventana ya no tiene razón de existir.
-            //
-            //    Nota para quien venga después: Android hace esto solo. El propio
-            //    `CaptivePortalLoginActivity` registra un NetworkCallback y en
-            //    `onCapabilitiesChanged`, si la red tiene NET_CAPABILITY_VALIDATED,
-            //    llama a `done(Result.DISMISSED)` y se cierra. Esta palanca es un
-            //    respaldo, no el mecanismo principal — no le agregues agresividad.
-            //
-            //    En portales de aviones (KLM, Viasat, etc.) la red puede validar antes de
-            //    que el usuario termine de aceptar términos o completar el formulario
-            //    de la segunda página ("se abre otra página"). Por eso:
-            //    - Medimos la gracia DESDE que validó (captiveValidatedAt), no desde que abrió.
-            //    - Exigimos además que el usuario no esté interactuando activamente
-            //      (al menos 10 segundos sin tocar la pantalla).
-            val validada = isNetworkValidated()
-            if (validada) {
-                if (captiveValidatedAt == 0L) {
-                    captiveValidatedAt = ahora
+                // 1. La red validó: la ventana ya no tiene razón de existir.
+                //
+                //    Nota para quien venga después: Android hace esto solo. El propio
+                //    `CaptivePortalLoginActivity` registra un NetworkCallback y en
+                //    `onCapabilitiesChanged`, si la red tiene NET_CAPABILITY_VALIDATED,
+                //    llama a `done(Result.DISMISSED)` y se cierra. Esta palanca es un
+                //    respaldo, no el mecanismo principal — no le agregues agresividad.
+                //
+                //    En portales de aviones (KLM, Viasat, etc.) la red puede validar antes de
+                //    que el usuario termine de aceptar términos o completar el formulario
+                //    de la segunda página ("se abre otra página"). Por eso:
+                //    - Medimos la gracia DESDE que validó (captiveValidatedAt), no desde que abrió.
+                //    - Exigimos además que el usuario no esté interactuando activamente
+                //      (al menos 10 segundos sin tocar la pantalla).
+                val validada = isNetworkValidated()
+                if (validada) {
+                    if (captiveValidatedAt == 0L) {
+                        captiveValidatedAt = ahora
+                    }
+                    val validadaTiempo = ahora - captiveValidatedAt
+                    val tiempoSinInteraccion = ahora - captiveLastActivityAt
+                    if (validadaTiempo >= CaptivePortalPolicy.VALIDATED_GRACE_MS && tiempoSinInteraccion >= 10_000L) {
+                        closeCaptivePortal("la red ya está conectada")
+                        return
+                    }
+                } else {
+                    captiveValidatedAt = 0L
                 }
-                val validadaTiempo = ahora - captiveValidatedAt
-                val tiempoSinInteraccion = ahora - captiveLastActivityAt
-                if (validadaTiempo >= CaptivePortalPolicy.VALIDATED_GRACE_MS && tiempoSinInteraccion >= 10_000L) {
-                    closeCaptivePortal("la red ya está conectada")
+                // 2. Ventana abandonada: nadie la tocó en todo ese rato.
+                if (inactiva >= CaptivePortalPolicy.IDLE_CLOSE_MS) {
+                    closeCaptivePortal("la ventana quedó abierta sin usarse")
                     return
                 }
-            } else {
-                captiveValidatedAt = 0L
+                // 3. Techo absoluto, pase lo que pase.
+                if (abierta >= CaptivePortalPolicy.MAX_OPEN_MS) {
+                    closeCaptivePortal("se agotó el tiempo de inicio de sesión")
+                    return
+                }
+                mainHandler.postDelayed(this, CaptivePortalPolicy.TICK_MS)
             }
-            // 2. Ventana abandonada: nadie la tocó en todo ese rato.
-            if (inactiva >= CaptivePortalPolicy.IDLE_CLOSE_MS) {
-                closeCaptivePortal("la ventana quedó abierta sin usarse")
-                return
-            }
-            // 3. Techo absoluto, pase lo que pase.
-            if (abierta >= CaptivePortalPolicy.MAX_OPEN_MS) {
-                closeCaptivePortal("se agotó el tiempo de inicio de sesión")
-                return
-            }
-            mainHandler.postDelayed(this, CaptivePortalPolicy.TICK_MS)
         }
     }
 
@@ -2776,8 +2817,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     // Bloqueo de Ofertas en Mercado Pago
     // ──────────────────────────────────────────────
     private val mercadoPagoScanRunnable = Runnable {
-        if (flags().mpOffers) {
-            scanForMercadoPagoOffers()
+        // 7/11/2026 (B.112): hilo principal; una excepción acá mataba el proceso con el servicio enlazado.
+        com.ejemplo.locksuite.util.Safe.guard("a11y.mercadoPagoScan") {
+            if (flags().mpOffers) {
+                scanForMercadoPagoOffers()
+            }
         }
     }
 
@@ -3017,7 +3061,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private val GEMINI_BACKOFF_MS = 2500L
 
     private val geminiMessagesScanRunnable = Runnable {
-        scanForGeminiMessages()
+        // 7/11/2026 (B.112): hilo principal; una excepción acá mataba el proceso con el servicio enlazado.
+        com.ejemplo.locksuite.util.Safe.guard("a11y.geminiMessagesScan") {
+            scanForGeminiMessages()
+        }
     }
 
     private fun handleGeminiMessagesBlocking(eventType: Int) {
@@ -4215,6 +4262,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        // 7/11/2026 (B.112): con red; el cuerpo original quedó en handleUnbind().
+        return try {
+            handleUnbind(intent)
+        } catch (t: Throwable) {
+            com.ejemplo.locksuite.util.Safe.report("a11y.onUnbind", t)
+            false
+        }
+    }
+
+    private fun handleUnbind(intent: Intent?): Boolean {
         com.ejemplo.locksuite.diag.DiagLog.w("a11y", "Servicio de accesibilidad desvinculado (onUnbind)")
         if (instance === this) instance = null
         val appCtx = applicationContext
@@ -4235,6 +4292,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // 7/11/2026 (B.112): con red; el cuerpo original quedó en handleDestroy().
+        com.ejemplo.locksuite.util.Safe.guard("a11y.onDestroy") { handleDestroy() }
+    }
+
+    private fun handleDestroy() {
         com.ejemplo.locksuite.diag.DiagLog.w("a11y", "Servicio de accesibilidad destruido (onDestroy)")
         if (instance === this) instance = null
         stopCaptiveWatch()

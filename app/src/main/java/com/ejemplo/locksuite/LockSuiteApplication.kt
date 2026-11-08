@@ -113,6 +113,37 @@ class LockSuiteApplication : Application(), Configuration.Provider {
         }
 
         /**
+         * 7/11/2026 (B.112) — LA CARRERA DEL ARRANQUE. Llamarla al principio de todo punto de
+         * entrada que Android puede ejecutar en este proceso (servicio de accesibilidad,
+         * Watchdog, VPN, BootReceiver, FCM). Idempotente, barata y nunca lanza.
+         *
+         * Por qué hace falta: `BootReceiver` es `directBootAware` y escucha
+         * `LOCKED_BOOT_COMPLETED`, así que en cada encendido Android puede crear este proceso
+         * con el equipo TODAVÍA BLOQUEADO. En ese proceso (1) Android no instala los
+         * `ContentProvider` que no son `directBootAware` —entre ellos el de `androidx.startup`,
+         * que inicializa WorkManager, y el de Firebase— y (2) `onCreate()` difiere toda la
+         * inicialización hasta `ACTION_USER_UNLOCKED`. Al desbloquear, ese MISMO proceso sigue
+         * vivo, y Android le enlaza el servicio de accesibilidad ANTES de mandar
+         * `ACTION_USER_UNLOCKED` (en `UserController`, el desbloqueo de los servicios del sistema
+         * —`AccessibilityManagerService.onUnlockUser()`— corre antes de `finishUserUnlocked()`,
+         * que es el que manda el broadcast). Resultado: componentes que corren sin Firebase, sin
+         * idioma y sin el resto de `initializeUnlocked()`. El crash de WorkManager del 6/11 en
+         * `WatchdogForegroundService.onCreate()` fue UNA consecuencia de esto; cualquier otra
+         * dependencia de esa inicialización puede ser la siguiente.
+         *
+         * Con esto, el primero que llega después del desbloqueo hace la inicialización completa,
+         * sea quien sea, y los demás la encuentran hecha.
+         */
+        fun ensureUnlockedInit(context: Context, origen: String) {
+            try {
+                val app = context.applicationContext as? LockSuiteApplication ?: return
+                app.runUnlockedInitOnce(origen)
+            } catch (t: Throwable) {
+                android.util.Log.w(TAG, "ensureUnlockedInit($origen): ${t.message}")
+            }
+        }
+
+        /**
          * Carga las reglas DNS si todavía no se cargaron y el almacenamiento está
          * disponible. Idempotente y segura de llamar desde cualquier lado.
          *
@@ -154,8 +185,22 @@ class LockSuiteApplication : Application(), Configuration.Provider {
      * Arranque Directo. Se guarda en un campo para poder darlo de baja una vez que
      * hizo su trabajo.
      */
-    private var unlockReceiver: BroadcastReceiver? = null
+    @Volatile private var unlockReceiver: BroadcastReceiver? = null
     private var packageReceiverRegistered = false
+
+    /**
+     * 7/11/2026 (B.112): `initializeUnlocked()` corre UNA sola vez por proceso. Ver
+     * `ensureUnlockedInit`. `Done` se lee sin candado (camino rápido); `Started` solo adentro
+     * del candado, y es lo que corta una reentrada del MISMO hilo (el candado de la JVM es
+     * reentrante). Un SEGUNDO hilo que llega mientras otro inicializa espera a que termine, así
+     * nadie sigue de largo sin Firebase.
+     */
+    private val unlockedInitLock = Any()
+    @Volatile private var unlockedInitDone = false
+    private var unlockedInitStarted = false
+
+    /** Marcas de tiempo de las excepciones de hilos de trabajo atrapadas sin matar el proceso. */
+    private val swallowedCrashes = ArrayList<Long>()
 
     override fun onCreate() {
         super.onCreate()
@@ -185,10 +230,49 @@ class LockSuiteApplication : Application(), Configuration.Provider {
                     "Se difiere la inicialización hasta que el usuario desbloquee."
             )
             registerUnlockReceiver()
+            // 7/11/2026 (B.112) — re-chequeo. Si el desbloqueo ocurrió entre la consulta de arriba
+            // y el registro del receptor, `ACTION_USER_UNLOCKED` ya se mandó y no va a volver a
+            // llegar: este proceso se quedaba para siempre sin Firebase ni el resto de la
+            // inicialización (el equipo figuraba desconectado en el panel hasta reiniciarse).
+            if (isStorageUnlocked(this)) {
+                runUnlockedInitOnce("re-chequeo tras registrar el receptor de desbloqueo")
+            }
             return
         }
 
-        initializeUnlocked()
+        runUnlockedInitOnce("onCreate")
+    }
+
+    /**
+     * Corre `initializeUnlocked()` una sola vez por proceso, y solo con el almacenamiento ya
+     * desbloqueado. La llaman `onCreate()`, el receptor de desbloqueo y `ensureUnlockedInit()`.
+     */
+    private fun runUnlockedInitOnce(origen: String) {
+        if (unlockedInitDone) return
+        if (!isStorageUnlocked(this)) return
+        synchronized(unlockedInitLock) {
+            if (unlockedInitStarted) return
+            unlockedInitStarted = true
+            try {
+                unlockReceiver?.let { r ->
+                    try {
+                        unregisterReceiver(r)
+                    } catch (ignored: Exception) {
+                    }
+                    unlockReceiver = null
+                }
+                if (origen != "onCreate") {
+                    com.ejemplo.locksuite.diag.DiagLog.i(
+                        "boot", "Proceso nacido con el equipo bloqueado: inicialización completa disparada por $origen"
+                    )
+                }
+                initializeUnlocked()
+            } catch (t: Throwable) {
+                com.ejemplo.locksuite.util.Safe.report("initializeUnlocked ($origen)", t)
+            } finally {
+                unlockedInitDone = true
+            }
+        }
     }
 
     /**
@@ -205,12 +289,9 @@ class LockSuiteApplication : Application(), Configuration.Provider {
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context, intent: Intent) {
                     android.util.Log.i(TAG, "Usuario desbloqueado: completando la inicialización diferida.")
-                    try {
-                        unregisterReceiver(this)
-                    } catch (ignored: Exception) {
-                    }
-                    unlockReceiver = null
-                    initializeUnlocked()
+                    // Desregistra el receptor adentro (B.112): puede haberla corrido antes otro
+                    // componente vía ensureUnlockedInit(), y entonces acá no hace nada.
+                    runUnlockedInitOnce("ACTION_USER_UNLOCKED")
                 }
             }
             val filter = IntentFilter(Intent.ACTION_USER_UNLOCKED)
@@ -353,6 +434,10 @@ class LockSuiteApplication : Application(), Configuration.Provider {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+
+        // 8. (7/11/2026, B.112) Autorreparación de la accesibilidad «zombi»: si el proceso
+        //    anterior murió en medio de un ciclo del ajuste, reponer el servicio YA.
+        com.ejemplo.locksuite.util.AccessibilityZombieHealer.onProcessStart(this)
     }
 
     /**
@@ -410,6 +495,11 @@ class LockSuiteApplication : Application(), Configuration.Provider {
         try {
             val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                // 7/11/2026 (B.112) — RED PARA HILOS DE TRABAJO. Una excepción en una corrutina,
+                // un ejecutor o un hilo suelto SIN Looper ya no mata el proceso: se anota y la
+                // tarea se pierde. El hilo principal y los hilos con Looper siguen muriendo como
+                // antes, a propósito. Las reglas y el porqué están en util/CrashNetPolicy.kt.
+                if (trySwallowWorkerCrash(thread, throwable)) return@setDefaultUncaughtExceptionHandler
                 // 6/11/2026 (B.110): primero al registro de diagnóstico (que sí anda en Arranque
                 // Directo, a diferencia de las preferencias de abajo). No lanza.
                 com.ejemplo.locksuite.diag.DiagLog.fatal(thread, throwable)
@@ -433,6 +523,39 @@ class LockSuiteApplication : Application(), Configuration.Provider {
             }
         } catch (e: Throwable) {
             android.util.Log.w(TAG, "No se pudo instalar el manejador global de crashes: ${e.message}")
+        }
+    }
+
+    /** true = la excepción se anotó y el proceso sigue vivo. Nunca lanza. */
+    private fun trySwallowWorkerCrash(thread: Thread?, throwable: Throwable): Boolean {
+        return try {
+            val main = android.os.Looper.getMainLooper().thread
+            val isMain = thread == null || thread === main
+            // Solo se puede preguntar por el Looper del hilo ACTUAL. Si el manejador corre en
+            // otro hilo que el que falló (no debería), se asume que tiene Looper: no se traga.
+            val hasLooper = thread !== Thread.currentThread() || android.os.Looper.myLooper() != null
+            val now = android.os.SystemClock.elapsedRealtime()
+            val enVentana = synchronized(swallowedCrashes) {
+                swallowedCrashes.removeAll { now - it >= com.ejemplo.locksuite.util.CrashNetPolicy.BURST_WINDOW_MS }
+                com.ejemplo.locksuite.util.CrashNetPolicy.countInWindow(swallowedCrashes, now)
+            }
+            val swallow = com.ejemplo.locksuite.util.CrashNetPolicy.shouldSwallow(
+                isMainThread = isMain,
+                threadHasLooper = hasLooper,
+                isFatalVmError = com.ejemplo.locksuite.util.CrashNetPolicy.isFatalVmError(throwable),
+                swallowedInWindow = enVentana,
+            )
+            if (!swallow) return false
+            synchronized(swallowedCrashes) { swallowedCrashes.add(now) }
+            com.ejemplo.locksuite.diag.DiagLog.e(
+                "crash-net",
+                "Excepción no atrapada en el hilo de trabajo '${thread?.name}': se anotó y el proceso SIGUE VIVO (B.112)",
+                throwable
+            )
+            android.util.Log.e(TAG, "Excepción atrapada en hilo de trabajo '${thread?.name}' (proceso vivo)", throwable)
+            true
+        } catch (_: Throwable) {
+            false
         }
     }
 }

@@ -7,6 +7,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 7/11/2026 (B.112): NO lo concede Android a una app común. Se declara para que el
+         `pm grant ... WRITE_SECURE_SETTINGS` que ya hace el alta por ADB
+         (provisioning/adb/AccountAuthenticatorGateScript.kt) deje de fallar en silencio: sin la
+         declaración, `pm grant` se niega. Con el permiso, la autorreparación del zombi de
+         accesibilidad (util/AccessibilityZombieHealer.kt) usa el camino liviano, apagar y prender
+         el servicio por ajuste, en vez de reinstalar el APK. Los equipos ya entregados NO lo
+         tienen: para ellos queda la reinstalación. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

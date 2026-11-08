@@ -11,7 +11,13 @@ import com.google.firebase.messaging.RemoteMessage
 class LockSuiteFirebaseService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
-        CommandProcessor(this).process(message.data, CommandProcessor.Source.FCM)
+        // 7/11/2026 (B.112): un comando puede llegar justo al desbloquear, antes de que corra la
+        // inicialización completa (Firebase incluido) en un proceso nacido con el equipo bloqueado.
+        com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(this, "FCM")
+        // Y con red: una excepción acá (hilo de FCM) mataba el proceso.
+        com.ejemplo.locksuite.util.Safe.guard("FCM.onMessageReceived") {
+            CommandProcessor(this).process(message.data, CommandProcessor.Source.FCM)
+        }
     }
 
     /**
@@ -31,6 +37,7 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
     }
 
     override fun onNewToken(token: String) {
+        com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(this, "FCM token nuevo")
         try {
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncToken(this, token)
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(this)

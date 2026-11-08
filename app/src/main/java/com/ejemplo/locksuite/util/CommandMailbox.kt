@@ -311,27 +311,33 @@ object CommandMailbox {
                 .getReference("devices/${FirebaseDeviceSync.deviceId(ctx)}/pendingCommands")
             val listener = object : ValueEventListener {
                 override fun onDataChange(snapshot: DataSnapshot) {
-                    // Llega al poner el listener (con lo que ya hubiera) y con cada cambio.
-                    // Los borrados del propio drenado también avisan: si no queda nada,
-                    // no se hace nada; si queda, drainNow() ya sabe juntarlos.
-                    liveBackoffMs = LIVE_RETRY_AFTER_ERROR_MS
-                    if (snapshot.hasChildren()) drainAsync(ctx, "en vivo")
+                    // 7/11/2026 (B.112): callback de Firebase en el hilo principal.
+                    com.ejemplo.locksuite.util.Safe.guard("CommandMailbox.onDataChange") {
+                        // Llega al poner el listener (con lo que ya hubiera) y con cada cambio.
+                        // Los borrados del propio drenado también avisan: si no queda nada,
+                        // no se hace nada; si queda, drainNow() ya sabe juntarlos.
+                        liveBackoffMs = LIVE_RETRY_AFTER_ERROR_MS
+                        if (snapshot.hasChildren()) drainAsync(ctx, "en vivo")
+                    }
                 }
 
                 override fun onCancelled(error: DatabaseError) {
-                    // Casi siempre es PERMISSION_DENIED: el equipo cambió de uid anónimo
-                    // (reinstalación) y espera que un administrador lo re-vincule
-                    // (FirebaseDeviceSync.requestRebind). Se reintenta con espera creciente.
-                    android.util.Log.w(TAG, "Escucha en vivo del buzón cancelada: ${error.message}")
-                    synchronized(liveLock) {
-                        if (liveListener === this) {
-                            liveListener = null
-                            liveRef = null
+                    // 7/11/2026 (B.112): callback de Firebase en el hilo principal.
+                    com.ejemplo.locksuite.util.Safe.guard("CommandMailbox.onCancelled") {
+                        // Casi siempre es PERMISSION_DENIED: el equipo cambió de uid anónimo
+                        // (reinstalación) y espera que un administrador lo re-vincule
+                        // (FirebaseDeviceSync.requestRebind). Se reintenta con espera creciente.
+                        android.util.Log.w(TAG, "Escucha en vivo del buzón cancelada: ${error.message}")
+                        synchronized(liveLock) {
+                            if (liveListener === this) {
+                                liveListener = null
+                                liveRef = null
+                            }
                         }
+                        liveRetryAtMs = SystemClock.elapsedRealtime() + liveBackoffMs
+                        liveBackoffMs = (liveBackoffMs * 2).coerceAtMost(LIVE_RETRY_MAX_MS)
+                        reportLive(ctx, false, "la base cortó la escucha: ${error.message}")
                     }
-                    liveRetryAtMs = SystemClock.elapsedRealtime() + liveBackoffMs
-                    liveBackoffMs = (liveBackoffMs * 2).coerceAtMost(LIVE_RETRY_MAX_MS)
-                    reportLive(ctx, false, "la base cortó la escucha: ${error.message}")
                 }
             }
             liveListener = listener
