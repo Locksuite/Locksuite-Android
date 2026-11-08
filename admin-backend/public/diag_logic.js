@@ -72,6 +72,9 @@
     a11y: "servicio de accesibilidad",
     watchdog: "servicio de vigilancia",
     boot: "arranque del equipo y broadcasts del sistema",
+    "a11y-heal": "autorreparación de accesibilidad (reinstalación o ajuste)",
+    safe: "red de seguridad en callback del hilo principal",
+    "crash-net": "red de seguridad en hilo de trabajo",
     diag: "el propio registro de diagnóstico"
   });
 

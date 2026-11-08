@@ -950,6 +950,11 @@
               ? '<span class="ls-chip bad" title="Detenida por Android tras reinicio/crash: el switch figura ON pero el sistema no la ejecuta. Desactivar y volver a activar en Ajustes">detenida por sistema (zombie)</span>'
               : '<span class="ls-chip bad">caída</span>')
           : "—") +
+      (campo("a11yHealCount", 0) > 0
+        ? kv("Autorreparación a11y", "Se reparó sola " + campo("a11yHealCount") + " veces" +
+            (campo("a11yHealLastAt") ? " · última: " + LS.fecha(campo("a11yHealLastAt")) : "") +
+            (campo("a11yHealLastResult") ? " (" + esc(String(campo("a11yHealLastResult"))) + ")" : ""))
+        : "") +
       kv("Dominios en el filtro", esc(String(campo("whitelistDomainCount", "—")))) +
       kv("Canal de comandos", canalDeComandos()) +
       (exitReason ? kv("Última salida", esc(String(exitReason)) + (campo("lastExitDetail") ? " · " + esc(String(campo("lastExitDetail"))) : "") + (exitTs ? " · " + LS.fecha(exitTs) : "") + (campo("lastExitTrace") ? '<br><details style="font-size:11px;margin-top:4px;"><summary style="cursor:pointer;color:var(--ls-primary,#3498db)">Ver stack trace del crash</summary><pre style="white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;background:rgba(0,0,0,0.15);padding:6px;border-radius:4px;font-family:monospace;">' + esc(String(campo("lastExitTrace"))) + '</pre></details>' : "")) : "");
@@ -970,7 +975,7 @@
     }
     if (accActiva === false) {
       if (campo("accessibilityZombie", false)) {
-        avisos.push(["bad", "El servicio de Accesibilidad fue detenido por Android tras un reinicio/crash (en Ajustes del celular figura como Activado, pero el sistema no lo está ejecutando). Hay que desactivarlo y volverlo a activar en Ajustes del teléfono para que funcione."]);
+        avisos.push(["bad", "El servicio de Accesibilidad fue detenido por Android tras un reinicio/crash (estado zombi). LockSuite lo está reparando solo; si en 10 min sigue, apagar y prender en Ajustes."]);
       } else {
         avisos.push(["bad", "El servicio de Accesibilidad está caído: el filtro visual (Capa 3) no está funcionando."]);
       }

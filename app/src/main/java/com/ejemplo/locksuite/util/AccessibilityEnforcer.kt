@@ -263,6 +263,9 @@ object AccessibilityEnforcer {
         try {
             val prefs = PrefsHelper.getMdmPrefs(context)
             val quiereSuspender = shouldSuspendApps(context, verdict)
+            if (quiereSuspender && AccessibilityZombieHealer.reEnableIfPermitted(context)) {
+                return
+            }
             val estabaPuesta = prefs.getBoolean(KEY_EMERGENCY_ACTIVE, false)
 
             // Si no corresponde suspender Y nunca lo hicimos, no hay nada que revisar:

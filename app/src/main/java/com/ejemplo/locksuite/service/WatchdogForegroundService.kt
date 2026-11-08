@@ -477,6 +477,9 @@ class WatchdogForegroundService : Service() {
         val context = applicationContext
         val now = android.os.SystemClock.elapsedRealtime()
 
+        // Si se cuenta con WRITE_SECURE_SETTINGS y la accesibilidad fue apagada, reencenderla de inmediato
+        com.ejemplo.locksuite.util.AccessibilityZombieHealer.reEnableIfPermitted(context)
+
         // null = lectura todavía sin confirmar (antirrebote). No tocar nada: actuar
         // sobre estados de transición era exactamente lo que producía el vaivén.
         val verdict = com.ejemplo.locksuite.util.AccessibilityEnforcer.evaluate(context) ?: return

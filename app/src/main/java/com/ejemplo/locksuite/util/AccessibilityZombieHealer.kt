@@ -94,6 +94,9 @@ object AccessibilityZombieHealer {
             }
             zombieSinceElapsed = null
             reportPendingReinstallOutcome(ctx, recovered = true)
+            if (!AccessibilityEnforcer.isServiceRunning(ctx)) {
+                reEnableIfPermitted(ctx)
+            }
             return
         }
 
@@ -297,6 +300,39 @@ object AccessibilityZombieHealer {
         } else {
             DiagLog.e(DIAG, "La reinstalación de hace ${segundos / 60} min no reparó la accesibilidad")
             report(ctx, "reinstalación: NO alcanzó (${segundos / 60} min)", sumar = false)
+        }
+    }
+
+    /**
+     * Si la app cuenta con WRITE_SECURE_SETTINGS y la accesibilidad fue apagada en Ajustes,
+     * la reenciende inmediatamente por código sin molestar al usuario.
+     * Devuelve true si la reencendió.
+     */
+    fun reEnableIfPermitted(context: Context): Boolean {
+        try {
+            val ctx = context.applicationContext
+            if (!canWriteSecureSettings(ctx)) return false
+            val policy = try { com.ejemplo.locksuite.mdm.PolicyManager(ctx) } catch (_: Throwable) { return false }
+            if (policy.isLockSuiteSuspended() || !policy.isAccessibilityProtectionEnabled() ||
+                !com.ejemplo.locksuite.security.PinManager.isPinConfigured(ctx)) {
+                return false
+            }
+            val cr = ctx.contentResolver
+            val key = Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            val comp = ourComponent(ctx)
+            val original = Settings.Secure.getString(cr, key) ?: ""
+            val conNuestro = ZombieHealPolicy.withComponent(original, comp.packageName, comp.className)
+            if (original != conNuestro) {
+                DiagLog.w(DIAG, "Accesibilidad desactivada en Ajustes: reencendiendo automáticamente por ajuste seguro (WRITE_SECURE_SETTINGS)")
+                Settings.Secure.putString(cr, key, conNuestro)
+                Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                report(ctx, "ajuste: reencendida automáticamente tras desactivación", sumar = true)
+                return true
+            }
+            return false
+        } catch (t: Throwable) {
+            Safe.report("ZombieHealer.reEnableIfPermitted", t)
+            return false
         }
     }
 
