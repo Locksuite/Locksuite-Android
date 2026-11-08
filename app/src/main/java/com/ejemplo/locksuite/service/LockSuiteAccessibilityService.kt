@@ -629,7 +629,29 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     // Orden deliberado: primero lo que descarta el evento con el menor costo posible,
     // después lo caro. Cada `return` temprano ahorra trabajo diez veces por segundo.
     // ──────────────────────────────────────────────
+    /**
+     * 7/11/2026 (B.112) — RED DE SEGURIDAD. Este método corre en el HILO PRINCIPAL del proceso
+     * y el cuerpo es de ~320 líneas sin un `try` general. Una excepción cualquiera (nodo
+     * reciclado, preferencia nula, estado inconsistente) no rompe un evento: MATA EL PROCESO, y
+     * si el proceso muere con este servicio enlazado Android lo deja en `mCrashedServices`
+     * («Activado» en Ajustes pero sin enlazar) hasta que se actualice la app o alguien apague y
+     * prenda el interruptor. Ver B.109 y B.112. Perder un evento es barato; perder la
+     * accesibilidad del equipo no. Va afuera del cuerpo a propósito: no se tocó ninguna línea de
+     * la lógica, solo se renombró (`handleAccessibilityEvent`).
+     */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        try {
+            handleAccessibilityEvent(event)
+        } catch (t: Throwable) {
+            try {
+                com.ejemplo.locksuite.diag.DiagLog.e(
+                    "a11y", "Excepción en onAccessibilityEvent (atrapada para no matar el proceso)", t
+                )
+            } catch (_: Throwable) { }
+        }
+    }
+
+    private fun handleAccessibilityEvent(event: AccessibilityEvent?) {
         if (!::overlayManager.isInitialized) return
         val ev = event ?: return
         val packageName = ev.packageName?.toString() ?: return
