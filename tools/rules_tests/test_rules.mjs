@@ -114,6 +114,66 @@ await check("admin: borra un equipo", remove(ref(adm, "devices/D3")), true);
 await check("admin: escribe catálogo global", set(ref(adm, "globalSettings/whitelist/decisions/com_x"), "block"), true);
 await check("no-admin: NO escribe catálogo global", set(ref(evil, "globalSettings/whitelist/decisions/com_x"), "allow"), false);
 
+// ── auditoría de seguridad del 9/11/2026 ──
+// Los secretos del equipo ya no los lee NINGÚN cliente (ni siquiera un administrador): la Function,
+// que usa el Admin SDK, es la única que compara el PIN y firma comandos. Y `trustedAdmins`
+// ("recordar este celular", que saltea el PIN) lo escribe solo la Function.
+await env.withSecurityRulesDisabled(async (ctx) => {
+  const db = ctx.database();
+  await set(ref(db, "devices/D4"), { ownerUid: "devD4", deviceName: "Con confiables", trustedAdmins: { admin1: true }, info: { trustedAdmins: { admin1: true } } });
+  await set(ref(db, "deviceSecrets/D4"), { ownerUid: "devD4", commandSecret: "Q".repeat(44), pinHash: "h4", pinSalt: "s4", recoveryCode: "0123456789" });
+  await set(ref(db, "deviceSecrets/D5"), { ownerUid: "devD5", pinHash: "h5", pinSalt: "s5" });        // sin devices/D5 ni commandSecret
+  await set(ref(db, "devices/D6"), { ownerUid: "devD6" });
+  await set(ref(db, "deviceSecrets/D6"), { ownerUid: "devD6", pinHash: "h6", pinSalt: "s6" });         // equipo existente, sin commandSecret
+  await set(ref(db, "devices/D7"), { ownerUid: "devD7" });                                              // sin verificador
+});
+const dev4 = env.authenticatedContext("devD4").database();
+const dev6 = env.authenticatedContext("devD6").database();
+const dev7 = env.authenticatedContext("devD7").database();
+
+// secretos: ningún cliente los lee
+await check("secretos: el administrador NO lee deviceSecrets (lista)", get(ref(adm, "deviceSecrets")), false);
+await check("secretos: el administrador NO lee deviceSecrets/D4", get(ref(adm, "deviceSecrets/D4")), false);
+await check("secretos: el administrador NO lee el hash del PIN", get(ref(adm, "deviceSecrets/D4/pinHash")), false);
+await check("secretos: el administrador NO lee el commandSecret", get(ref(adm, "deviceSecrets/D4/commandSecret")), false);
+await check("secretos: el administrador NO lee el código de recuperación", get(ref(adm, "deviceSecrets/D4/recoveryCode")), false);
+await check("secretos: el celular dueño NO lee los suyos", get(ref(dev4, "deviceSecrets/D4")), false);
+await check("secretos: un ajeno NO lee", get(ref(evil, "deviceSecrets/D4/pinHash")), false);
+await check("secretos: sin sesión NO lee", get(ref(anon, "deviceSecrets/D4")), false);
+await check("pinThrottle: ni el administrador lo lee", get(ref(adm, "pinThrottle")), false);
+await check("pinThrottle: ni el administrador lo escribe", set(ref(adm, "pinThrottle/D4/admin1"), { fails: 0 }), false);
+await check("pinThrottle: ni el celular lo escribe", set(ref(dev4, "pinThrottle/D4/admin1"), null), false);
+
+// el verificador del PIN: lo publica el celular; un administrador no lo reemplaza
+await check("PIN: el celular dueño publica un verificador nuevo", update(ref(dev4, "deviceSecrets/D4"), { pinHash: "h4b", pinSalt: "s4b", ownerUid: "devD4" }), true);
+await check("PIN ATAQUE: un administrador NO reemplaza pinHash+pinSalt", update(ref(adm, "deviceSecrets/D4"), { pinHash: "mio", pinSalt: "mia" }), false);
+await check("PIN ATAQUE: un administrador NO cambia solo pinHash", set(ref(adm, "deviceSecrets/D4/pinHash"), "mio"), false);
+await check("PIN ATAQUE: un administrador NO crea un verificador en un equipo que no lo tiene (D7)", set(ref(adm, "deviceSecrets/D7"), { ownerUid: "devD7", pinHash: "mio", pinSalt: "mia" }), false);
+await check("PIN ATAQUE: un administrador NO crea el verificador con una escritura raíz", update(ref(adm, "/"), { "deviceSecrets/D7/pinHash": "mio", "deviceSecrets/D7/pinSalt": "mia" }), false);
+await check("PIN ATAQUE: un administrador NO pisa el código de recuperación", set(ref(adm, "deviceSecrets/D4/recoveryCode"), "1111111111"), false);
+await check("PIN: un administrador SÍ re-vincula (ownerUid + borra commandSecret) sin tocar el PIN", update(ref(adm, "/"), { "deviceSecrets/D4/ownerUid": "devD4n", "devices/D4/ownerUid": "devD4n", "deviceSecrets/D4/commandSecret": null }), true);
+await check("PIN: un administrador SÍ borra los secretos al eliminar un equipo", remove(ref(adm, "deviceSecrets/D5")), true);
+await check("PIN ATAQUE: ... y no puede reponerlos con otro verificador", set(ref(adm, "deviceSecrets/D5"), { ownerUid: "devD5", pinHash: "mio", pinSalt: "mia" }), false);
+
+// commandSecret: lo crea el dueño, no un extraño
+await check("commandSecret ATAQUE: un extraño NO lo crea en un equipo existente que no lo tiene", set(ref(evil, "deviceSecrets/D6/commandSecret"), "E".repeat(44)), false);
+await check("commandSecret: el dueño sí lo publica", set(ref(dev6, "deviceSecrets/D6/commandSecret"), "D".repeat(44)), true);
+await check("commandSecret: el administrador puede borrarlo (Re-vincular canal)", remove(ref(adm, "deviceSecrets/D6/commandSecret")), true);
+await check("commandSecret: un equipo que todavía NO existe en devices/ puede publicarlo (alta)", set(ref(env.authenticatedContext("devNew2").database(), "deviceSecrets/D8/commandSecret"), "N".repeat(44)), true);
+
+// "recordar este celular": solo la Function (Admin SDK, que no pasa por estas reglas)
+await check("trustedAdmins ATAQUE: un administrador NO se pone de confiable", set(ref(adm, "devices/D7/trustedAdmins/admin1"), true), false);
+await check("trustedAdmins ATAQUE: ... ni en info/", set(ref(adm, "devices/D7/info/trustedAdmins/admin1"), true), false);
+await check("trustedAdmins ATAQUE: ... ni con un update raíz", update(ref(adm, "/"), { "devices/D7/trustedAdmins/admin1": true }), false);
+await check("trustedAdmins ATAQUE: ... ni metiéndolo en un set del equipo entero (restaurar archivado)", set(ref(adm, "devices/D7"), { ownerUid: "devD7", trustedAdmins: { admin1: true } }), false);
+await check("trustedAdmins ATAQUE: ... ni como valor suelto", set(ref(adm, "devices/D7/trustedAdmins"), { admin1: true, otro: true }), false);
+await check("trustedAdmins ATAQUE: el celular dueño NO se lo pone a un uid", set(ref(dev7, "devices/D7/trustedAdmins/admin1"), true), false);
+await check("trustedAdmins ATAQUE: un extraño tampoco", set(ref(evil, "devices/D7/trustedAdmins/evil"), true), false);
+await check("trustedAdmins: restaurar un equipo archivado SIN confiables funciona", set(ref(adm, "devices/D9"), { ownerUid: "devD9", deviceName: "Restaurado", model: "X", info: { model: "X" } }), true);
+await check("trustedAdmins: el administrador SÍ puede revocar la confianza (borrar)", remove(ref(adm, "devices/D4/trustedAdmins/admin1")), true);
+await check("trustedAdmins: ... y la copia de info/", remove(ref(adm, "devices/D4/info/trustedAdmins/admin1")), true);
+await check("trustedAdmins: el celular sigue escribiendo el resto de su info", update(ref(dev7, "devices/D7"), { "info/model": "SM-A065M", ownerUid: "devD7", lastSeen: serverTimestamp() }), true);
+
 console.table(results);
 console.log(rojos === 0 ? "TODAS VERDES (" + results.length + ")" : "ROJAS: " + rojos);
 await env.cleanup();

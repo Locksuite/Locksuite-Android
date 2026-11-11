@@ -328,47 +328,38 @@ function renderDevicesList(e) {
     })) : devicesContainer.innerHTML = '<p class="loading-text">Todavía no hay dispositivos registrados.</p>'
 }
 
-async function hashPinLocal(pin, saltBase64) {
-    const binaryString = window.atob(saltBase64);
-    const saltBytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-        saltBytes[i] = binaryString.charCodeAt(i);
-    }
-    const encoder = new TextEncoder();
-    const pinBytes = encoder.encode(pin);
-    const combinedBytes = new Uint8Array(saltBytes.length + pinBytes.length);
-    combinedBytes.set(saltBytes, 0);
-    combinedBytes.set(pinBytes, saltBytes.length);
-    
-    const hashBuffer = await window.crypto.subtle.digest("SHA-256", combinedBytes);
-    const hashBytes = new Uint8Array(hashBuffer);
-    let binaryHash = "";
-    for (let i = 0; i < hashBytes.byteLength; i++) {
-        binaryHash += String.fromCharCode(hashBytes[i]);
-    }
-    return window.btoa(binaryHash);
-}
-
+/**
+ * Verifica el PIN de un celular contra la Cloud Function (comando VERIFY_PIN) y, si el administrador
+ * tildó «recordar», le pide a la Function que lo anote como confiable.
+ *
+ * 9/11/2026 (auditoría de seguridad). ANTES este código leía `deviceSecrets/<id>` (hash y sal del PIN)
+ * directo desde el navegador, comparaba acá y escribía `devices/<id>/trustedAdmins/<uid>` él mismo.
+ * Eso obligaba a que CUALQUIER administrador pudiera leer el verificador de todos los celulares (y la
+ * clave con la que se firman los comandos) y a que pudiera marcarse de confiable sin saber ningún PIN.
+ * Ahora las reglas de la base no dejan leer `deviceSecrets` ni escribir `trustedAdmins` a ningún cliente:
+ * todo pasa por la Function, que además limita los intentos y compara en tiempo constante.
+ *
+ * Errores: `DEVICE_PIN_NOT_ENROLLED` (la nube no tiene el verificador), `PIN_INCORRECT` (con
+ * `attemptsLeft`) y bloqueo por intentos (`pinLocked = true`, con el texto ya listo para mostrar).
+ */
 async function verifyPinBackend(deviceId, pin, remember) {
-    const secretsSnap = await database.ref(`deviceSecrets/${deviceId}`).once("value");
-    const secrets = secretsSnap.val();
-    if (!secrets || !secrets.pinHash || !secrets.pinSalt) {
-        throw new Error("DEVICE_PIN_NOT_ENROLLED");
+    const idToken = await auth.currentUser.getIdToken();
+    const response = await fetch("https://sendcommandv8-687828714595.us-central1.run.app", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + idToken },
+        body: JSON.stringify({ deviceId, command: "VERIFY_PIN", devicePin: pin, rememberDevice: !!remember })
+    });
+    if (response.ok) return { success: true };
+    const body = await response.json().catch(() => ({}));
+    const msg = String(body.error || ("HTTP_" + response.status));
+    const err = new Error(msg);
+    if (msg.startsWith("PIN_LOCKED")) {
+        err.pinLocked = true;
+        err.message = msg.replace(/^PIN_LOCKED:\s*/, "");
+    } else if (msg === "PIN_INCORRECT" && typeof body.attemptsLeft === "number") {
+        err.attemptsLeft = body.attemptsLeft;
     }
-    
-    const localHash = await hashPinLocal(pin, secrets.pinSalt);
-    if (localHash !== secrets.pinHash) {
-        throw new Error("PIN_INCORRECT");
-    }
-    
-    const adminUid = auth.currentUser ? auth.currentUser.uid : null;
-    if (adminUid) {
-        if (remember) {
-            await database.ref(`devices/${deviceId}/trustedAdmins/${adminUid}`).set(true);
-            await database.ref(`devices/${deviceId}/info/trustedAdmins/${adminUid}`).set(true);
-        }
-    }
-    return { success: true };
+    throw err;
 }
 
 /**
@@ -478,7 +469,13 @@ async function openDeviceSidebar(e, t) {
                 // «La nube no tiene el PIN de este celular» es un estado esperado (B.104), no una falla del panel.
                 (err.message === "DEVICE_PIN_NOT_ENROLLED" ? console.warn : console.error)("Error al verificar PIN:", err);
                 if (err.message === "PIN_INCORRECT") {
-                    errorMessage = "PIN incorrecto. Intentá de nuevo.";
+                    errorMessage = "PIN incorrecto. Intentá de nuevo." +
+                        (typeof err.attemptsLeft === "number" && err.attemptsLeft <= 3
+                            ? ` (quedan ${err.attemptsLeft} intentos antes del bloqueo temporal)` : "");
+                } else if (err.pinLocked) {
+                    // Demasiados PIN incorrectos para este celular desde esta cuenta: la Function ya no
+                    // deja probar (ni siquiera el correcto) hasta que pase el bloqueo. Texto listo.
+                    errorMessage = err.message;
                 } else if (err.message === "DEVICE_PIN_NOT_ENROLLED") {
                     // La bandera pública decía que sí, pero deviceSecrets no tiene el verificador.
                     pinNoPublicado = true;
@@ -3822,6 +3819,15 @@ async function restoreArchivedDevice(deviceId, device, button) {
             // Eliminar marca de archivo temporal
             const restoredData = { ...device };
             delete restoredData._archivedAt;
+            // 9/11/2026: `trustedAdmins` («recordar este celular», que saltea el PIN) solo lo escribe la
+            // Cloud Function; las reglas de la base rechazan cualquier escritura de un cliente que lo
+            // incluya, y el archivado se lleva una copia. Restaurar un equipo NO restaura esa confianza:
+            // el administrador vuelve a escribir el PIN (y a tildar «recordar» si quiere).
+            delete restoredData.trustedAdmins;
+            if (restoredData.info && typeof restoredData.info === "object") {
+                restoredData.info = { ...restoredData.info };
+                delete restoredData.info.trustedAdmins;
+            }
             
             // Escribir en devices y borrar de archivedDevices
             await database.ref(`devices/${deviceId}`).set(restoredData);

@@ -2,6 +2,7 @@ const { onRequest } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
 const playLookup = require("./play_lookup");
+const pinSecurity = require("./pin_security");
 
 const FUNCTION_OPTIONS = {
   region: "us-central1",
@@ -20,6 +21,46 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
+
+// El id de un equipo se usa para armar rutas de la base (`devices/<id>`, `deviceSecrets/<id>`). Una
+// barra en un id armado a mano apuntaría a OTRO nodo (p. ej. "abc/info"), y como un administrador
+// puede escribir cualquier cosa bajo `devices/<id>/...`, podría fabricarse ahí un `trustedAdmins`
+// propio y pasar la puerta del PIN. Se acepta solo lo que es UNA clave válida de la base
+// (sin `/ . $ # [ ]` ni caracteres de control).
+const DEVICE_ID_RE = /^[^/.$#\[\]\u0000-\u001f\u007f]{1,128}$/;
+
+// Errores hacia el panel. Lo que lanzamos nosotros es un objeto plano {status, message[, extra]}
+// (`extra` suma campos a la respuesta: retryAfterSec / attemptsLeft del PIN).
+// Los errores de AUTENTICACIÓN de Firebase (token vencido, revocado, cuenta deshabilitada) salen como
+// 401 para que el panel sepa que tiene que volver a iniciar sesión; antes llegaban como 500.
+function sendError(res, e, tag) {
+  console.error(`${tag} error:`, e);
+  const code = e && typeof e.code === "string" ? e.code : "";
+  if (code.startsWith("auth/")) {
+    const revocada = code === "auth/id-token-revoked" || code === "auth/user-disabled";
+    res.status(401).json({
+      error: revocada
+        ? "SESSION_REVOKED: tu sesión fue revocada o la cuenta está deshabilitada. Cerrá sesión y volvé a entrar."
+        : "SESSION_INVALID: tu sesión venció. Cerrá sesión y volvé a entrar.",
+    });
+    return;
+  }
+  const status = (e && e.status) || 500;
+  res.status(status).json({ error: (e && e.message) || "Error interno del servidor.", ...((e && e.extra) || {}) });
+}
+
+// Verifica el ID token Y que no haya sido revocado (checkRevoked = true). Sin eso, un administrador
+// al que se le quita el acceso (o cuya cuenta se roba y se deshabilita/revoca) seguía mandando
+// comandos hasta que el token vencía solo, hasta una hora después.
+async function verifyAdminToken(req) {
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    throw { status: 401, message: "No autorizado: falta token de autenticación." };
+  }
+  const decoded = await admin.auth().verifyIdToken(authHeader.slice(7), true);
+  await checkAdminByUid(decoded.uid, decoded);
+  return decoded;
+}
 
 // Lista blanca de comandos válidos
 const ALLOWED_COMMANDS = new Set([
@@ -324,30 +365,49 @@ function isTrivialPin(pin) {
   return false;
 }
 
-// Hashear PIN igual que PinManager.kt
-function hashPin(pin, saltBase64) {
-  const saltBytes = Buffer.from(saltBase64, "base64");
-  const hash = crypto.createHash("sha256");
-  hash.update(saltBytes);
-  hash.update(Buffer.from(pin, "utf8"));
-  return hash.digest("base64");
-}
-
-// Verificar PIN del dispositivo
+// Verificar PIN del dispositivo.
+//
+// 9/11/2026 (auditoría de seguridad) — qué cambió:
+//  • El verificador (`deviceSecrets/<id>/{pinHash,pinSalt}`) se compara en tiempo constante.
+//  • Cada intento se RESERVA antes de calcular (`pinThrottle/<id>/<uid>`): THROTTLE_FREE_ATTEMPTS
+//    libres y después bloqueo creciente (ver pin_security.js). Antes se podían probar PINs sin freno.
+//  • "Recordar este celular" (`trustedAdmins/<uid>`) lo escribe SOLO esta Function. Hasta hoy
+//    también lo escribía el panel directo en la base, y las reglas dejaban a cualquier administrador
+//    ponerse a sí mismo (o a otro uid) como confiable sin saber el PIN. database.rules.json ahora
+//    rechaza esa escritura desde cualquier cliente.
 async function verifyDevicePin(deviceId, deviceRef, deviceData, adminUid, devicePin, rememberDevice) {
   const trustedAdmins = getDeviceField(deviceData, "trustedAdmins", {});
-  if (trustedAdmins[adminUid] === true) return; // ya confiable
+  if (trustedAdmins && trustedAdmins[adminUid] === true) return; // ya confiable
 
   const secretsSnap = await admin.database().ref(`deviceSecrets/${deviceId}`).once("value");
   const secrets = secretsSnap.val() || {};
-  let pinHash = secrets.pinHash || getDeviceField(deviceData, "pinHash");
-  let pinSalt = secrets.pinSalt || getDeviceField(deviceData, "pinSalt");
+  // El verificador sale SOLO de `deviceSecrets`. Hasta el 9/11/2026 también se aceptaba un `pinHash` /
+  // `pinSalt` sueltos en `devices/<id>` (herencia de versiones < 0.5, que CHANGE_PIN ya borraba): como
+  // un administrador puede escribir cualquier cosa en `devices/<id>`, en un celular sin verificador en
+  // `deviceSecrets` le alcanzaba con inventarse uno para pasar la puerta del PIN.
+  const record = { pinHash: secrets.pinHash, pinSalt: secrets.pinSalt };
 
-  if (!pinHash || !pinSalt) throw { status: 412, message: "DEVICE_PIN_NOT_ENROLLED" };
+  if (!record.pinHash || !record.pinSalt) throw { status: 412, message: "DEVICE_PIN_NOT_ENROLLED" };
   if (!devicePin) throw { status: 412, message: "PIN_REQUIRED" };
 
-  const computed = hashPin(devicePin, pinSalt);
-  if (computed !== pinHash) throw { status: 403, message: "PIN_INCORRECT" };
+  const throttleRef = admin.database().ref(`pinThrottle/${deviceId}/${adminUid}`);
+  const turno = await pinSecurity.reservePinAttempt(throttleRef, Date.now());
+  if (!turno.allowed) {
+    const retryAfterSec = Math.max(1, Math.ceil(turno.retryAfterMs / 1000));
+    throw {
+      status: 429,
+      message: "PIN_LOCKED: demasiados PIN incorrectos para este celular desde tu cuenta. " +
+        `Probá de nuevo en ${Math.ceil(retryAfterSec / 60)} min.`,
+      extra: { retryAfterSec },
+    };
+  }
+
+  if (!pinSecurity.verifyPinRecord(record, devicePin)) {
+    throw { status: 403, message: "PIN_INCORRECT", extra: { attemptsLeft: turno.attemptsLeft } };
+  }
+  // Acierto: se borra el contador. Un fallo al borrar no invalida el acierto (el próximo
+  // acierto o el vencimiento de 24 h lo limpian).
+  await throttleRef.remove().catch(() => {});
 
   if (rememberDevice) {
     await deviceRef.child(`trustedAdmins/${adminUid}`).set(true);
@@ -371,27 +431,19 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
   }
 
   try {
-    // Verificar Firebase ID token
-    const authHeader = req.headers.authorization || "";
-    if (!authHeader.startsWith("Bearer ")) {
-      res.status(401).json({ error: "No autorizado: falta token de autenticación." });
-      return;
-    }
-    const idToken = authHeader.slice(7);
-    const decoded = await admin.auth().verifyIdToken(idToken);
+    // Verificar el ID token (y que no esté revocado) y que sea un administrador autorizado por UID
+    // (fuente de verdad alineada con database.rules.json).
+    const decoded = await verifyAdminToken(req);
     const adminUid = decoded.uid;
     const adminEmail = decoded.email;
-
-    // Verificar que es admin autorizado por UID (fuente de verdad alineada con database.rules.json)
-    await checkAdminByUid(adminUid, decoded);
 
     const {
       deviceId, command, packages, devicePin, rememberDevice, newPin,
       enabled, presetJson, profileId, level, graceMs, graceTarget, route, storeMode
     } = req.body || {};
 
-    if (!deviceId || typeof deviceId !== "string") {
-      res.status(400).json({ error: "Falta deviceId." });
+    if (!deviceId || typeof deviceId !== "string" || !DEVICE_ID_RE.test(deviceId)) {
+      res.status(400).json({ error: "Falta deviceId (o no tiene el formato de un id de equipo)." });
       return;
     }
     if (!ALLOWED_COMMANDS.has(command)) {
@@ -459,14 +511,15 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
         });
         return;
       }
-      const pinSalt = crypto.randomBytes(16).toString("base64");
-      const pinHash = hashPin(newPin, pinSalt);
+      const { pinHash, pinSalt } = pinSecurity.newPinRecord(newPin);
       payload.pinHash = pinHash;
       payload.pinSalt = pinSalt;
 
       // No reemplazar el nodo completo: contiene la credencial de firma de
       // comandos del dispositivo, que debe sobrevivir a un cambio de PIN.
       await admin.database().ref(`deviceSecrets/${deviceId}`).update({ pinHash, pinSalt });
+      // Un PIN nuevo invalida los intentos fallidos del anterior.
+      await admin.database().ref(`pinThrottle/${deviceId}`).remove().catch(() => {});
       await deviceRef.child("hasPinConfigured").set(true);
       await deviceRef.child("info/hasPinConfigured").set(true).catch(() => {});
       await deviceRef.child("pinHash").remove().catch(() => {});
@@ -708,9 +761,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     // esperar el ack del celular. Ver el comentario de arriba.
     res.json({ success: true, commandId, queued, delivered: true, channel: "fcm" });
   } catch (e) {
-    console.error("sendCommandV3 error:", e);
-    const status = e.status || 500;
-    res.status(status).json({ error: e.message || "Error interno del servidor." });
+    sendError(res, e, "sendCommandV8");
   }
 });
 
@@ -734,13 +785,7 @@ exports.checkPlayApps = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 }, a
     return;
   }
   try {
-    const authHeader = req.headers.authorization || "";
-    if (!authHeader.startsWith("Bearer ")) {
-      res.status(401).json({ error: "No autorizado: falta token de autenticación." });
-      return;
-    }
-    const decoded = await admin.auth().verifyIdToken(authHeader.slice(7));
-    await checkAdminByUid(decoded.uid, decoded);
+    await verifyAdminToken(req);
 
     const { packages } = req.body || {};
     if (!Array.isArray(packages) || packages.length === 0) {
@@ -754,9 +799,7 @@ exports.checkPlayApps = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 }, a
     const results = await playLookup.lookupMany(packages, fetch);
     res.json({ success: true, results });
   } catch (e) {
-    console.error("checkPlayApps error:", e);
-    const status = e.status || 500;
-    res.status(status).json({ error: e.message || "Error interno del servidor." });
+    sendError(res, e, "checkPlayApps");
   }
 });
 

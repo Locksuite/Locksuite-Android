@@ -38,8 +38,25 @@ No necesita red ni credenciales: nunca toca el Firebase de verdad.
   ack tardío se muestra.
 - **F** — autoactualización a un equipo sin FCM: no promete "se está actualizando".
 
+**(9/11/2026, B.113) El PIN pasa por la Cloud Function.** La base falsa ahora imita dos reglas de
+`database.rules.json`: nadie lee `deviceSecrets` y nadie escribe `devices/<id>/trustedAdmins` (ni
+`info/trustedAdmins`); si el panel lo intenta, la base falsa contesta `PERMISSION_DENIED` como la real.
+`window.__dbLog` anota cada lectura/escritura (`on`, `read`, `set`, `update`, `remove`, `push`) para
+poder afirmar qué NO hizo el panel. En `test_panel.js` (`dev7`, `dev8`, `arch1`):
+
+- PIN malo: el modal avisa cuántos intentos quedan antes del bloqueo y sigue abierto.
+- PIN bueno con «recordar»: cada intento sale como `VERIFY_PIN` con `devicePin` y `rememberDevice`;
+  el panel no lee `deviceSecrets` ni escribe `trustedAdmins`.
+- Bloqueo por intentos (HTTP 429): el modal muestra el motivo y cuánto esperar, la ficha no se abre.
+- Restaurar un archivado NO devuelve `trustedAdmins` (las reglas lo rechazarían y el equipo no volvería).
+
+`fake-function.js` suma dos modos: `sesion_revocada` (401) y `pin_bloqueado` (429).
+
 `test_ficha.js` (ficha completa, `comun.js` + `celular.js`): el contrato de
 `LS.sendCommand` (`applied` / `pendiente` / falla) y el «Canal de comandos» del Resumen.
+**(9/11, B.113)** También: con la sesión vencida/revocada (401) devuelve `status: "sesion"` y con demasiados
+PIN incorrectos (429) `status: "pin_bloqueado"`, en ambos casos con el motivo legible, sin pedir el PIN
+y sin reintentar.
 **(26/10, B.98)** Además, la ficha rearmada como la usa el administrador:
 
 - Cada sección del riel se abre; «Terminar alta» manda `FINISH_ENROLLMENT`.

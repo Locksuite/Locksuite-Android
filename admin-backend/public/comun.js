@@ -164,6 +164,15 @@
         if (msg === "DEVICE_PIN_NOT_ENROLLED") {
           return { ok: false, status: "pin_no_publicado", reason: LS.TEXTO_PIN_NO_PUBLICADO };
         }
+        // 9/11/2026 (auditoría): la Function ahora contesta 401 cuando la sesión venció o fue revocada
+        // (antes llegaba como un 500 con el texto de la excepción), y 429 cuando hubo demasiados PIN
+        // incorrectos desde esta cuenta para este celular. Ninguno de los dos se arregla pidiendo el PIN.
+        if (res.status === 401) {
+          return { ok: false, status: "sesion", reason: msg.replace(/^SESSION_(INVALID|REVOKED):\s*/, "") };
+        }
+        if (res.status === 429 || /^PIN_LOCKED/.test(msg)) {
+          return { ok: false, status: "pin_bloqueado", reason: msg.replace(/^PIN_LOCKED:\s*/, "") };
+        }
         // El único caso que se reintenta: falta el PIN de ese equipo.
         if (/PIN/i.test(msg) && intento === 0) {
           pin = await LS.askPin(deviceId, opts.nombre);

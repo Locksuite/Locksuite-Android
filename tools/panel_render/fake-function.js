@@ -29,11 +29,17 @@
       // Pasada la puerta se contesta como "fcm_new".
       const EXENTOS = ["UPDATE_LOCKSUITE", "UPDATE_APP", "CANCEL_UPDATE_APP", "COLLECT_DIAGNOSTICS"];
       const modo0 = window.__fnMode;
+      // 9/11/2026 (auditoría): lo que la Function real contesta ahora en dos casos nuevos.
+      //   "sesion_revocada": 401 SESSION_REVOKED (el ID token se verifica con checkRevoked).
+      //   "pin_bloqueado":   429 PIN_LOCKED (demasiados PIN incorrectos de esta cuenta para ese celular).
+      const respuesta = (status, body) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+      if (modo0 === "sesion_revocada") return respuesta(401, { error: "SESSION_REVOKED: tu sesión fue revocada o la cuenta está deshabilitada. Cerrá sesión y volvé a entrar." });
+      if (modo0 === "pin_bloqueado" && !EXENTOS.includes(body.command)) return respuesta(429, { error: "PIN_LOCKED: demasiados PIN incorrectos para este celular desde tu cuenta. Probá de nuevo en 5 min.", retryAfterSec: 300 });
       if ((modo0 === "pin_no_publicado" || modo0 === "pin_requerido") && !EXENTOS.includes(body.command)) {
         const fallo = (status, error) => new Response(JSON.stringify({ error }), { status, headers: { "Content-Type": "application/json" } });
         if (modo0 === "pin_no_publicado") return fallo(412, "DEVICE_PIN_NOT_ENROLLED");
         if (!body.devicePin) return fallo(412, "PIN_REQUIRED");
-        if (body.devicePin !== "1234") return fallo(403, "PIN_INCORRECT");
+        if (body.devicePin !== "1234") return respuesta(403, { error: "PIN_INCORRECT", attemptsLeft: 2 });
       }
       const cid = "c" + Math.random().toString(36).slice(2, 8);
       window.__lastCid = cid;

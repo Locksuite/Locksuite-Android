@@ -4,17 +4,33 @@
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
       "$device_id": {
         ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || data.child('ownerUid').val() === auth.uid)",
-        ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || (data.child('ownerUid').val() === auth.uid && newData.child('ownerUid').val() === auth.uid) || (!data.exists() && newData.child('ownerUid').val() === auth.uid) || (!data.child('ownerUid').exists() && newData.child('ownerUid').val() === auth.uid))"
+        ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || (data.child('ownerUid').val() === auth.uid && newData.child('ownerUid').val() === auth.uid) || (!data.exists() && newData.child('ownerUid').val() === auth.uid) || (!data.child('ownerUid').exists() && newData.child('ownerUid').val() === auth.uid))",
+        "trustedAdmins": {
+          ".validate": "false",
+          "$uid": { ".validate": "false" }
+        },
+        "info": {
+          "trustedAdmins": {
+            ".validate": "false",
+            "$uid": { ".validate": "false" }
+          }
+        }
       }
     },
     "deviceSecrets": {
-      ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
       "$device_id": {
         ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || root.child('devices').child($device_id).child('ownerUid').val() === auth.uid || (!root.child('devices').child($device_id).exists() && (!data.exists() || data.child('ownerUid').val() === auth.uid) && newData.child('ownerUid').val() === auth.uid))",
+        "pinHash": { ".validate": "!(auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists()) || newData.val() === data.val()" },
+        "pinSalt": { ".validate": "!(auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists()) || newData.val() === data.val()" },
+        "recoveryCode": { ".validate": "!(auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists()) || newData.val() === data.val()" },
         "commandSecret": {
-          ".write": "auth != null && (!data.exists() || newData.val() === data.val() || auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())"
+          ".write": "auth != null && ((!data.exists() && (!root.child('devices').child($device_id).exists() || root.child('devices').child($device_id).child('ownerUid').val() === auth.uid)) || newData.val() === data.val() || auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())"
         }
       }
+    },
+    "pinThrottle": {
+      ".read": "false",
+      ".write": "false"
     },
     "deviceDiag": {
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",

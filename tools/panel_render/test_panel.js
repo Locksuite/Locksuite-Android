@@ -13,7 +13,16 @@ const SEED = {
     // 1/11/2026 (B.104): celulares cuya nube no tiene el PIN. dev5: sin bandera (como «Shuli», el celular
     // nuevo del dueño). dev6: con la bandera en true pero SIN verificador en deviceSecrets (bandera vieja).
     dev5: { deviceName: "Shuli", model: "Google Pixel", lastSeen: now - 10000, fcmToken: "tok5", versionName: "0.6.69", versionCode: 132 },
-    dev6: { deviceName: "bandera vieja", model: "Z", lastSeen: now - 10000, fcmToken: "tok6", hasPinConfigured: true, versionName: "0.6.69", versionCode: 132 }
+    dev6: { deviceName: "bandera vieja", model: "Z", lastSeen: now - 10000, fcmToken: "tok6", hasPinConfigured: true, versionName: "0.6.69", versionCode: 132 },
+    // 9/11/2026 (auditoría): celulares con PIN y SIN «recordar este celular», para probar la verificación del PIN
+    // por la Cloud Function. dev7: se prueba con un PIN malo y uno bueno. dev8: la Function contesta «bloqueado».
+    dev7: { deviceName: "con PIN", model: "Z7", lastSeen: now - 10000, fcmToken: "tok7", hasPinConfigured: true, versionName: "0.6.81", versionCode: 144 },
+    dev8: { deviceName: "con PIN bloqueado", model: "Z8", lastSeen: now - 10000, fcmToken: "tok8", hasPinConfigured: true, versionName: "0.6.81", versionCode: 144 }
+  },
+  // Un archivado que se llevó consigo la copia de «recordar este celular» (el panel viejo la escribía a mano).
+  archivedDevices: {
+    arch1: { deviceName: "archivado", model: "Q", lastSeen: now - 99999, hasPinConfigured: true, trustedAdmins: { admin1: true },
+      info: { trustedAdmins: { admin1: true }, nota: "se conserva" }, _archivedAt: "2026-10-01T00:00:00.000Z" }
   }
 };
 let fallas = 0;
@@ -151,6 +160,68 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   ok(sb6.abierta && !sb6.modal && /todavía no le avisó a la nube su PIN/.test(sb6.st) && dialogos.length === 0,
     'B.104) bandera vieja sin verificador: tras escribir el PIN la ficha se abre con el aviso (antes: cartel y cierre) ' + JSON.stringify({ dialogos, st: sb6.st.slice(0, 60) }));
   await page.evaluate(() => closeDeviceSidebar());
+
+  // ── 9/11/2026 (auditoría de seguridad): el PIN se verifica en la Cloud Function ──
+  // Antes el panel leía `deviceSecrets/<id>` (hash y sal del PIN) y escribía `trustedAdmins` directo en la
+  // base; ahora las reglas no dejan ni lo uno ni lo otro, y todo pasa por VERIFY_PIN. La base falsa imita
+  // esas reglas (devuelve PERMISSION_DENIED), así que si el panel vuelve a hacerlo, esto se pone en rojo.
+  const errAntes = errores.length;
+  await page.evaluate(() => { window.__dbLog = []; window.__calls.length = 0; window.__fnMode = 'pin_requerido'; });
+  await page.evaluate(() => { openDeviceSidebar('dev7', currentDevicesData['dev7']); });
+  await page.waitForSelector('#pin-modal:not(.hidden)', { timeout: 3000 });
+  await page.fill('#pin-modal-input', '0000');
+  await page.click('#pin-modal-confirm');
+  await sleep(400);
+  const errPin = await page.evaluate(() => document.getElementById('pin-modal-error').textContent);
+  ok(/PIN incorrecto/.test(errPin) && /quedan 2 intentos/.test(errPin),
+    'PIN) PIN malo: el modal avisa cuántos intentos quedan antes del bloqueo: ' + errPin);
+  ok(await page.evaluate(() => !document.getElementById('pin-modal').classList.contains('hidden')),
+    'PIN) …y el modal sigue abierto para volver a intentar');
+  await page.fill('#pin-modal-input', '1234');
+  await page.check('#pin-modal-remember');
+  await page.click('#pin-modal-confirm');
+  await sleep(500);
+  const verif = await page.evaluate(() => __calls.filter(c => c.deviceId === 'dev7' && c.command === 'VERIFY_PIN').map(c => ({ pin: c.devicePin, rec: c.rememberDevice })));
+  ok(verif.length === 2 && verif[0].pin === '0000' && verif[0].rec === false && verif[1].pin === '1234' && verif[1].rec === true,
+    'PIN) cada intento sale por la Function (VERIFY_PIN) y «recordar» viaja en el pedido, no se escribe en la base: ' + JSON.stringify(verif));
+  ok(await page.evaluate(() => !document.getElementById('device-sidebar').classList.contains('hidden') && selectedDeviceId === 'dev7'),
+    'PIN) con el PIN bueno la ficha se abre');
+  const acc = await page.evaluate(() => window.__dbLog.slice());
+  ok(!acc.some(a => /^\/?deviceSecrets(\/|$)/.test(a.path)),
+    'PIN) el panel no lee ni escribe deviceSecrets al verificar el PIN: ' + JSON.stringify(acc.filter(a => /deviceSecrets/.test(a.path))));
+  ok(!acc.some(a => (a.op !== 'remove') && (/trustedAdmins/.test(a.path) || JSON.stringify(a.v || '').includes('trustedAdmins'))),
+    'PIN) el panel no escribe «trustedAdmins» (lo escribe solo la Function): ' + JSON.stringify(acc.filter(a => /trustedAdmins/.test(a.path))));
+  await page.evaluate(() => closeDeviceSidebar());
+  // Bloqueo por intentos: la Function ya no deja probar y el modal lo dice (no repite «PIN incorrecto»).
+  await page.evaluate(() => { window.__fnMode = 'pin_bloqueado'; });
+  await page.evaluate(() => { openDeviceSidebar('dev8', currentDevicesData['dev8']); });
+  await page.waitForSelector('#pin-modal:not(.hidden)', { timeout: 3000 });
+  await page.fill('#pin-modal-input', '1234');
+  await page.click('#pin-modal-confirm');
+  await sleep(400);
+  const errLock = await page.evaluate(() => ({ t: document.getElementById('pin-modal-error').textContent, abierta: !document.getElementById('device-sidebar').classList.contains('hidden') }));
+  ok(/demasiados PIN incorrectos/i.test(errLock.t) && /5 min/.test(errLock.t) && !/^PIN_LOCKED/.test(errLock.t) && !/^PIN incorrecto/.test(errLock.t),
+    'PIN) bloqueo por intentos: el modal muestra el motivo y cuánto esperar, sin el código interno: ' + errLock.t);
+  ok(!errLock.abierta, 'PIN) …y la ficha NO se abre mientras dura el bloqueo');
+  await page.click('#pin-modal-cancel');
+  await sleep(200);
+  ok(await page.evaluate(() => document.getElementById('device-sidebar').classList.contains('hidden')), 'PIN) cancelar el pedido deja la ficha cerrada');
+  // Los únicos errores de consola de este bloque son los que el panel registra a propósito por PIN malo/bloqueado.
+  const nuevos = errores.splice(errAntes);
+  ok(nuevos.every(e => /Error al verificar PIN/.test(e)), 'PIN) sin otros errores (p. ej. PERMISSION_DENIED de la base): ' + JSON.stringify(nuevos.slice(0, 3)));
+  // Restaurar un archivado: la copia de «recordar este celular» NO vuelve (las reglas la rechazarían y el equipo no volvería).
+  await page.evaluate(() => { window.confirm = () => true; });
+  const rest = await page.evaluate(async () => {
+    const btn = document.createElement('button');
+    window.__alerts = [];
+    window.alert = (m) => window.__alerts.push(m);
+    await restoreArchivedDevice('arch1', window.__fakeDb.getAt('archivedDevices/arch1'), btn);
+    return { dev: window.__fakeDb.getAt('devices/arch1'), arch: window.__fakeDb.getAt('archivedDevices/arch1'), alerts: window.__alerts };
+  });
+  ok(rest.dev && rest.dev.deviceName === 'archivado' && rest.arch === null && rest.alerts.length === 0,
+    'archivados) restaurar devuelve el equipo y vacía el archivo, sin error: ' + JSON.stringify({ alerts: rest.alerts, dev: !!rest.dev }));
+  ok(rest.dev && rest.dev.trustedAdmins === undefined && rest.dev.info && rest.dev.info.trustedAdmins === undefined && rest.dev.info.nota === 'se conserva',
+    'archivados) …sin «trustedAdmins» (ni el de la raíz ni el de info/) y conservando el resto de info/: ' + JSON.stringify(rest.dev && rest.dev.info));
   await page.screenshot({ path: 'panel_sidebar.png' });
   await page.evaluate(() => openDeviceSidebar('dev2', currentDevicesData['dev2']));
   await sleep(300);

@@ -327,6 +327,27 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const rUpd = await p.evaluate(async () => { setTimeout(() => __deviceApplies('dev5', __lastCid, null), 400); return await LS.sendCommand('dev5', 'UPDATE_LOCKSUITE', null, null, { nombre: 'Shuli', timeoutMs: 5000 }); });
   ok(rUpd.ok && rUpd.status === 'applied', 'B.104: UPDATE_LOCKSUITE sigue pasando sin PIN en la nube (es la vía para arreglar un celular viejo) ' + JSON.stringify(rUpd));
 
+  // 9/11/2026 (auditoría): la Function contesta 401 si la sesión venció o fue revocada y 429 si hubo demasiados
+  // PIN incorrectos desde esta cuenta. Con ninguno de los dos sirve pedir el PIN del celular: se muestra el
+  // motivo, sin el código interno, y no se reintenta.
+  await p.evaluate(() => { window.__prompts = 0; window.__fnMode = 'sesion_revocada'; });
+  const nSes0 = await p.evaluate(() => __calls.length);
+  const rSes = await p.evaluate(async () => await LS.sendCommand('dev1', 'BLOCK_WIFI', null, null, { nombre: 'itzi' }));
+  ok(!rSes.ok && rSes.status === 'sesion' && /sesión fue revocada/.test(rSes.reason) && !/SESSION_/.test(rSes.reason),
+    '401: sendCommand devuelve status «sesion» con el motivo legible → ' + JSON.stringify(rSes).slice(0, 150));
+  ok((await p.evaluate(() => __prompts)) === 0 && (await p.evaluate((n) => __calls.length - n, nSes0)) === 1,
+    '401: no pide PIN y manda un solo pedido, sin reintento');
+  await p.evaluate(() => { window.__fnMode = 'pin_bloqueado'; });
+  const nBlq0 = await p.evaluate(() => __calls.length);
+  const rBlq = await p.evaluate(async () => await LS.sendCommand('dev1', 'BLOCK_WIFI', null, null, { nombre: 'itzi' }));
+  ok(!rBlq.ok && rBlq.status === 'pin_bloqueado' && /demasiados PIN incorrectos/.test(rBlq.reason) && /5 min/.test(rBlq.reason) && !/PIN_LOCKED/.test(rBlq.reason),
+    '429: sendCommand devuelve status «pin_bloqueado» con cuánto esperar → ' + JSON.stringify(rBlq).slice(0, 170));
+  ok((await p.evaluate(() => __prompts)) === 0 && (await p.evaluate((n) => __calls.length - n, nBlq0)) === 1,
+    '429: no pide PIN y manda un solo pedido, sin reintento');
+  const txtBlq = await p.evaluate((r) => LS.resultado(r)[0], rBlq);
+  ok(/^No se pudo: demasiados PIN incorrectos/.test(txtBlq), '429: el texto que ve el administrador es claro → ' + txtBlq.slice(0, 80));
+  await p.evaluate(() => { window.__fnMode = 'pin_no_publicado'; });
+
   // Controles: con el verificador en la nube todo sigue como antes (se pide el PIN, una sola vez, y se manda).
   await p.evaluate(() => { window.__prompts = 0; window.prompt = () => { window.__prompts++; return '1234'; }; window.__fnMode = 'pin_requerido'; delete LS.pins['dev5']; });
   const rOk = await p.evaluate(async () => { setTimeout(() => __deviceApplies('dev5', __lastCid, null), 500); return await LS.sendCommand('dev5', 'BLOCK_WIFI', null, null, { nombre: 'Shuli' }); });
