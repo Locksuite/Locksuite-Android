@@ -121,7 +121,7 @@ window.LOCKSUITE_CATALOG = {
         "tenor.com",
         "giphy.com"
       ],
-      "note": "Chat tiene selector de GIF propio: por eso los bloqueos aunque esté permitida."
+      "note": "Chat tiene selector de GIF propio: por eso los bloqueos aunque esté permitida. Los audios y adjuntos se descargan de usercontent.google.com (infraestructura)."
     },
     {
       "pkg": "com.google.android.apps.messaging",
@@ -351,6 +351,7 @@ window.LOCKSUITE_CATALOG = {
     "gvt2.com",
     "gvt3.com",
     "googleusercontent.com",
+    "usercontent.google.com",
     "ggpht.com",
     "googleapis.com",
     "gstatic.com",

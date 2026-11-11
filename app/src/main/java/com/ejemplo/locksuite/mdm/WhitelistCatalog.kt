@@ -117,6 +117,7 @@ object WhitelistCatalog {
         "gvt2.com",
         "gvt3.com",
         "googleusercontent.com",
+        "usercontent.google.com",
         "ggpht.com",
 
         // ── APIs de Google y recursos estáticos. ──
@@ -329,7 +330,7 @@ object WhitelistCatalog {
             label = "Google Chat",
             allow = listOf("chat.google.com"),
             block = listOf("tenor.googleapis.com", "tenor.com", "giphy.com"),
-            note = "Chat tiene selector de GIF propio: por eso los bloqueos aunque esté permitida."
+            note = "Chat tiene selector de GIF propio: por eso los bloqueos aunque esté permitida. Los audios y adjuntos se descargan de usercontent.google.com (infraestructura)."
         ),
 
         Entry(

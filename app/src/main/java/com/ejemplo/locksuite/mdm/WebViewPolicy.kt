@@ -81,6 +81,7 @@ object WebViewPolicy {
         "drive.google.com",
         "docs.google.com",
         "drive.usercontent.google.com",
+        "usercontent.google.com",
         "meet.google.com",
         "chat.google.com",
         "messages.google.com",
