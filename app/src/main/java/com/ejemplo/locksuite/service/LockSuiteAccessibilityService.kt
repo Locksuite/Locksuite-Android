@@ -864,6 +864,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         // ── Bloqueo de Gemini en Google Mensajes (switch: block_gemini_messages) ──
         if (f.geminiMessages && packageName == com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING) {
+            if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                ev.className?.toString()?.takeIf { it.isNotBlank() }?.let {
+                    lastGeminiMessagingWindowClass = it
+                }
+            }
             handleGeminiMessagesBlocking(eventType)
         }
 
@@ -3058,6 +3063,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var geminiBlockInProgress = false
     private var geminiFailedBounces = 0
     private var geminiBackoffUntil = 0L
+    private var lastGeminiMessagingWindowClass: String? = null
     private val GEMINI_BACKOFF_MS = 2500L
 
     private val geminiMessagesScanRunnable = Runnable {
@@ -3070,6 +3076,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private fun handleGeminiMessagesBlocking(eventType: Int) {
         if (eventType == android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             eventType == android.view.accessibility.AccessibilityEvent.TYPE_VIEW_SELECTED) {
+            mainHandler.removeCallbacks(geminiMessagesScanRunnable)
             scanForGeminiMessages()
         }
         if (eventType == android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
@@ -3081,30 +3088,34 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private fun scanForGeminiMessages() {
         if (geminiBlockInProgress) return
         val root = rootInActiveWindow ?: return
-        val rootPkg = root.packageName?.toString() ?: ""
-
-        if (rootPkg == com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING) {
-            val retrato = buildGeminiRetrato(root)
-            root.recycle()
-
-            val veredicto = com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.evaluar(retrato)
-            if (veredicto == com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.Veredicto.GEMINI) {
-                triggerGeminiMessagesBlock(com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.motivo(retrato))
+        try {
+            val rootPkg = root.packageName?.toString() ?: ""
+            if (rootPkg == com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING) {
+                val retrato = buildGeminiRetrato(root)
+                val veredicto = com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.evaluar(retrato)
+                if (veredicto == com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.Veredicto.GEMINI) {
+                    triggerGeminiMessagesBlock(
+                        com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.motivo(retrato),
+                        retrato.isConversationScreen
+                    )
+                }
             }
-        } else {
+        } finally {
             root.recycle()
         }
     }
 
-    private fun triggerGeminiMessagesBlock(motivo: String) {
+    private fun triggerGeminiMessagesBlock(motivo: String, isConversation: Boolean) {
         val now = android.os.SystemClock.elapsedRealtime()
         if (geminiBlockInProgress || now < geminiBackoffUntil) return
         geminiBlockInProgress = true
 
-        android.util.Log.w(TAG, "🚫 Gemini en Google Mensajes: rebotando — $motivo")
+        val windowTag = lastGeminiMessagingWindowClass
+            ?: if (isConversation) "ConversationActivity" else "GeminiOnboarding"
+        android.util.Log.w(TAG, "🚫 Gemini en Google Mensajes: rebotando ($windowTag) — $motivo")
         com.ejemplo.locksuite.mdm.Layer3Audit.anotar(
             applicationContext, "gemini-mensajes", com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING,
-            "ConversationActivity", motivo, true
+            windowTag, motivo, true
         )
         mainHandler.post {
             android.widget.Toast.makeText(
@@ -3116,127 +3127,241 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         performGlobalAction(GLOBAL_ACTION_BACK)
 
         mainHandler.postDelayed({
-            val current = rootInActiveWindow
-            val stillGemini = if (current == null) {
-                false
-            } else {
-                val pkg = current.packageName?.toString() ?: ""
-                val isGemini = pkg == com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING &&
-                    com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.evaluar(buildGeminiRetrato(current)) ==
-                        com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.Veredicto.GEMINI
-                current.recycle()
-                isGemini
-            }
+            try {
+                com.ejemplo.locksuite.util.Safe.guard("a11y.geminiMessagesVerify") {
+                    val current = rootInActiveWindow
+                    val stillGemini = if (current == null) {
+                        false
+                    } else {
+                        try {
+                            val pkg = current.packageName?.toString() ?: ""
+                            pkg == com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING &&
+                                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.evaluar(buildGeminiRetrato(current)) ==
+                                    com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.Veredicto.GEMINI
+                        } finally {
+                            current.recycle()
+                        }
+                    }
 
-            if (stillGemini) {
-                geminiFailedBounces++
-                if (geminiFailedBounces >= 2) {
-                    android.util.Log.w(TAG, "🏠 Gemini en Mensajes persiste tras dos intentos, forzando HOME")
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                    geminiFailedBounces = 0
-                    geminiBackoffUntil = android.os.SystemClock.elapsedRealtime() + GEMINI_BACKOFF_MS
+                    if (stillGemini) {
+                        geminiFailedBounces++
+                        if (geminiFailedBounces >= 2) {
+                            android.util.Log.w(TAG, "🏠 Gemini en Mensajes persiste tras dos intentos, forzando HOME")
+                            performGlobalAction(GLOBAL_ACTION_HOME)
+                            geminiFailedBounces = 0
+                            geminiBackoffUntil = android.os.SystemClock.elapsedRealtime() + GEMINI_BACKOFF_MS
+                        }
+                    } else {
+                        geminiFailedBounces = 0
+                    }
                 }
-            } else {
-                geminiFailedBounces = 0
+            } finally {
+                geminiBlockInProgress = false
             }
-            geminiBlockInProgress = false
         }, 700)
     }
 
     private class GeminiRetratoState {
+        var isInbox = false
+        var isSettings = false
         var isConversation = false
         var title: String? = null
         var hint: String? = null
         var hasCallButtons = false
         var hasWelcomeTitle = false
         var hasPrivacyDisclaimer = false
+        var hasConsentButton = false
         var hasPenpalViewId = false
+        var rootTop = 0
+        var topBarMaxY = 0
+        var composeMinY = 0
+        var remainingBudget = MAX_NODES_PER_SCAN
+        val tempRect = android.graphics.Rect()
     }
 
     private fun buildGeminiRetrato(root: android.view.accessibility.AccessibilityNodeInfo): com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.Retrato {
         val estado = GeminiRetratoState()
-        nodeBudget = MAX_NODES_PER_SCAN
-        scanGeminiNode(root, 0, estado)
+        root.getBoundsInScreen(estado.tempRect)
+        val dm = resources.displayMetrics
+        val density = dm.density.coerceAtLeast(1f)
+        val fallbackHeight = dm.heightPixels.coerceAtLeast(1)
+        val winTop = if (!estado.tempRect.isEmpty) estado.tempRect.top else 0
+        val winHeight = if (estado.tempRect.height() > 0) estado.tempRect.height() else fallbackHeight
+        val maxToolbarPx = (130f * density).toInt()
+        val fracToolbarPx = (winHeight * 0.22f).toInt()
+        estado.rootTop = winTop
+        estado.topBarMaxY = winTop + minOf(maxToolbarPx, fracToolbarPx).coerceAtLeast((88f * density).toInt())
+        estado.composeMinY = winTop + (winHeight * 0.25f).toInt()
+
+        scanGeminiNode(root, 0, estado, insideMessageBubble = false, insideEditableBox = false)
         return com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.Retrato(
             packageName = com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING,
+            isInboxScreen = estado.isInbox,
+            isSettingsScreen = estado.isSettings,
             isConversationScreen = estado.isConversation,
             conversationTitle = estado.title,
             composerHint = estado.hint,
             hasCallButtons = estado.hasCallButtons,
             hasWelcomeTitle = estado.hasWelcomeTitle,
             hasPrivacyDisclaimer = estado.hasPrivacyDisclaimer,
+            hasConsentButton = estado.hasConsentButton,
             hasPenpalViewId = estado.hasPenpalViewId
         )
     }
 
-    private fun scanGeminiNode(node: android.view.accessibility.AccessibilityNodeInfo, depth: Int, estado: GeminiRetratoState) {
+    private fun scanGeminiNode(
+        node: android.view.accessibility.AccessibilityNodeInfo,
+        depth: Int,
+        estado: GeminiRetratoState,
+        insideMessageBubble: Boolean,
+        insideEditableBox: Boolean
+    ) {
         if (depth > MAX_TREE_DEPTH) return
-        if (nodeBudget-- <= 0) return
+        if (estado.remainingBudget-- <= 0) return
 
         val viewId = node.viewIdResourceName?.lowercase() ?: ""
+        node.getBoundsInScreen(estado.tempRect)
+        val nodeTop = estado.tempRect.top
+        val inTopBar = estado.tempRect.isEmpty || nodeTop <= estado.topBarMaxY
+        val inComposeArea = estado.tempRect.isEmpty || nodeTop >= estado.composeMinY
+
+        val isBubbleNode = insideMessageBubble ||
+            viewId.contains("message_text") ||
+            viewId.contains("message_bubble")
+
         if (viewId.isNotEmpty()) {
             if (viewId.contains("penpal") || viewId.contains("gemini")) {
                 estado.hasPenpalViewId = true
             }
-            if (viewId.contains("compose_message_text") || viewId.contains("conversation_title") ||
-                viewId.contains("action_bar") || viewId.contains("message_list")) {
+            if (com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esMarcadorBandejaPorId(viewId)) {
+                estado.isInbox = true
+            }
+            if (viewId.contains("compose_message_text") || viewId.contains("message_list")) {
                 estado.isConversation = true
             }
-            if (viewId.contains("conversation_title") || viewId.contains("title_container")) {
+            if (viewId.contains("conversation_title") && inTopBar && !isBubbleNode) {
+                estado.isConversation = true
                 val t = node.text?.toString() ?: node.contentDescription?.toString()
                 if (!t.isNullOrBlank()) {
                     estado.title = t.trim()
                 }
-            }
-            if (viewId.contains("compose_message_text")) {
-                val h = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    node.hintText?.toString()
-                } else null
-                estado.hint = h ?: node.text?.toString()
-                estado.isConversation = true
-            }
-            if (viewId.contains("action_call") || viewId.contains("action_video_call") ||
-                viewId.contains("voice_call") || viewId.contains("video_call")) {
-                estado.hasCallButtons = true
+            } else if (viewId.contains("title_container") && inTopBar && !isBubbleNode) {
+                val t = node.text?.toString() ?: node.contentDescription?.toString()
+                if (!t.isNullOrBlank() && !com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esBarraBusquedaBandeja(t.lowercase())) {
+                    estado.title = t.trim()
+                }
             }
         }
 
-        val desc = node.contentDescription?.toString()?.lowercase() ?: ""
-        if (desc.isNotEmpty()) {
-            if (desc.contains("llamar") || desc.contains("videollamada") ||
-                desc.contains("voice call") || desc.contains("video call")) {
-                estado.hasCallButtons = true
-            }
+        val className = node.className?.toString() ?: ""
+        if (className.endsWith("Switch") || className.endsWith("SwitchCompat") ||
+            (node.isCheckable && className.contains("Switch", ignoreCase = true))) {
+            estado.isSettings = true
         }
 
+        val desc = node.contentDescription?.toString() ?: ""
+        val descLower = desc.lowercase()
         val text = node.text?.toString() ?: ""
-        if (text.isNotBlank()) {
-            val lower = text.lowercase()
-            if (lower == "gemini" && estado.title == null && depth <= 8) {
+        val textLower = text.lowercase()
+
+        // 1. Compositor editable de mensajes (solo área inferior, nunca buscador ni destinatario,
+        //    y nunca texto tipeado por el usuario para evitar falsos positivos con amigos).
+        val isSearchOrRecipientInput = viewId.contains("search") ||
+            viewId.contains("recipient") ||
+            com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esBarraBusquedaBandeja(textLower)
+
+        val isComposerInput = !isBubbleNode && !isSearchOrRecipientInput &&
+            (viewId.contains("compose_message_text") || (node.isEditable && inComposeArea))
+
+        if (isComposerInput) {
+            estado.isConversation = true
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val h = node.hintText?.toString()
+                val resolvedHint = when {
+                    !h.isNullOrBlank() -> h
+                    node.isShowingHintText && text.isNotBlank() -> text
+                    else -> null
+                }
+                if (!resolvedHint.isNullOrBlank() &&
+                    !com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esBarraBusquedaBandeja(resolvedHint.lowercase())
+                ) {
+                    estado.hint = resolvedHint
+                }
+            }
+        }
+
+        // Placeholder hijo dentro del nodo editable (Jetpack Compose BasicTextField decorationBox)
+        if (insideEditableBox && !isBubbleNode && text.isNotBlank() &&
+            com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esFraseComposerGemini(textLower)
+        ) {
+            estado.hint = text
+            estado.isConversation = true
+        }
+
+        // 2. Botones de llamada / videollamada en barra superior o por viewId explícito
+        if (!isBubbleNode) {
+            val isCallById = com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esBotonLlamadaToolbar(viewId, "")
+            val isCallByToolbarDesc = inTopBar && (node.isClickable || descLower.isNotEmpty()) &&
+                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esBotonLlamadaToolbar("", descLower)
+            if (isCallById || isCallByToolbarDesc) {
+                estado.hasCallButtons = true
+            }
+        }
+
+        // 3. Señales de bandeja principal y ajustes de Mensajes
+        if (!isBubbleNode) {
+            val clickableOrFab = node.isClickable || viewId.contains("fab")
+            if (clickableOrFab && (
+                    com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esFabIniciarChat(textLower) ||
+                        com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esFabIniciarChat(descLower)
+                )
+            ) {
+                estado.isInbox = true
+            }
+            if (inTopBar && (
+                    com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esBarraBusquedaBandeja(textLower) ||
+                        com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esBarraBusquedaBandeja(descLower)
+                )
+            ) {
+                estado.isInbox = true
+            }
+            if (com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esMarcadorAjustes(textLower) ||
+                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esMarcadorAjustes(descLower)
+            ) {
+                estado.isSettings = true
+            }
+        }
+
+        // 4. Título en TopBar, bienvenida, disclaimer y consentimiento (NUNCA dentro de globos de chat)
+        if (!isBubbleNode && text.isNotBlank()) {
+            if (inTopBar && estado.title == null &&
+                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esTituloGemini(textLower)
+            ) {
                 estado.title = text.trim()
             }
-            if (lower.contains("chatear con gemini") || lower.contains("chat with gemini")) {
+            if (com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esBienvenidaGemini(textLower)) {
                 estado.hasWelcomeTitle = true
-                estado.isConversation = true
             }
-            if (lower.contains("no están encriptados de extremo a extremo") ||
-                lower.contains("aren't end-to-end encrypted") ||
-                lower.contains("not end-to-end encrypted")) {
+            if (com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esDisclaimerGemini(textLower)) {
                 estado.hasPrivacyDisclaimer = true
-                estado.isConversation = true
             }
-            if (lower.contains("preguntar a gemini") || lower.contains("mensaje a gemini") ||
-                lower.contains("ask gemini") || lower.contains("message gemini")) {
-                estado.hint = text
-                estado.isConversation = true
+            if (node.isClickable &&
+                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esBotonConsentimientoGemini(textLower)
+            ) {
+                estado.hasConsentButton = true
             }
+        } else if (!isBubbleNode && node.isClickable && descLower.isNotEmpty() &&
+            com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esBotonConsentimientoGemini(descLower)
+        ) {
+            estado.hasConsentButton = true
         }
 
         val childCount = node.childCount
+        val nextInsideEditable = insideEditableBox || isComposerInput
         for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
             try {
-                scanGeminiNode(child, depth + 1, estado)
+                scanGeminiNode(child, depth + 1, estado, isBubbleNode, nextInsideEditable)
             } finally {
                 child.recycle()
             }

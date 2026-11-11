@@ -2392,7 +2392,7 @@ Qué se hizo:
 
 ---
 
-**B.108 — BLOQUEO DE GEMINI EN GOOGLE MENSAJES VÍA CAPA 3 Y SWITCH ACTIVADO POR DEFECTO (5/11/2026). [IMPLEMENTADO Y VERIFICADO EN UNIT TESTS]**
+**B.108 — BLOQUEO DE GEMINI EN GOOGLE MENSAJES VÍA CAPA 3 Y SWITCH ACTIVADO POR DEFECTO (5/11/2026). [CORREGIDO FALSO POSITIVO EN BANDEJA EL 11/11 — VER B.114; FALTA CONFIRMAR EN EQUIPO REAL]**
 
 Pedido del dueño (5/11): la app Google Mensajes (`com.google.android.apps.messaging`) incluye la opción de chatear con la IA Gemini por RCS. Averiguar si usa dominios DNS independientes o cómo bloquearlo sin arruinar nada más; implementar un switch activado por defecto siempre llamado `"Bloqueo de gemini en mensajes"` y garantizar que se cierre/rebote al entrar a Gemini sin tocar chats normales, contactos humanos ni la bandeja de entrada.
 
@@ -2707,17 +2707,56 @@ or your Application does not implement Configuration.Provider.
 
 ---
 
+**B.114 — FALSO POSITIVO EN LA PÁGINA PRINCIPAL DE GOOGLE MENSAJES (CON EL LOGO DE GEMINI): REBOTABA AL ABRIR LA BANDEJA DE CHATS EN 0.6.81 (11/11/2026). [CORREGIDO EN CÓDIGO Y VERIFICADO EN 341 UNIT TESTS; FALTA CONFIRMAR EN EQUIPO REAL]**
+
+**Síntoma reportado (10–11/11, v0.6.81 / código 144):**
+El dueño reportó que, al entrar a la página principal de Google Mensajes (donde figura el logo/botón de Gemini para iniciar un chat con la IA), LockSuite cerraba la aplicación inmediatamente.
+
+**Evidencia forense verificada en Firebase RTDB (`layer3Audit`):**
+Tres equipos reales en producción (`0.6.81`, código `144`: `7073099b55af5fd6` «Yo» ×17, `91431ec29bc2fe91` «Shuli» ×32, `e1939eb56647c24f` «Iejiel» ×3) registraron exactamente el mismo disparo:
+`gemini-mensajes|com.google.android.apps.messaging|ConversationActivity|componente interno de Gemini/Penpal en pantalla de chat|1`
+
+**Causa raíz (cuatro fallas combinadas en B.108):**
+1. **`action_bar` marcaba TODA la app como conversación:** `LockSuiteAccessibilityService.scanGeminiNode()` tenía `viewId.contains("action_bar")` para activar `estado.isConversation = true`. En Android, `action_bar_root` / `action_bar_container` existe también en la bandeja principal de Mensajes y en Ajustes.
+2. **Logo/FAB de Gemini en la bandeja principal + regla `penpal` aislada:** En la pantalla inicial, el botón flotante de Gemini (`penpal_fab` / IDs con `penpal` o `gemini`) activaba `hasPenpalViewId = true`, y como la bandeja no tiene botones de llamada (`hasCallButtons = false`), caía directo en la regla `hasPenpalViewId && !hasCallButtons`. Además, `penpal` también es usado internamente por Google para Magic Compose dentro de chats grupales o SMS bancarios (que tampoco tienen botón de llamada).
+3. **Coincidencias de texto sin contexto estructural:** Etiquetas/tooltips de la bandeja como `"Chatear con Gemini"` o `"Preguntar a Gemini"`, o una fila de hilo anterior llamada `"Gemini"` en la lista de chats, podían activar `isConversation`, `hasWelcomeTitle` o `title`.
+4. **Lectura riesgosa en el compositor:** En `compose_message_text`, si `hintText` llegaba vacío en un chat humano, el fallback a `node.text` podía leer lo que el usuario estaba escribiendo.
+
+**Qué se cambió (sin tocar nada de B.113 ni de otros bloques):**
+1. **`LockSuiteAccessibilityService.kt` (`scanGeminiNode` / `buildGeminiRetrato` / `triggerGeminiMessagesBlock`):**
+   - Eliminado `action_bar` de `isConversation` y eliminada la activación ciega de `isConversation` por textos sueltos.
+   - Clasificación por regiones usando límites de pantalla (`Rect` relativo a la ventana): barra superior (`topBarMaxY`) para título y botones de llamada/videollamada, y zona inferior de redacción (`composeMinY`) para `EditText` de mensajes (excluyendo buscador y destinatarios).
+   - Detección explícita de bandeja principal (`isInboxScreen`: `start_chat_fab`, `conversation_list`, `open_search_bar`, botón clickeable `"Iniciar chat"` / `"Start chat"` / hebreo, cabecera `"Mensajes"`) y de Ajustes (`isSettingsScreen`: `Switch` toggles o `"Mostrar el botón de Gemini"`).
+   - Exclusión de subárboles de globos de mensajes (`message_text` / `message_bubble`) y uso estricto de `hintText` / `isShowingHintText == true` (Android 8+) para jamás leer texto tipeado por el usuario.
+   - Uso de `budget` local dentro de `GeminiRetratoState`, bloques `try/finally` para reciclar nodos sin fugas, `Safe.guard` en la verificación diferida a los 700 ms, y registro del `className` real de ventana en `Layer3Audit`.
+2. **`GeminiMessagesPolicy.kt`:**
+   - Agregados `isInboxScreen`, `isSettingsScreen` y `hasConsentButton` en `Retrato`.
+   - La bandeja principal con logo/FAB de Gemini devuelve `NORMAL`; solo rebota si hay un modal/sheet de consentimiento superpuesto con el descargo legal (`hasPrivacyDisclaimer && (hasWelcomeTitle || hasConsentButton)`).
+   - Eliminada la regla peligrosa de `hasPenpalViewId && !hasCallButtons` aislada (evita falsos positivos también en chats grupales y SMS sin llamadas con Magic Compose).
+   - Ampliados predicados puros en español, inglés y hebreo (`esTituloGemini`, `esFraseComposerGemini`, `esBienvenidaGemini`, `esDisclaimerGemini`, `esBotonConsentimientoGemini`, `esMarcadorAjustes`, `esBotonLlamadaToolbar`, `esMarcadorBandejaPorId`, `esFabIniciarChat`, `esBarraBusquedaBandeja`).
+3. **`GeminiMessagesPolicyTest.kt`:** Ampliada de 13 a **19 pruebas unitarias** cubriendo el bug exacto de la bandeja principal con logo de Gemini, carga parcial de bandeja, chats grupales/bancarios sin llamadas con Magic Compose, contactos humanos en ES/HE, conversaciones ordinarias y pantalla de Ajustes.
+
+**Verificación:**
+- Compilación Debug y suite completa Android: `.\gradlew.bat testDebugUnitTest` → **341 pruebas en verde (0 fallos, 0 saltos)**, incluidas las **19** de `GeminiMessagesPolicyTest`.
+- **Pendiente de confirmar en equipo real:** probar en `0.6.82` que la página principal de Google Mensajes abra y permanezca abierta mostrando el logo de Gemini, mientras que al tocar para abrir el onboarding o chat de Gemini rebote inmediatamente.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**9/11 → 10/11 (madrugada) — Claude: auditoría de seguridad a partir del informe de un amigo (30 hallazgos) y revisión propia del PIN y los secretos (B.113).**
+**11/11 (madrugada) — Antigravity: corrección de falso positivo en bandeja principal de Google Mensajes (B.114), orden de commits pendientes (B.113 + Google Chat) y despliegue (`deploy_all.ps1`).**
 
-- **Pedido del dueño:** verificar el informe de seguridad de un amigo (30 hallazgos, «mejoras recomendadas» y la causa de un supuesto bug del fondo de pantalla), revisar que LockSuite llegue a estándares de seguridad muy altos y corregir lo que hiciera falta. A mitad de la sesión aclaró el criterio que manda: corregir solo lo que seguro es un error o una inseguridad real; lo que Gemini marcó como «bug» pero es una tontería o una decisión tomada a propósito no se toca, y ante la duda, preguntar.
-- **Qué se hizo:** se contrastaron los 30 hallazgos uno por uno con el código y con este documento (tabla completa en el punto 4 de B.113) y se revisó por cuenta propia todo el camino del PIN, los secretos y la Cloud Function. Resultado: **5 hallazgos atendidos** (el 2 y el 5 del todo; el 1, el 3 y el 27 en parte) y **25 sin tocar a propósito** (decisiones ya documentadas, cosas que no aplican o que necesitan una decisión del dueño). El fondo de pantalla bloqueado es deliberado (G-4) y ya se puede permitir equipo por equipo: no se cambió.
-- **Conclusión:** el agujero real no estaba en el celular sino en lo que el panel permitía a cualquier administrador autorizado: leer todo `deviceSecrets` (hash y sal del PIN, `commandSecret`, código de recuperación), reemplazar el verificador del PIN y ponerse a sí mismo en `trustedAdmins` para no pedir nunca más el PIN; además la Function no frenaba los intentos de PIN, no verificaba la revocación del token y comparaba el hash sin tiempo constante. Varias afirmaciones del informe eran incorrectas o no aplicaban (R8 ya está activo, `reapplyAllRestrictions` ya aísla cada restricción, el HTML del panel se escapa, el IDN viaja en punycode, con `targetSdk 34` el tráfico en claro ya viene bloqueado).
-- **Qué se escribió (sin desplegar, sin el emulador real de Firebase y sin probar en equipo; no se tocó ningún archivo de Android):** reglas (`deviceSecrets` sin lectura para ningún cliente, el administrador no cambia el verificador del PIN, `trustedAdmins` solo lo escribe la Function, `pinThrottle`), Function (`pin_security.js`, `VERIFY_PIN` con freno de intentos, token con revocación, `deviceId` validado) y panel (verifica el PIN en la Function; ya no lee `deviceSecrets` ni escribe `trustedAdmins`). Pruebas en el contenedor: reglas 90 comprobaciones en un evaluador hecho a mano (con las reglas anteriores salen 18 en rojo), Function 24 + 14, panel 287 con Chromium real, 6 chequeos de sincronía y pruebas de mutación (11 roturas a propósito, las 11 detectadas). **No se tachó nada de la sección B:** no hay nada confirmado en equipo real.
-- **Lo que NO se cierra:** un administrador autorizado todavía puede rodear el PIN en tres pasos (cambia `devices/<id>/ownerUid` a una sesión anónima suya, esa sesión reemplaza `pinHash` y `pinSalt`, y pasa `VERIFY_PIN` con ese PIN). Es la causa de fondo de B.3 —la identidad del equipo es un uid anónimo— y no se cierra solo con reglas; queda como decisión del dueño (pregunta 7 de B.113).
-- **Sin commitear en la carpeta del dueño** (Claude no pudo correr git ahí: el shell del contenedor no monta la carpeta): los cambios ya están copiados en la carpeta, sin commit. El commit existe en una copia del repositorio en el entorno de Claude (mismo punto de partida, `cbdaa32`), y el mensaje (`COMMIT_MSG_2026-11-09_auditoria_seguridad.txt`) y el parche (`PARCHE_2026-11-09_auditoria_seguridad.patch`, solo informativo) quedaron al lado para commitear allí con los `git add` de la lista explícita del archivo de Antigravity (no con `git add -A`, que mete cualquier otro archivo suelto) y `git commit -F`.
-- **Preguntas abiertas para el dueño** (si no responde, no se toca nada): ventana de sesión de 5 min; ver el código de recuperación en el panel; `globalSettings` y `storeApps` a `auth != null`; Knox (`BLOCK_FLASHING` informa éxito sin hacer nada); `sha256` publicado por el script de despliegue; tapjacking; token por dispositivo o App Check; fondo de pantalla por defecto. Detalle en el punto 7 de B.113.
-- **Para Antigravity:** `INSTRUCCIONES_ANTIGRAVITY_2026-11-09_AUDITORIA_SEGURIDAD.md`.
+- **Pedido del dueño:** al entrar a la página principal de Mensajes que tiene el logo de Gemini, se cerraba la app; investigar y corregir el falso positivo (`v0.6.81`), actualizar `LOCKSUITE_CONTEXTO_PARA_IA.md` y desplegar con el script habitual.
+- **Qué se diagnosticó y corrigió (B.114):**
+  - Se confirmó en `layer3Audit` de RTDB en 3 equipos reales (`7073099b55af5fd6`, `91431ec29bc2fe91`, `e1939eb56647c24f`, v0.6.81) el motivo `"componente interno de Gemini/Penpal en pantalla de chat"`.
+  - Causa: `viewId.contains("action_bar")` marcaba la bandeja principal como conversación, y el logo/FAB de Gemini (`penpal_fab`) disparaba `hasPenpalViewId && !hasCallButtons`.
+  - Se reescribió el escáner en `LockSuiteAccessibilityService.kt` y la política pura en `GeminiMessagesPolicy.kt` separando bandeja principal, Ajustes, onboarding/modal con descargo legal y conversación abierta por regiones de pantalla (`Rect`), excluyendo globos de mensajes, exigiendo `isShowingHintText` para hints, añadiendo soporte ES/EN/HE y quitando el disparo aislado por `penpal`.
+  - Se amplió `GeminiMessagesPolicyTest.kt` a 19 tests y corrió `.\gradlew.bat testDebugUnitTest`: **341 tests PASS (`BUILD SUCCESSFUL`)**.
+- **Estado de los cambios previos encontrados en el árbol de trabajo (sin pisar nada):**
+  - Se verificó `ownerUid` en los 30 equipos de Firebase RTDB (29 lo tienen; `b2d9d04d04b1abc3` ya tiene `commandSecret` publicado).
+  - Corrieron OK: `test_pin_security.js` (14), `test_functions_index.js` (24), evaluador offline de reglas (90 en ambos modos de `.validate`), chequeos de sintaxis `node --check` y los 8 scripts de sincronía (`gen_catalog_js`, `gen_policies_js`, `check_*_sync`).
+  - Se commiteó por separado `B.113` (`fc469fe`, con `COMMIT_MSG_2026-11-09_auditoria_seguridad.txt`) y el ajuste de `usercontent.google.com` para Google Chat (`801411e`) antes del deploy. **No se tachó nada de B.112 ni B.113** porque: (1) el emulador real de `tools/rules_tests` falló por versión de Java en la PC (`firebase-tools` pide JDK 21+ y la PC tiene OpenJDK 17), y (2) faltan las pruebas en equipo real de B.113 (y recargar el panel con `Ctrl+F5` tras desplegar reglas nuevas). Se recuperaron ~898 MB libres en `E:` (que había llegado a 0 libre) quitando el `node_modules` temporal de `rules_tests`.
+- **Pendiente al despertar el equipo:** confirmar en celular real `0.6.82` que Mensajes abra normalmente en la bandeja principal y rebote solo al entrar a Gemini; recordar recargar con `Ctrl+F5` pestañas abiertas del panel por B.113 y validar en equipo real los puntos pendientes de B.112 y B.113.
+
