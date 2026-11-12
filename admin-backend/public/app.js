@@ -2364,7 +2364,7 @@ const WHITELIST_BUILTIN = [
     { pkg: "com.google.android.apps.tachyon", label: "Google Meet", allow: 2, block: 0 },
     { pkg: "com.google.android.apps.meetings", label: "Google Meet (app aparte)", allow: 2, block: 0 },
     { pkg: "com.beatmobile.ak", label: "Ajdut Kosher", allow: 2, block: 0 },
-    { pkg: "com.tranzmate", label: "Moovit", allow: 3, block: 0 },
+    { pkg: "com.thetransitapp.droid", label: "Transit", allow: 4, block: 0 },
     { pkg: "com.google.android.apps.chromecast.app", label: "Google Home", allow: 2, block: 0 },
     { pkg: "com.tuya.smartlife", label: "Smart Life (Tuya)", allow: 6, block: 0 },
     { pkg: "com.google.android.apps.translate", label: "Traductor de Google", allow: 1, block: 1 },

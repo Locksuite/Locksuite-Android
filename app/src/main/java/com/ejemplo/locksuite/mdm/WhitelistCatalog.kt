@@ -45,7 +45,7 @@ package com.ejemplo.locksuite.mdm
  *    bloquear uno de estos dominios es un FORCE_BLOCK explícito desde la sección DNS,
  *    que le gana a todo — es la salida de emergencia, y es deliberada.
  *
- * 6. **`SHARED_CDN` es la parte incómoda y está separada a propósito.** Uber, Moovit y
+ * 6. **`SHARED_CDN` es la parte incómoda y está separada a propósito.** Uber, Transit y
  *    varias más sirven su contenido desde CDN compartidos (CloudFront, Akamai, Fastly).
  *    Permitir `cloudfront.net` entero es permitir una porción enorme de internet, no
  *    solo Uber. Va en su propio grupo, con interruptor propio en el panel
@@ -426,10 +426,10 @@ object WhitelistCatalog {
         ),
 
         Entry(
-            packageName = "com.tranzmate",
-            label = "Moovit",
-            allow = listOf("moovitapp.com", "moovit.com", "tranzmate.com"),
-            note = "Usa CDN compartidos para los mapas de líneas."
+            packageName = "com.thetransitapp.droid",
+            label = "Transit",
+            allow = listOf("transitapp.com", "thetransitapp.com", "transit.land", "mapbox.com"),
+            note = "Usa Mapbox/Google Maps y CDN compartidos para mapas y horarios en vivo."
         ),
 
         Entry(

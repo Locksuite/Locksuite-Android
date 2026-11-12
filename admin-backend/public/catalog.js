@@ -256,15 +256,16 @@ window.LOCKSUITE_CATALOG = {
       "note": "Desarrollador Beatmobile; el sitio de la certificación es kosher.org.ar. Confirmar con la simulación."
     },
     {
-      "pkg": "com.tranzmate",
-      "label": "Moovit",
+      "pkg": "com.thetransitapp.droid",
+      "label": "Transit",
       "allow": [
-        "moovitapp.com",
-        "moovit.com",
-        "tranzmate.com"
+        "transitapp.com",
+        "thetransitapp.com",
+        "transit.land",
+        "mapbox.com"
       ],
       "block": [],
-      "note": "Usa CDN compartidos para los mapas de líneas."
+      "note": "Usa Mapbox/Google Maps y CDN compartidos para mapas y horarios en vivo."
     },
     {
       "pkg": "com.google.android.apps.chromecast.app",

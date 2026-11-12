@@ -2742,21 +2742,48 @@ Tres equipos reales en producción (`0.6.81`, código `144`: `7073099b55af5fd6` 
 
 ---
 
+**B.115 — REEMPLAZO DE MOOVIT (`com.tranzmate`) POR TRANSIT (`com.thetransitapp.droid`) EN TIENDA PLAY, TIENDA CLÁSICA DE APKS Y CATÁLOGO DE DOMINIOS (12/11/2026). [APLICADO EN CÓDIGO, RTDB Y RELEASE GITHUB; PENDIENTE CONFIRMAR EN EQUIPO REAL Y CARGAR `Transit.apk` SI SE CONSIGUE APK UNIVERSAL]**
+
+Pedido del dueño (12/11/2026): reemplazar **Moovit** (`com.tranzmate`) por **Transit** (`com.thetransitapp.droid`) en las tiendas de LockSuite (subiendo también un APK universal de Transit a la tienda clásica si se encuentra alguno disponible).
+
+Qué se definió y aplicó (según decisiones explícitas del dueño):
+1. **Catálogo de dominios (`WhitelistCatalog.kt`, `admin-backend/public/catalog.js`, `admin-backend/public/app.js`):**
+   - En `WhitelistCatalog.APPS` y `WHITELIST_BUILTIN` (`app.js`), se reemplazó `com.tranzmate` (`Moovit`, 3 dominios) por `com.thetransitapp.droid` (`Transit`, 4 dominios: `transitapp.com`, `thetransitapp.com`, `transit.land`, `mapbox.com`; Google Maps SDK/googleapis y CDN compartidos ya están cubiertos por `INFRASTRUCTURE`/`SHARED_CDN`).
+   - Se regeneró `admin-backend/public/catalog.js` con `python tools/gen_catalog_js.py`.
+2. **Tienda Play en Firebase RTDB (`globalSettings/playStore`):**
+   - Se eliminó `globalSettings/playStore/apps/com_tranzmate` y se agregó `globalSettings/playStore/apps/com_thetransitapp_droid` con los metadatos reales verificados vía `play_lookup.js` (`label: "Transit"`, `tier: 1` Nivel 1 Kosher, `status: "request"` Solo a pedido, `access: "full"`, `iconUrl` de `play-lh.googleusercontent.com`) y `meta.count = 14`.
+3. **Tienda clásica de APKs (`storeApps` en RTDB y release GitHub `store-apks-v1`):**
+   - Se eliminó `Moovit_5.145.2.apk` del release `store-apks-v1` (`Locksuite/Locksuite-Android`, quedan 14 assets) y se eliminó `storeApps/com_tranzmate` de RTDB.
+   - **Por qué no quedó cargado Transit todavía en Tienda clásica:** no hay ningún APK de Transit en el disco local, `TransitApp` en GitHub e Internet Archive no publican binarios `.apk`, los espejos de terceros en web están bloqueados por el filtro de red local (`Filter Page`), y las versiones recientes de Transit (ej. `6.3.7`, ya instalada en dos equipos de la flota) se distribuyen como split bundles (`.xapk`/`.apkm`), incompatibles con `SelfUpdater.downloadAndInstallApk`/`ApkInstaller` que exigen un único `.apk` universal verificable por SHA-256.
+4. **Paquetes permitidos, whitelist y pedidos existentes (sin bloquear equipos con Moovit ya instalado):**
+   - Se quitó `com.tranzmate` de `globalSettings/allowedPackages` (15 → 14 elementos; no se agregó `com.thetransitapp.droid` porque quedó en estado `"request"` / solo a pedido) y se quitó `com_tranzmate` de `globalSettings/whitelist/decisions` (8 → 7 claves, sin marcarla como `"block"` para no suspenderla a quien ya la tenía instalada).
+   - Se limpiaron los 3 pedidos `pending` de `com_tranzmate` en `devices/*/appRequests` (`809f004e7d9934c7`, `89df415c8949c8fc`, `cf3aae3b922b36b4`).
+
+Pendiente / por verificar:
+- Confirmar en equipo real que **Transit** aparece en Tienda Play Nivel 1 como «Pedir», que el flujo de pedido/aprobación instala y habilita la app correctamente (`playStoreExtras`), y validar sus dominios (`transitapp.com`, `thetransitapp.com`, `transit.land`, `mapbox.com`) cuando opere en modo estricto.
+- Si el dueño consigue o sube manualmente un `.apk` **universal** (no `.xapk`) de `com.thetransitapp.droid`, subirlo al release `store-apks-v1` y registrarlo con su SHA-256 en `storeApps/com_thetransitapp_droid`.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**11/11 (madrugada) — Antigravity: corrección de falso positivo en bandeja principal de Google Mensajes (B.114), orden de commits pendientes (B.113 + Google Chat) y despliegue (`deploy_all.ps1`).**
+**12/11 (madrugada) — Antigravity: reemplazo de Moovit (`com.tranzmate`) por Transit (`com.thetransitapp.droid`) en Tienda Play, Tienda clásica, catálogo de whitelist y despliegue completo (`B.115`).**
 
-- **Pedido del dueño:** al entrar a la página principal de Mensajes que tiene el logo de Gemini, se cerraba la app; investigar y corregir el falso positivo (`v0.6.81`), actualizar `LOCKSUITE_CONTEXTO_PARA_IA.md` y desplegar con el script habitual.
-- **Qué se diagnosticó y corrigió (B.114):**
-  - Se confirmó en `layer3Audit` de RTDB en 3 equipos reales (`7073099b55af5fd6`, `91431ec29bc2fe91`, `e1939eb56647c24f`, v0.6.81) el motivo `"componente interno de Gemini/Penpal en pantalla de chat"`.
-  - Causa: `viewId.contains("action_bar")` marcaba la bandeja principal como conversación, y el logo/FAB de Gemini (`penpal_fab`) disparaba `hasPenpalViewId && !hasCallButtons`.
-  - Se reescribió el escáner en `LockSuiteAccessibilityService.kt` y la política pura en `GeminiMessagesPolicy.kt` separando bandeja principal, Ajustes, onboarding/modal con descargo legal y conversación abierta por regiones de pantalla (`Rect`), excluyendo globos de mensajes, exigiendo `isShowingHintText` para hints, añadiendo soporte ES/EN/HE y quitando el disparo aislado por `penpal`.
-  - Se amplió `GeminiMessagesPolicyTest.kt` a 19 tests y corrió `.\gradlew.bat testDebugUnitTest`: **341 tests PASS (`BUILD SUCCESSFUL`)**.
-- **Estado de los cambios previos encontrados en el árbol de trabajo (sin pisar nada):**
-  - Se verificó `ownerUid` en los 30 equipos de Firebase RTDB (29 lo tienen; `b2d9d04d04b1abc3` ya tiene `commandSecret` publicado).
-  - Corrieron OK: `test_pin_security.js` (14), `test_functions_index.js` (24), evaluador offline de reglas (90 en ambos modos de `.validate`), chequeos de sintaxis `node --check` y los 8 scripts de sincronía (`gen_catalog_js`, `gen_policies_js`, `check_*_sync`).
-  - Se commiteó por separado `B.113` (`fc469fe`, con `COMMIT_MSG_2026-11-09_auditoria_seguridad.txt`) y el ajuste de `usercontent.google.com` para Google Chat (`801411e`) antes del deploy. **No se tachó nada de B.112 ni B.113** porque: (1) el emulador real de `tools/rules_tests` falló por versión de Java en la PC (`firebase-tools` pide JDK 21+ y la PC tiene OpenJDK 17), y (2) faltan las pruebas en equipo real de B.113 (y recargar el panel con `Ctrl+F5` tras desplegar reglas nuevas). Se recuperaron ~898 MB libres en `E:` (que había llegado a 0 libre) quitando el `node_modules` temporal de `rules_tests`.
-- **Pendiente al despertar el equipo:** confirmar en celular real `0.6.82` que Mensajes abra normalmente en la bandeja principal y rebote solo al entrar a Gemini; recordar recargar con `Ctrl+F5` pestañas abiertas del panel por B.113 y validar en equipo real los puntos pendientes de B.112 y B.113.
+- **Pedido del dueño:** reemplazar **Moovit** por **Transit** en las tiendas de LockSuite (e incluirlo en la tienda clásica si hubiera un `.apk` universal disponible), actualizar contexto y ejecutar el despliegue habitual (`deploy_all.ps1`).
+- **Cambios en repositorio:**
+  - `WhitelistCatalog.kt` y `admin-backend/public/app.js` (`WHITELIST_BUILTIN`): se reemplazó `com.tranzmate` ("Moovit") por `com.thetransitapp.droid` ("Transit", `allow = ["transitapp.com", "thetransitapp.com", "transit.land", "mapbox.com"]`, `block = []`), actualizando además el comentario de cabecera de `SHARED_CDN`.
+  - Se regeneró `admin-backend/public/catalog.js` (`26 apps · 76 dominios permitidos · 29 dominios bloqueados`).
+  - No se modificaron los fixtures sintéticos de prueba offline (`tools/panel_render/test_tienda.js`, `tools/test_tienda_logic.js`, `tools/test_play_lookup.js`).
+- **Cambios en producción (GitHub Release y Firebase RTDB):**
+  - GitHub Release `store-apks-v1` (`Locksuite/Locksuite-Android`): se eliminó `Moovit_5.145.2.apk` (quedan 14 APKs verificados).
+  - No se subió `Transit.apk` a la Tienda clásica porque `TransitApp`/Archive.org no distribuyen el `.apk`, el filtro local bloquea portales de descarga terceros (`Filter Page`) y las versiones recientes de Transit se publican como split bundles (`.xapk`/`.apkm`), incompatibles con la instalación de APK único + SHA-256.
+  - Firebase RTDB: se eliminó `storeApps/com_tranzmate` y `globalSettings/playStore/apps/com_tranzmate`; se creó `globalSettings/playStore/apps/com_thetransitapp_droid` (`Transit`, `tier: 1`, `status: "request"`, `access: "full"`, ícono oficial verificado con `play_lookup.js`, `meta.count = 14`); se quitó `com.tranzmate` de `globalSettings/allowedPackages` (15 → 14) y de `globalSettings/whitelist/decisions` (sin bloquearlo a quien ya lo tiene); y se eliminaron los 3 pedidos `pending` de `com_tranzmate` (`809f004e7d9934c7`, `89df415c8949c8fc`, `cf3aae3b922b36b4`).
+- **Verificación ejecutada en esta sesión (verde):**
+  - `.\gradlew.bat testDebugUnitTest`: **341 pruebas en verde, 0 fallos, 0 saltos** (25 archivos).
+  - Sincronía y pruebas Node/Python: `gen_catalog_js.py --check`, `check_whitelist_sync.py`, `check_store_sync.py` (15), `check_profile_sync.py`, `check_command_sync.py`, `check_diag_sync.py` (30), `check_panel_commands.py`, `test_tienda_logic.js` (48), `test_play_lookup.js` (16), `test_pin_security.js` (14), `test_functions_index.js` (24). (`tools/panel_render/run.sh` no corrió localmente por falta de `playwright` instalado en Node Windows.)
+- **Pendiente al despertar el equipo / próximas sesiones:**
+  - Confirmar en celular real Transit en Tienda Play (`B.115`), y si aparece un `Transit.apk` universal verificable, cargarlo en `store-apks-v1` + `storeApps`.
+  - Siguen pendientes de validación en equipo real `B.112` (emulador reglas con JDK 21+), `B.113` (`Ctrl+F5` en pestañas del panel + PIN/auth en equipo real) y `B.114` (bandeja de Google Mensajes con logo de Gemini en `0.6.82+`).
 
