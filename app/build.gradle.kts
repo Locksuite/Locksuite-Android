@@ -14,8 +14,8 @@ android {
         applicationId = "com.ejemplo.locksuite"
         minSdk = 24
         targetSdk = 34
-        versionCode = 145
-        versionName = "0.6.82"
+        versionCode = 146
+        versionName = "0.6.83"
 
         ndk {
             // Antes solo arm64-v8a: la app no se podía instalar en NINGÚN equipo de 32
@@ -163,6 +163,7 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.core)
 }
+
 
 
 
