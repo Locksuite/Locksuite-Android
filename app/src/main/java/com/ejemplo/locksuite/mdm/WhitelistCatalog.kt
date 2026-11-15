@@ -367,8 +367,21 @@ object WhitelistCatalog {
         Entry(
             packageName = "com.google.android.apps.adm",
             label = "Localizador de dispositivos",
-            allow = listOf("androiddeviceregistration-pa.googleapis.com"),
-            note = "A propósito NO se permite google.com/android/find: esa es la interfaz WEB, o sea un navegador. La app usa googleapis.com."
+            allow = listOf(
+                "androiddeviceregistration-pa.googleapis.com",
+                "maps.google.com",
+                "khm.google.com",
+                "khms.google.com",
+                "khm0.google.com",
+                "khm1.google.com",
+                "khm2.google.com",
+                "khm3.google.com",
+                "khms0.google.com",
+                "khms1.google.com",
+                "khms2.google.com",
+                "khms3.google.com"
+            ),
+            note = "Permite inicialización de mapas y descarga de teselas en la app. A propósito NO se permite google.com/android/find (interfaz web)."
         ),
 
         Entry(

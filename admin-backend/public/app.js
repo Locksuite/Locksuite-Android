@@ -2355,7 +2355,7 @@ const WHITELIST_BUILTIN = [
     { pkg: "com.google.android.apps.messaging", label: "Google Messages", allow: 3, block: 5 },
     { pkg: "com.google.android.apps.docs", label: "Google Drive", allow: 3, block: 0 },
     { pkg: "com.ubercab", label: "Uber", allow: 3, block: 0 },
-    { pkg: "com.google.android.apps.adm", label: "Localizador de dispositivos", allow: 1, block: 0 },
+    { pkg: "com.google.android.apps.adm", label: "Localizador de dispositivos", allow: 12, block: 0 },
     { pkg: "life.channel.accurate.local.weather.forecast", label: "Centro de información / Clima", allow: 3, block: 0 },
     { pkg: "com.lionscribe.hebdate", label: "HebDate (calendario hebreo)", allow: 1, block: 0 },
     { pkg: "fm.jewishmusic.application", label: "Zing Music", allow: 2, block: 0 },

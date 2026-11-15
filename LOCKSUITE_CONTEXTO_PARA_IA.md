@@ -2777,32 +2777,30 @@ Qué se aplicó:
 
 ---
 
-**B.117 — ANÁLISIS DE MAPA NO VISIBLE EN LOCALIZADOR DE GOOGLE (`COM.GOOGLE.ANDROID.APPS.ADM`) (15/11/2026). [ANALIZADO CON EVIDENCIA FORENSE DE DISPOSITIVO REAL Y ARQUITECTURA DE RED]**
+**B.117 — APERTURA SEGURA DE DOMINIOS DE MAPA PARA LOCALIZADOR DE GOOGLE (`COM.GOOGLE.ANDROID.APPS.ADM`) (15/11/2026). [APLICADO EN CÓDIGO, SINCRONIZADO EN PANEL, VERIFICADO EN 346 PRUEBAS UNITARIAS; DESPLEGADO EN RELEASE]**
 
-Pedido del dueño (15/11/2026): analizar en su celular (`7073099b55af5fd6`, QEMAY-QM01) por qué no se ve el mapa de Localizador de Google, qué dominios usa y si hay manera de abrirlo de forma segura.
+Pedido del dueño (15/11/2026): analizar en su celular (`7073099b55af5fd6`, QEMAY-QM01) por qué no se ve el mapa de Localizador de Google, qué dominios usa, si hay manera de abrirlo de forma segura y agregarlos directamente con despliegue completo.
 
-Hallazgos del análisis:
+Hallazgos del análisis y solución aplicada:
 1. **Estado en el equipo del dueño:**
    - La app `com.google.android.apps.adm` (v3.1.763-05) está instalada y habilitada; `isInternetBlocked: false`, `isWebViewBlocked: false`.
-   - El modo lista blanca estricto está apagado (`whitelistEnabled: false`), pero la VPN local DNS está activa (`vpnBlocked: true`).
+   - El modo lista blanca estricto estaba apagado (`whitelistEnabled: false`), pero la VPN local DNS estaba activa (`vpnBlocked: true`).
    - El registro de diagnóstico (`deviceDiag`) mostró llamadas a `DynamiteLoaderV2Impl` de Google Play Services intentando cargar el componente `maps_dynamite`. En Capa 3 no hay ningún bloqueo (`layer3Audit: 0` para adm).
 2. **Causa raíz del mapa en blanco:**
    - Google Find My Device utiliza el SDK de Google Maps para Android embebido en GMS Core para renderizar la vista de mapa.
    - El SDK de Maps necesita descargar teselas vectoriales/satelitales y estilos. Consulta servidores clave: `khms.google.com`, `khm.google.com` (Keyhole Maps tile servers, y sus variantes `khm0`–`khm3`, `khms0`–`khms3`), `maps.google.com` y `clients4.google.com`.
    - En `KosherVpnService.handleDnsQuery`, las consultas que salen por `netd` (UID < 10000, `logPackage == "desconocido"`) caen en la lista negra global `WebViewPolicy.isGloballyBlacklisted`.
    - `GLOBAL_BLACKLIST` bloquea `"google.com"`, permitiendo únicamente los subdominios de `ALLOWED_GOOGLE_SUBDOMAINS` (`mail.google.com`, `drive.google.com`, `clients4.google.com`, etc.).
-   - Ni `maps.google.com` ni los servidores de teselas `khms.google.com` / `khm.google.com` están en `ALLOWED_GOOGLE_SUBDOMAINS`. En consecuencia, LockSuite intercepta la consulta DNS y responde `0.0.0.0`. Al no poder resolver las teselas, el mapa queda en gris/blanco sin renderizar.
+   - Ni `maps.google.com` ni los servidores de teselas `khms.google.com` / `khm.google.com` estaban en `ALLOWED_GOOGLE_SUBDOMAINS`. En consecuencia, LockSuite interceptaba la consulta DNS y respondía `0.0.0.0`. Al no poder resolver las teselas, el mapa quedaba en gris/blanco sin renderizar.
 3. **Apertura segura de los dominios:**
-   - **`khms.google.com` / `khm.google.com` (y sus subdominios):** son **100% seguros**. Son servidores exclusivos de fragmentos binarios de teselas de mapa (PNG/Protobuf). No son páginas web, no tienen buscador ni permiten navegación.
-   - **`maps.googleapis.com` / `maps.gstatic.com` / `geo0.ggpht.com`:** son seguros y ya están habilitados en `INFRASTRUCTURE` (`googleapis.com`, `gstatic.com`, `ggpht.com`).
-   - **`maps.google.com`:** es el endpoint de inicialización del servicio de mapas. Aunque en navegador web redirige a `www.google.com/maps`, el buscador web `www.google.com` permanece bloqueado en LockSuite. Agregarlo a `ALLOWED_GOOGLE_SUBDOMAINS` (al igual que se hizo con `mail.google.com` o `docs.google.com`) permite que el SDK de Maps opere sin abrir la búsqueda general de Google.
-4. **Cómo probarlo inmediatamente en el celular del dueño desde el panel web (sin esperar compilación):**
-   - Entrar a la ficha del celular en el panel: `https://locksuite-nueva.web.app/celular.html?id=7073099b55af5fd6`.
-   - En la sección **Reglas DNS personalizadas**, agregar las siguientes reglas con acción **Forzar Permitir (FORCE_ALLOW)**:
-     1. `khms.google.com`
-     2. `khm.google.com`
-     3. `maps.google.com`
-   - Como `FORCE_ALLOW` tiene prioridad absoluta en `KosherVpnService`, la VPN las dejará pasar de inmediato y el mapa de Localizador se podrá probar en vivo en el celular.
+   - **`khms.google.com` / `khm.google.com` (y sus variantes `khm0`–`khm3`, `khms0`–`khms3`):** son **100% seguros**. Son servidores exclusivos de fragmentos binarios de teselas de mapa (PNG/Protobuf). No son páginas web, no tienen buscador ni permiten navegación.
+   - **`maps.googleapis.com` / `maps.gstatic.com` / `geo0.ggpht.com`:** son seguros y ya estaban habilitados en `INFRASTRUCTURE` (`googleapis.com`, `gstatic.com`, `ggpht.com`).
+   - **`maps.google.com`:** es el endpoint de inicialización del servicio de mapas. Aunque en navegador web redirige a `www.google.com/maps`, el buscador web general `www.google.com` y `google.com` permanecen estrictamente bloqueados en LockSuite.
+4. **Implementación en código (`WebViewPolicy.kt`, `WhitelistCatalog.kt`, `app.js`, `catalog.js`):**
+   - Se sumaron a `ALLOWED_GOOGLE_SUBDOMAINS`: `"maps.google.com"`, `"khm.google.com"`, `"khms.google.com"`, `"khm0.google.com"`..`"khm3.google.com"`, `"khms0.google.com"`..`"khms3.google.com"`.
+   - En `WhitelistCatalog.kt`, bajo `com.google.android.apps.adm`, se incluyeron todos estos dominios en la lista de permitidos (pasa de 1 a 12 dominios permitidos para Localizador cuando la lista blanca estricta está activa).
+   - Se actualizó `admin-backend/public/app.js` (`allow: 12`) y se regeneró `admin-backend/public/catalog.js` mediante `python tools/gen_catalog_js.py`.
+   - Se crearon pruebas unitarias en `DomainBlockingTest.kt` confirmando que los dominios de mapa no son considerados blacklist global, mientras que `google.com` y `www.google.com` continúan estrictamente bloqueados. Total de la suite: **346 pruebas en verde**.
 
 ---
 
@@ -2810,26 +2808,27 @@ Hallazgos del análisis:
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**15/11 — Antigravity: bloqueo por defecto de `rides.sng.link` en toda la flota (`B.116`), análisis forense de mapa no visible en Localizador de Google (`B.117`) y pruebas completas.**
+**15/11 — Antigravity: bloqueo por defecto de `rides.sng.link` en toda la flota (`B.116`), apertura segura de dominios de mapa para Localizador de Google (`B.117`), pruebas unitarias (346 en verde) y despliegue completo de release.**
 
 - **Pedidos del dueño:**
   1. Analizar en su celular (`7073099b55af5fd6`, QEMAY-QM01) por qué no se ve el mapa en Localizador de Google (`com.google.android.apps.adm`), qué dominios usa y si se puede abrir de forma segura.
   2. Bloquear por defecto el dominio `rides.sng.link` en todos los celulares.
+  3. Agregar los dominios para Localizador en código y hacer todos los despliegues.
 - **Acciones y cambios aplicados:**
-  - **Bloqueo de `rides.sng.link`:**
+  - **Bloqueo de `rides.sng.link` (B.116):**
     - Agregado a `WhitelistCatalog.BLOCK_ALWAYS` (bloqueo DNS incondicional por Trie en Capa 2 en todos los celulares).
     - Agregado a `WebViewPolicy.GLOBAL_BLACKLIST` (bloqueo en WebViews y consultas interceptadas).
     - Regenerado `admin-backend/public/catalog.js` mediante `tools/gen_catalog_js.py`.
-    - Creado `DomainBlockingTest.kt` (3 pruebas unitarias nuevas cubriendo Trie, WhitelistManager y WebViewPolicy).
-  - **Análisis de Localizador de Google:**
-    - Inspeccionado el dispositivo real `7073099b55af5fd6` y su snapshot de diagnóstico `s00000003` (15/11 12:54): la app está instalada y habilitada, sin bloqueos de Capa 3 ni de internet por app.
-    - Identificada la causa raíz: el SDK de Google Maps para Android consulta `khms.google.com`, `khm.google.com` y `maps.google.com`. Al salir por `netd`, `WebViewPolicy.isGloballyBlacklisted` las bloquea como parte de `*.google.com` porque no figuran en `ALLOWED_GOOGLE_SUBDOMAINS`.
-    - Evaluada la seguridad: `khms.google.com` y `khm.google.com` son servidores puros de teselas binarias (100% seguros sin riesgo de navegación). `maps.google.com` puede agregarse a `ALLOWED_GOOGLE_SUBDOMAINS` de forma segura manteniendo `www.google.com` y `google.com` bloqueados.
-    - Se dejan instrucciones para probarlo en el equipo real desde el panel agregando `khms.google.com`, `khm.google.com` y `maps.google.com` como `FORCE_ALLOW` en Reglas DNS.
+    - Agregadas pruebas unitarias en `DomainBlockingTest.kt` verificando bloqueo incondicional.
+  - **Apertura de dominios de mapas para Localizador (B.117):**
+    - Diagnóstico en el dispositivo real `7073099b55af5fd6`: app habilitada, GMS `maps_dynamite` intentando resolver teselas pero bloqueadas por `WebViewPolicy.isGloballyBlacklisted` al no figurar en `ALLOWED_GOOGLE_SUBDOMAINS`.
+    - Agregados a `ALLOWED_GOOGLE_SUBDOMAINS` en `WebViewPolicy.kt`: `maps.google.com`, `khm.google.com`, `khms.google.com`, `khm0.google.com`–`khm3.google.com`, `khms0.google.com`–`khms3.google.com`.
+    - Agregados al catálogo de `com.google.android.apps.adm` en `WhitelistCatalog.kt` y `app.js`.
+    - Regenerado `catalog.js` y sincronizado con scripts de control.
+    - Pruebas unitarias en `DomainBlockingTest.kt`: validado que los mapas están permitidos y `www.google.com` / `google.com` siguen 100% bloqueados.
 - **Verificación ejecutada en esta sesión (verde):**
-  - `.\gradlew.bat testDebugUnitTest`: **344 pruebas en verde, 0 fallos, 0 saltos** (incluidas las 3 nuevas de `DomainBlockingTest`).
-  - Scripts de sincronía: `tools/gen_catalog_js.py --check` (OK), `check_whitelist_sync.py` (OK), `check_command_sync.py` (OK), `check_profile_sync.py` (OK), `check_diag_sync.py` (OK, 30/30).
-- **Pendiente para próximas sesiones / confirmación en equipo real:**
-  - Probar en el celular del dueño la regla temporal `FORCE_ALLOW` para `khms.google.com`, `khm.google.com` y `maps.google.com` y confirmar que el mapa de Localizador renderiza.
-  - Una vez confirmado en el celular, incorporar formalmente `maps.google.com`, `khms.google.com` y `khm.google.com` en `ALLOWED_GOOGLE_SUBDOMAINS` (`WebViewPolicy.kt`) y en `WhitelistCatalog.kt` (`com.google.android.apps.adm`).
+  - `.\gradlew.bat testDebugUnitTest`: **346 pruebas en verde, 0 fallos, 0 saltos**.
+  - Scripts de sincronía: `tools/gen_catalog_js.py --check` (OK), `check_whitelist_sync.py` (OK), `check_command_sync.py` (OK), `check_profile_sync.py` (OK), `check_diag_sync.py` (OK, 30/30 comprobaciones).
+- **Despliegue ejecutado:**
+  - Despliegue completo ejecutado con `deploy_all.ps1`: incremento de versión, compilación de APK release, publicación en Firebase Hosting/Database/Functions y push a GitHub.
 

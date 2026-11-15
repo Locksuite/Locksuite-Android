@@ -100,7 +100,19 @@ object WebViewPolicy {
         "time.google.com",
         "clients3.google.com",
         "clients4.google.com",
-        "android.clients.google.com"
+        "android.clients.google.com",
+        // Mapas y teselas para Google Maps SDK / Localizador (com.google.android.apps.adm)
+        "maps.google.com",
+        "khm.google.com",
+        "khms.google.com",
+        "khm0.google.com",
+        "khm1.google.com",
+        "khm2.google.com",
+        "khm3.google.com",
+        "khms0.google.com",
+        "khms1.google.com",
+        "khms2.google.com",
+        "khms3.google.com"
     )
 
     // Servicios de infraestructura globales indispensables que permitimos para que las apps no se rompan
