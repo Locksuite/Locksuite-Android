@@ -66,7 +66,8 @@ object WebViewPolicy {
         "googleadservices.com",
         "admob.com",
         "app-measurement.com",
-        "crashlytics.com"
+        "crashlytics.com",
+        "rides.sng.link"
     )
 
     // Subdominios específicos de apps de Google (Gmail, Drive, Meet, Chat, Messages, Wallet,

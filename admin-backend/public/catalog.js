@@ -403,7 +403,8 @@ window.LOCKSUITE_CATALOG = {
     "gboard-stickers.googleapis.com",
     "youtubei.googleapis.com",
     "youtube.googleapis.com",
-    "discover.google.com"
+    "discover.google.com",
+    "rides.sng.link"
   ],
   "sharedCdn": [
     "cloudfront.net",

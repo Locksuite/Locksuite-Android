@@ -197,7 +197,9 @@ object WhitelistCatalog {
         "youtubei.googleapis.com",
         "youtube.googleapis.com",
         // Discovery / feed de contenido de Google (el "Descubre" del launcher).
-        "discover.google.com"
+        "discover.google.com",
+        // Tracking y deep linking de viajes (Singular / rides) bloqueado por defecto en toda la flota
+        "rides.sng.link"
     )
 
     /**

@@ -2765,25 +2765,71 @@ Pendiente / por verificar:
 
 ---
 
+**B.116 — BLOQUEO POR DEFECTO DEL DOMINIO RIDES.SNG.LINK EN TODOS LOS CELULARES (15/11/2026). [APLICADO EN CÓDIGO, SINCRONIZADO EN PANEL Y VERIFICADO EN 344 PRUEBAS UNITARIAS; PENDIENTE COMPILAR/DESPLEGAR]**
+
+Pedido del dueño (15/11/2026): bloquear por defecto el dominio `rides.sng.link` en todos los celulares.
+
+Qué se aplicó:
+1. **Catálogo de dominios (`WhitelistCatalog.kt`):** se agregó `"rides.sng.link"` a `BLOCK_ALWAYS`. Con esto, el Trie DNS de `WhitelistManager.buildRules()` lo resuelve como `RuleType.BLOCK` independientemente de si el modo lista blanca está activo o apagado, respondiendo `0.0.0.0` a nivel Capa 2 (VPN) para cualquier aplicación en todos los dispositivos de la flota.
+2. **Políticas de WebView (`WebViewPolicy.kt`):** se sumó `"rides.sng.link"` al `GLOBAL_BLACKLIST` de WebViews, interceptando tanto consultas por WebView como consultas de sistema (`netd`).
+3. **Catálogo del panel web (`admin-backend/public/catalog.js`):** regenerado con `python tools/gen_catalog_js.py` (pasa a 8 dominios en `blockAlways`), pasando el chequeo de consistencia `--check`.
+4. **Pruebas unitarias (`DomainBlockingTest.kt`):** suite nueva con 3 pruebas verificando la presencia en `BLOCK_ALWAYS`, la clasificación como `isGloballyBlacklisted` y la resolución estricta como `RuleType.BLOCK` en `DomainRuleTrie`. Total: **344 pruebas unitarias en verde**.
+
+---
+
+**B.117 — ANÁLISIS DE MAPA NO VISIBLE EN LOCALIZADOR DE GOOGLE (`COM.GOOGLE.ANDROID.APPS.ADM`) (15/11/2026). [ANALIZADO CON EVIDENCIA FORENSE DE DISPOSITIVO REAL Y ARQUITECTURA DE RED]**
+
+Pedido del dueño (15/11/2026): analizar en su celular (`7073099b55af5fd6`, QEMAY-QM01) por qué no se ve el mapa de Localizador de Google, qué dominios usa y si hay manera de abrirlo de forma segura.
+
+Hallazgos del análisis:
+1. **Estado en el equipo del dueño:**
+   - La app `com.google.android.apps.adm` (v3.1.763-05) está instalada y habilitada; `isInternetBlocked: false`, `isWebViewBlocked: false`.
+   - El modo lista blanca estricto está apagado (`whitelistEnabled: false`), pero la VPN local DNS está activa (`vpnBlocked: true`).
+   - El registro de diagnóstico (`deviceDiag`) mostró llamadas a `DynamiteLoaderV2Impl` de Google Play Services intentando cargar el componente `maps_dynamite`. En Capa 3 no hay ningún bloqueo (`layer3Audit: 0` para adm).
+2. **Causa raíz del mapa en blanco:**
+   - Google Find My Device utiliza el SDK de Google Maps para Android embebido en GMS Core para renderizar la vista de mapa.
+   - El SDK de Maps necesita descargar teselas vectoriales/satelitales y estilos. Consulta servidores clave: `khms.google.com`, `khm.google.com` (Keyhole Maps tile servers, y sus variantes `khm0`–`khm3`, `khms0`–`khms3`), `maps.google.com` y `clients4.google.com`.
+   - En `KosherVpnService.handleDnsQuery`, las consultas que salen por `netd` (UID < 10000, `logPackage == "desconocido"`) caen en la lista negra global `WebViewPolicy.isGloballyBlacklisted`.
+   - `GLOBAL_BLACKLIST` bloquea `"google.com"`, permitiendo únicamente los subdominios de `ALLOWED_GOOGLE_SUBDOMAINS` (`mail.google.com`, `drive.google.com`, `clients4.google.com`, etc.).
+   - Ni `maps.google.com` ni los servidores de teselas `khms.google.com` / `khm.google.com` están en `ALLOWED_GOOGLE_SUBDOMAINS`. En consecuencia, LockSuite intercepta la consulta DNS y responde `0.0.0.0`. Al no poder resolver las teselas, el mapa queda en gris/blanco sin renderizar.
+3. **Apertura segura de los dominios:**
+   - **`khms.google.com` / `khm.google.com` (y sus subdominios):** son **100% seguros**. Son servidores exclusivos de fragmentos binarios de teselas de mapa (PNG/Protobuf). No son páginas web, no tienen buscador ni permiten navegación.
+   - **`maps.googleapis.com` / `maps.gstatic.com` / `geo0.ggpht.com`:** son seguros y ya están habilitados en `INFRASTRUCTURE` (`googleapis.com`, `gstatic.com`, `ggpht.com`).
+   - **`maps.google.com`:** es el endpoint de inicialización del servicio de mapas. Aunque en navegador web redirige a `www.google.com/maps`, el buscador web `www.google.com` permanece bloqueado en LockSuite. Agregarlo a `ALLOWED_GOOGLE_SUBDOMAINS` (al igual que se hizo con `mail.google.com` o `docs.google.com`) permite que el SDK de Maps opere sin abrir la búsqueda general de Google.
+4. **Cómo probarlo inmediatamente en el celular del dueño desde el panel web (sin esperar compilación):**
+   - Entrar a la ficha del celular en el panel: `https://locksuite-nueva.web.app/celular.html?id=7073099b55af5fd6`.
+   - En la sección **Reglas DNS personalizadas**, agregar las siguientes reglas con acción **Forzar Permitir (FORCE_ALLOW)**:
+     1. `khms.google.com`
+     2. `khm.google.com`
+     3. `maps.google.com`
+   - Como `FORCE_ALLOW` tiene prioridad absoluta en `KosherVpnService`, la VPN las dejará pasar de inmediato y el mapa de Localizador se podrá probar en vivo en el celular.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**12/11 (madrugada) — Antigravity: reemplazo de Moovit (`com.tranzmate`) por Transit (`com.thetransitapp.droid`) en Tienda Play, Tienda clásica, catálogo de whitelist y despliegue completo (`B.115`).**
+**15/11 — Antigravity: bloqueo por defecto de `rides.sng.link` en toda la flota (`B.116`), análisis forense de mapa no visible en Localizador de Google (`B.117`) y pruebas completas.**
 
-- **Pedido del dueño:** reemplazar **Moovit** por **Transit** en las tiendas de LockSuite (e incluirlo en la tienda clásica si hubiera un `.apk` universal disponible), actualizar contexto y ejecutar el despliegue habitual (`deploy_all.ps1`).
-- **Cambios en repositorio:**
-  - `WhitelistCatalog.kt` y `admin-backend/public/app.js` (`WHITELIST_BUILTIN`): se reemplazó `com.tranzmate` ("Moovit") por `com.thetransitapp.droid` ("Transit", `allow = ["transitapp.com", "thetransitapp.com", "transit.land", "mapbox.com"]`, `block = []`), actualizando además el comentario de cabecera de `SHARED_CDN`.
-  - Se regeneró `admin-backend/public/catalog.js` (`26 apps · 76 dominios permitidos · 29 dominios bloqueados`).
-  - No se modificaron los fixtures sintéticos de prueba offline (`tools/panel_render/test_tienda.js`, `tools/test_tienda_logic.js`, `tools/test_play_lookup.js`).
-- **Cambios en producción (GitHub Release y Firebase RTDB):**
-  - GitHub Release `store-apks-v1` (`Locksuite/Locksuite-Android`): se eliminó `Moovit_5.145.2.apk` (quedan 14 APKs verificados).
-  - No se subió `Transit.apk` a la Tienda clásica porque `TransitApp`/Archive.org no distribuyen el `.apk`, el filtro local bloquea portales de descarga terceros (`Filter Page`) y las versiones recientes de Transit se publican como split bundles (`.xapk`/`.apkm`), incompatibles con la instalación de APK único + SHA-256.
-  - Firebase RTDB: se eliminó `storeApps/com_tranzmate` y `globalSettings/playStore/apps/com_tranzmate`; se creó `globalSettings/playStore/apps/com_thetransitapp_droid` (`Transit`, `tier: 1`, `status: "request"`, `access: "full"`, ícono oficial verificado con `play_lookup.js`, `meta.count = 14`); se quitó `com.tranzmate` de `globalSettings/allowedPackages` (15 → 14) y de `globalSettings/whitelist/decisions` (sin bloquearlo a quien ya lo tiene); y se eliminaron los 3 pedidos `pending` de `com_tranzmate` (`809f004e7d9934c7`, `89df415c8949c8fc`, `cf3aae3b922b36b4`).
+- **Pedidos del dueño:**
+  1. Analizar en su celular (`7073099b55af5fd6`, QEMAY-QM01) por qué no se ve el mapa en Localizador de Google (`com.google.android.apps.adm`), qué dominios usa y si se puede abrir de forma segura.
+  2. Bloquear por defecto el dominio `rides.sng.link` en todos los celulares.
+- **Acciones y cambios aplicados:**
+  - **Bloqueo de `rides.sng.link`:**
+    - Agregado a `WhitelistCatalog.BLOCK_ALWAYS` (bloqueo DNS incondicional por Trie en Capa 2 en todos los celulares).
+    - Agregado a `WebViewPolicy.GLOBAL_BLACKLIST` (bloqueo en WebViews y consultas interceptadas).
+    - Regenerado `admin-backend/public/catalog.js` mediante `tools/gen_catalog_js.py`.
+    - Creado `DomainBlockingTest.kt` (3 pruebas unitarias nuevas cubriendo Trie, WhitelistManager y WebViewPolicy).
+  - **Análisis de Localizador de Google:**
+    - Inspeccionado el dispositivo real `7073099b55af5fd6` y su snapshot de diagnóstico `s00000003` (15/11 12:54): la app está instalada y habilitada, sin bloqueos de Capa 3 ni de internet por app.
+    - Identificada la causa raíz: el SDK de Google Maps para Android consulta `khms.google.com`, `khm.google.com` y `maps.google.com`. Al salir por `netd`, `WebViewPolicy.isGloballyBlacklisted` las bloquea como parte de `*.google.com` porque no figuran en `ALLOWED_GOOGLE_SUBDOMAINS`.
+    - Evaluada la seguridad: `khms.google.com` y `khm.google.com` son servidores puros de teselas binarias (100% seguros sin riesgo de navegación). `maps.google.com` puede agregarse a `ALLOWED_GOOGLE_SUBDOMAINS` de forma segura manteniendo `www.google.com` y `google.com` bloqueados.
+    - Se dejan instrucciones para probarlo en el equipo real desde el panel agregando `khms.google.com`, `khm.google.com` y `maps.google.com` como `FORCE_ALLOW` en Reglas DNS.
 - **Verificación ejecutada en esta sesión (verde):**
-  - `.\gradlew.bat testDebugUnitTest`: **341 pruebas en verde, 0 fallos, 0 saltos** (25 archivos).
-  - Sincronía y pruebas Node/Python: `gen_catalog_js.py --check`, `check_whitelist_sync.py`, `check_store_sync.py` (15), `check_profile_sync.py`, `check_command_sync.py`, `check_diag_sync.py` (30), `check_panel_commands.py`, `test_tienda_logic.js` (48), `test_play_lookup.js` (16), `test_pin_security.js` (14), `test_functions_index.js` (24). (`tools/panel_render/run.sh` no corrió localmente por falta de `playwright` instalado en Node Windows.)
-- **Pendiente al despertar el equipo / próximas sesiones:**
-  - Confirmar en celular real Transit en Tienda Play (`B.115`), y si aparece un `Transit.apk` universal verificable, cargarlo en `store-apks-v1` + `storeApps`.
-  - Siguen pendientes de validación en equipo real `B.112` (emulador reglas con JDK 21+), `B.113` (`Ctrl+F5` en pestañas del panel + PIN/auth en equipo real) y `B.114` (bandeja de Google Mensajes con logo de Gemini en `0.6.82+`).
+  - `.\gradlew.bat testDebugUnitTest`: **344 pruebas en verde, 0 fallos, 0 saltos** (incluidas las 3 nuevas de `DomainBlockingTest`).
+  - Scripts de sincronía: `tools/gen_catalog_js.py --check` (OK), `check_whitelist_sync.py` (OK), `check_command_sync.py` (OK), `check_profile_sync.py` (OK), `check_diag_sync.py` (OK, 30/30).
+- **Pendiente para próximas sesiones / confirmación en equipo real:**
+  - Probar en el celular del dueño la regla temporal `FORCE_ALLOW` para `khms.google.com`, `khm.google.com` y `maps.google.com` y confirmar que el mapa de Localizador renderiza.
+  - Una vez confirmado en el celular, incorporar formalmente `maps.google.com`, `khms.google.com` y `khm.google.com` en `ALLOWED_GOOGLE_SUBDOMAINS` (`WebViewPolicy.kt`) y en `WhitelistCatalog.kt` (`com.google.android.apps.adm`).
 
