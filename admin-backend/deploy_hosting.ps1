@@ -6,9 +6,9 @@ $env:GOOGLE_APPLICATION_CREDENTIALS = $serviceAccountKey
 
 Push-Location $PSScriptRoot
 try {
-    Write-Host "Desplegando Firebase Hosting..." -ForegroundColor Cyan
-    cmd.exe /c firebase deploy --only hosting
-    Write-Host "Firebase Hosting desplegado con exito!" -ForegroundColor Green
+    Write-Host "Desplegando Firebase Hosting y Database..." -ForegroundColor Cyan
+    cmd.exe /c firebase deploy --only hosting,database
+    Write-Host "Firebase Hosting y Database desplegados con exito!" -ForegroundColor Green
 } finally {
     Pop-Location
 }
