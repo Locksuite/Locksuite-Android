@@ -2804,31 +2804,49 @@ Hallazgos del análisis y solución aplicada:
 
 ---
 
+**B.118 — INCIDENTE EN HOSTING TRAS CARGA DE APP DE FONDOS (`WALLPAPERS.APK`): SOBRESCRITURA DEL PANEL WEB CON VERSIÓN ANTIGUA Y DUPLICADO EN `STOREAPPS` (16/11/2026). [RESUELTO, BASE LIMPIADA, PANEL RESTAURADO Y DESPLEGADO EN PRODUCCIÓN]**
+
+Pedido del dueño (16/11/2026): averiguar qué pasó hoy tras trabajar con la app de fondos, por qué el panel web se volvió viejo y dejó de cargar la tienda clásica de APKs.
+
+Diagnóstico y causa raíz:
+1. **Sobrescritura accidental de Firebase Hosting:** A las 10:08 (13:08 GMT), se incorporó la aplicación de fondos de pantalla offline (`com.locksuite.wallpapers`, etiqueta "Fondos", `wallpapers.apk`, 156 MB) con huella sha256 `0ba3ace7cb41ba9795162c4adffde70353815b1a4cc414a50183dc1575f45a93` a `storeApps`. Minutos después (10:10), se ejecutó un despliegue de Firebase Hosting desde un entorno o carpeta desactualizada. Esto reemplazó el hosting moderno por un archivo antiguo del 2/9/2026 (`app.js?v=22`), causando que `tienda.html`, `celular.html`, `dominios.html` y los componentes modernos devolvieran HTTP 404, y eliminando el conmutador de la tienda clásica (`#old-store-card` / `#toggle-old-store-btn`).
+2. **Duplicado en `storeApps` y clave errónea:** En Firebase Realtime Database se había generado un nodo duplicado con clave textual inválida `inmersive_wallpapers` (apuntando al mismo paquete `com.locksuite.wallpapers`). Asimismo, en `globalSettings/allowedPackages` se había colado una clave con errata (`com.simpleca**llapp`).
+3. **Límite de GitHub (100 MB):** El APK `wallpapers.apk` pesa 156 MB. Si se incluía en el tracking de Git, los futuros pushes a GitHub fallarían por el límite estricto de 100 MB de la plataforma.
+
+Solución aplicada:
+1. **Preservación del APK para Hosting y regla en Git (`.gitignore`):** Se descargó y validó `admin-backend/public/wallpapers.apk` (156 MB, SHA256 coincidente con la base). Se añadió a `.gitignore` para no subir binarios pesados al repositorio Git, permitiendo que Firebase CLI lo incluya en el despliegue web.
+2. **Saneamiento de Firebase Realtime Database:**
+   - Se eliminó el nodo huérfano/duplicado `storeApps/inmersive_wallpapers`.
+   - Se limpió la entrada malformada `com.simpleca**llapp` en `globalSettings/allowedPackages`.
+   - Se confirmó `storeApps/com_locksuite_wallpapers` como entrada oficial válida y verificable en la tienda clásica con su SHA-256 intacto.
+3. **Actualización de versiones de caché y despliegue a Hosting:**
+   - Se incrementaron los cache-busters en `index.html` (`app.js?v=48`), `celular.html` (`celular.js?v=10`) y `tienda.html` (`tienda.js?v=2`, `tienda_logic.js?v=3`).
+   - Se desplegó Firebase Hosting restaurando el 100% de los endpoints (`index.html`, `tienda.html`, `celular.html`, `dominios.html`, `wallpapers.apk`), devolviendo HTTP 200 en todos los accesos.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**15/11 — Antigravity: bloqueo por defecto de `rides.sng.link` en toda la flota (`B.116`), apertura segura de dominios de mapa para Localizador de Google (`B.117`), pruebas unitarias (346 en verde) y despliegue completo de release.**
+**16/11 — Antigravity: recuperación del panel web moderno tras incidente de despliegue por app de fondos (B.118), saneamiento de RTDB y protección de binario grande en Git.**
 
 - **Pedidos del dueño:**
-  1. Analizar en su celular (`7073099b55af5fd6`, QEMAY-QM01) por qué no se ve el mapa en Localizador de Google (`com.google.android.apps.adm`), qué dominios usa y si se puede abrir de forma segura.
-  2. Bloquear por defecto el dominio `rides.sng.link` en todos los celulares.
-  3. Agregar los dominios para Localizador en código y hacer todos los despliegues.
+  1. Revisar qué ocurrió hoy tras manipular la app de fondos ("apps de fondos").
+  2. Diagnosticar por qué el panel web se volvió viejo y no cargaba la tienda clásica.
+  3. Dejar el sistema funcionando, documentar B.118, actualizar bitácora y desplegar todo.
 - **Acciones y cambios aplicados:**
-  - **Bloqueo de `rides.sng.link` (B.116):**
-    - Agregado a `WhitelistCatalog.BLOCK_ALWAYS` (bloqueo DNS incondicional por Trie en Capa 2 en todos los celulares).
-    - Agregado a `WebViewPolicy.GLOBAL_BLACKLIST` (bloqueo en WebViews y consultas interceptadas).
-    - Regenerado `admin-backend/public/catalog.js` mediante `tools/gen_catalog_js.py`.
-    - Agregadas pruebas unitarias en `DomainBlockingTest.kt` verificando bloqueo incondicional.
-  - **Apertura de dominios de mapas para Localizador (B.117):**
-    - Diagnóstico en el dispositivo real `7073099b55af5fd6`: app habilitada, GMS `maps_dynamite` intentando resolver teselas pero bloqueadas por `WebViewPolicy.isGloballyBlacklisted` al no figurar en `ALLOWED_GOOGLE_SUBDOMAINS`.
-    - Agregados a `ALLOWED_GOOGLE_SUBDOMAINS` en `WebViewPolicy.kt`: `maps.google.com`, `khm.google.com`, `khms.google.com`, `khm0.google.com`–`khm3.google.com`, `khms0.google.com`–`khms3.google.com`.
-    - Agregados al catálogo de `com.google.android.apps.adm` en `WhitelistCatalog.kt` y `app.js`.
-    - Regenerado `catalog.js` y sincronizado con scripts de control.
-    - Pruebas unitarias en `DomainBlockingTest.kt`: validado que los mapas están permitidos y `www.google.com` / `google.com` siguen 100% bloqueados.
-- **Verificación ejecutada en esta sesión (verde):**
-  - `.\gradlew.bat testDebugUnitTest`: **346 pruebas en verde, 0 fallos, 0 saltos**.
-  - Scripts de sincronía: `tools/gen_catalog_js.py --check` (OK), `check_whitelist_sync.py` (OK), `check_command_sync.py` (OK), `check_profile_sync.py` (OK), `check_diag_sync.py` (OK, 30/30 comprobaciones).
-- **Despliegue ejecutado:**
-  - Despliegue completo ejecutado con `deploy_all.ps1`: incremento de versión, compilación de APK release, publicación en Firebase Hosting/Database/Functions y push a GitHub.
+  - **Diagnóstico forense:**
+    - Se comprobó que a las 10:10 (13:10 GMT) un despliegue externo de Firebase Hosting había sobrescrito `public/` con una versión vieja de septiembre (`app.js?v=22`), dejando `tienda.html`, `celular.html` y `dominios.html` en 404 y deshabilitando la tienda clásica.
+    - Se detectó en `storeApps` una entrada duplicada con clave inválida (`inmersive_wallpapers`) y un paquete con asteriscos en `allowedPackages` (`com.simpleca**llapp`).
+  - **Saneamiento de base de datos (RTDB):**
+    - Se eliminó `storeApps/inmersive_wallpapers` conservando la entrada oficial `storeApps/com_locksuite_wallpapers` (SHA-256 `0ba3ace7cb41ba9795162c4adffde70353815b1a4cc414a50183dc1575f45a93` verificado).
+    - Se depuró `globalSettings/allowedPackages` removiendo el registro malformado con asteriscos.
+  - **Protección de Git y Hosting:**
+    - Se descargó `wallpapers.apk` (156 MB) a `admin-backend/public/` para que Hosting lo sirva de forma persistente.
+    - Se añadió `admin-backend/public/wallpapers.apk` a `.gitignore` para evitar el rechazo de GitHub por exceder el tope de 100 MB.
+    - Se incrementaron los identificadores de caché de scripts en `index.html` (`v=48`), `celular.html` (`v=10`) y `tienda.html` (`v=2`).
+  - **Despliegue y verificación en vivo:**
+    - Se desplegó Firebase Hosting y Database. Se verificó con peticiones HTTP reales que `index.html`, `tienda.html`, `celular.html`, `dominios.html` y `wallpapers.apk` responden 200 OK con el panel M3 moderno activo.
+    - Se ejecutaron todas las pruebas de sincronía (`check_store_sync.py`, `check_diag_sync.py`, `gen_catalog_js.py`, `check_whitelist_sync.py`, `check_command_sync.py`, `check_profile_sync.py`), todas en verde.
 
