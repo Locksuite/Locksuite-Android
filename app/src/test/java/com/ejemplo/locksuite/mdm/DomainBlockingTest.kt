@@ -64,7 +64,17 @@ class DomainBlockingTest {
             "khm0.google.com",
             "khm1.google.com",
             "khms0.google.com",
-            "khms1.google.com"
+            "khms1.google.com",
+            "mt.google.com",
+            "mt0.google.com",
+            "mt1.google.com",
+            "mt2.google.com",
+            "mt3.google.com",
+            "mts.google.com",
+            "mts0.google.com",
+            "mts1.google.com",
+            "mts2.google.com",
+            "mts3.google.com"
         )
         for (domain in mapDomains) {
             org.junit.Assert.assertFalse(
@@ -97,5 +107,25 @@ class DomainBlockingTest {
         assertTrue("Debe permitir khm.google.com", allowed.contains("khm.google.com"))
         assertTrue("Debe permitir khms.google.com", allowed.contains("khms.google.com"))
         assertTrue("Debe permitir khms0.google.com", allowed.contains("khms0.google.com"))
+        assertTrue("Debe permitir mt0.google.com", allowed.contains("mt0.google.com"))
+        assertTrue("Debe permitir mts0.google.com", allowed.contains("mts0.google.com"))
+    }
+
+    @Test
+    fun transit_entryContainsMapsDomainsInWhitelistCatalog() {
+        val transitEntry = WhitelistCatalog.entryFor("com.thetransitapp.droid")
+        org.junit.Assert.assertNotNull("La entrada de Transit debe existir", transitEntry)
+        val allowed = transitEntry!!.allow
+        assertTrue("Debe permitir transitapp.com", allowed.contains("transitapp.com"))
+        assertTrue("Debe permitir thetransitapp.com", allowed.contains("thetransitapp.com"))
+        assertTrue("Debe permitir transit.land", allowed.contains("transit.land"))
+        assertTrue("Debe permitir mapbox.com", allowed.contains("mapbox.com"))
+        assertTrue("Debe permitir maps.google.com", allowed.contains("maps.google.com"))
+        assertTrue("Debe permitir khm.google.com", allowed.contains("khm.google.com"))
+        assertTrue("Debe permitir khms0.google.com", allowed.contains("khms0.google.com"))
+        assertTrue("Debe permitir mt.google.com", allowed.contains("mt.google.com"))
+        assertTrue("Debe permitir mt0.google.com", allowed.contains("mt0.google.com"))
+        assertTrue("Debe permitir mt1.google.com", allowed.contains("mt1.google.com"))
+        assertTrue("Debe permitir mts0.google.com", allowed.contains("mts0.google.com"))
     }
 }

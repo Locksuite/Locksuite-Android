@@ -47,6 +47,7 @@ Claude outputs/
 itzi_chat/
 svg_video_yoamash/
 temp_audio/
+conversations_kosher/
 
 # APKs pesados que se sirven en hosting pero superan el limite de 100 MB de GitHub
 admin-backend/public/wallpapers.apk

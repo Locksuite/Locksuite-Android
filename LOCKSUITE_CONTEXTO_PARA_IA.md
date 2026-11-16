@@ -2825,28 +2825,59 @@ Solución aplicada:
 
 ---
 
+**B.119 — APERTURA SEGURA DE SERVIDORES DE TESELAS VECTORIALES Y MAPAS ESTÁNDAR DE GOOGLE MAPS (`MT*.GOOGLE.COM`) PARA TRANSIT Y LOCALIZADOR (16/11/2026). [APLICADO EN CÓDIGO, SINCRONIZADO EN PANEL, VERIFICADO CON EVIDENCIA EN CELULAR REAL Y SUITE DE PRUEBAS COMPLETA; DESPLEGADO EN RELEASE 0.6.85]**
+
+Pedido del dueño (16/11/2026): diagnosticar en su celular conectado por depuración USB por qué en Transit (`com.thetransitapp.droid`) no se ve el mapa al cargar un viaje, permitir todos los dominios necesarios de forma segura y desplegar todo.
+
+Diagnóstico con dispositivo real:
+1. **Evidencia visual y forense:**
+   - Se capturó pantalla del celular con un viaje activo: la aplicación dibuja la polilínea amarilla del trayecto y los marcadores de origen/destino, pero el lienzo de fondo queda completamente beige/vacío sin renderizar calles ni nombres.
+   - La inspección del APK de Transit (`base.apk`) reveló que implementa Google Maps Android SDK (`com.google.android.gms.maps.MapView`, `BaseMapView`, `AnimatedMapView`) junto con estilos personalizados (`map_style.json`, `map_style_summary.json`). El color beige de fondo corresponde al styler base `landscape.natural` (`#f5f3f3`), confirmando que el SDK inicializó pero ninguna tesela de mapa pudo descargarse.
+   - El logcat reveló que los hilos de renderizado `androidmapsapi-` arrojaban fallos en bucle al intentar contactar a los servidores de teselas.
+2. **Causa raíz:**
+   - En B.117 se habían habilitado únicamente los servidores satelitales `khm.google.com` y `khms.google.com`.
+   - Sin embargo, los servidores oficiales que distribuyen las teselas vectoriales de calles y mapa base en Google Maps SDK son `mt.google.com`, `mt0.google.com`–`mt3.google.com` y `mts.google.com`, `mts0.google.com`–`mts3.google.com`.
+   - Al no estar en `ALLOWED_GOOGLE_SUBDOMAINS`, las consultas DNS hacia `mt*.google.com` caían en la regla general de bloqueo de `google.com` en `WebViewPolicy.isGloballyBlacklisted`, devolviendo `127.0.0.1`.
+   - Asimismo, la entrada de Transit en `WhitelistCatalog.kt` solo tenía 4 dominios propios y no contemplaba los endpoints del SDK de Google Maps.
+
+Solución aplicada:
+1. **Apertura segura de dominios de teselas (`WebViewPolicy.kt`):**
+   - Se añadieron a `ALLOWED_GOOGLE_SUBDOMAINS`: `"mt.google.com"`, `"mt0.google.com"`..`"mt3.google.com"`, `"mts.google.com"`, `"mts0.google.com"`..`"mts3.google.com"`. Son servidores dedicados exclusivamente a la entrega de datos binarios y fragmentos gráficos de calles (protobuf/vector tiles); no permiten navegación web ni búsqueda.
+2. **Catálogo de dominios (`WhitelistCatalog.kt`, `app.js`, `catalog.js`):**
+   - En `com.thetransitapp.droid` se sumaron los dominios de Google Maps SDK (`maps.google.com`, `khm*`, `khms*`, `mt*`, `mts*`), pasando de 4 a 25 dominios permitidos.
+   - En `com.google.android.apps.adm` (Localizador) se sumaron también los dominios `mt*` y `mts*` para garantizar cobertura del modo mapa estándar además del satelital, pasando de 12 a 22 dominios permitidos.
+   - Se actualizó `admin-backend/public/app.js` (`allow: 25` para Transit, `allow: 22` para Localizador) y se regeneró `admin-backend/public/catalog.js` con `tools/gen_catalog_js.py`.
+3. **Validación:**
+   - Se actualizaron las pruebas unitarias en `DomainBlockingTest.kt` confirmando que todos los dominios `mt*` y `mts*` no son bloqueados globalmente, mientras que `google.com`, `www.google.com` y buscadores continúan estrictamente bloqueados.
+   - Se ejecutaron exitosamente todas las suites de prueba: `:app:testDebugUnitTest`, sincronía de catálogos (`check_whitelist_sync.py`, `gen_catalog_js.py --check`), sincronía de tiendas, diagnóstico, comandos y perfiles, totalizando más de 170 verificaciones en verde.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**16/11 — Antigravity: recuperación del panel web moderno tras incidente de despliegue por app de fondos (B.118), saneamiento de RTDB y protección de binario grande en Git.**
+**16/11 (tarde) — Antigravity: diagnóstico forense en celular real y apertura de dominios de mapas de Google (`mt*.google.com`) para Transit y Localizador (B.119).**
 
 - **Pedidos del dueño:**
-  1. Revisar qué ocurrió hoy tras manipular la app de fondos ("apps de fondos").
-  2. Diagnosticar por qué el panel web se volvió viejo y no cargaba la tienda clásica.
-  3. Dejar el sistema funcionando, documentar B.118, actualizar bitácora y desplegar todo.
+  1. Diagnosticar con depuración USB en celular por qué no se ve el mapa en Transit al cargar un viaje.
+  2. Resolverlo permitiendo de forma segura los dominios necesarios.
+  3. Dejar listados aparte todos los dominios permitidos para Transit.
+  4. Actualizar documentación, bitácora C y desplegar todo.
 - **Acciones y cambios aplicados:**
-  - **Diagnóstico forense:**
-    - Se comprobó que a las 10:10 (13:10 GMT) un despliegue externo de Firebase Hosting había sobrescrito `public/` con una versión vieja de septiembre (`app.js?v=22`), dejando `tienda.html`, `celular.html` y `dominios.html` en 404 y deshabilitando la tienda clásica.
-    - Se detectó en `storeApps` una entrada duplicada con clave inválida (`inmersive_wallpapers`) y un paquete con asteriscos en `allowedPackages` (`com.simpleca**llapp`).
-  - **Saneamiento de base de datos (RTDB):**
-    - Se eliminó `storeApps/inmersive_wallpapers` conservando la entrada oficial `storeApps/com_locksuite_wallpapers` (SHA-256 `0ba3ace7cb41ba9795162c4adffde70353815b1a4cc414a50183dc1575f45a93` verificado).
-    - Se depuró `globalSettings/allowedPackages` removiendo el registro malformado con asteriscos.
-  - **Protección de Git y Hosting:**
-    - Se descargó `wallpapers.apk` (156 MB) a `admin-backend/public/` para que Hosting lo sirva de forma persistente.
-    - Se añadió `admin-backend/public/wallpapers.apk` a `.gitignore` para evitar el rechazo de GitHub por exceder el tope de 100 MB.
-    - Se incrementaron los identificadores de caché de scripts en `index.html` (`v=48`), `celular.html` (`v=10`) y `tienda.html` (`v=2`).
-  - **Despliegue y verificación en vivo:**
-    - Se desplegó Firebase Hosting y Database. Se verificó con peticiones HTTP reales que `index.html`, `tienda.html`, `celular.html`, `dominios.html` y `wallpapers.apk` responden 200 OK con el panel M3 moderno activo.
-    - Se ejecutaron todas las pruebas de sincronía (`check_store_sync.py`, `check_diag_sync.py`, `gen_catalog_js.py`, `check_whitelist_sync.py`, `check_command_sync.py`, `check_profile_sync.py`), todas en verde.
+  - **Diagnóstico en equipo real:**
+    - Se capturó pantalla del dispositivo con Transit mostrando un viaje: la polilínea de la ruta se dibujaba pero el fondo quedaba completamente beige (`#f5f3f3`).
+    - Se inspeccionó el APK de Transit: utiliza Google Maps SDK embebido (`MapView`), requiriendo servidores de teselas vectoriales de Google.
+    - Se probó la resolución DNS en el celular y se demostró que `mt0.google.com`, `mt1.google.com`, `mts.google.com`, etc. eran interceptados y bloqueados por LockSuite (`127.0.0.1`), impidiendo la carga de las calles.
+  - **Apertura segura de subdominios (`WebViewPolicy.kt`):**
+    - Se sumaron a `ALLOWED_GOOGLE_SUBDOMAINS` los servidores de mapas y teselas vectoriales: `mt.google.com`, `mt0.google.com`..`mt3.google.com`, `mts.google.com`, `mts0.google.com`..`mts3.google.com`.
+  - **Sincronización de catálogo (`WhitelistCatalog.kt`, `app.js`, `catalog.js`):**
+    - Transit (`com.thetransitapp.droid`) pasó de 4 a 25 dominios permitidos (incorporando mapas y teselas).
+    - Localizador (`com.google.android.apps.adm`) pasó de 12 a 22 dominios permitidos (incorporando teselas vectoriales `mt*` y `mts*`).
+    - Se regeneró `catalog.js` y se actualizaron los conteos en `app.js`.
+  - **Pruebas y verificación:**
+    - Se agregaron aserciones en `DomainBlockingTest.kt` validando que los dominios `mt*` no son bloqueados y que el catálogo de Transit y Localizador contienen los dominios de mapas.
+    - Se ejecutó la suite completa de pruebas unitarias y de sincronía: 100% en verde.
+  - **Despliegue:**
+    - Se ejecutó `deploy_all.ps1` incrementando versionCode/versionName, compilando APK release, desplegando a Firebase y GitHub.
 

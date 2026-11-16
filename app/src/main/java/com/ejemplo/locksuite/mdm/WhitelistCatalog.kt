@@ -379,7 +379,17 @@ object WhitelistCatalog {
                 "khms0.google.com",
                 "khms1.google.com",
                 "khms2.google.com",
-                "khms3.google.com"
+                "khms3.google.com",
+                "mt.google.com",
+                "mt0.google.com",
+                "mt1.google.com",
+                "mt2.google.com",
+                "mt3.google.com",
+                "mts.google.com",
+                "mts0.google.com",
+                "mts1.google.com",
+                "mts2.google.com",
+                "mts3.google.com"
             ),
             note = "Permite inicialización de mapas y descarga de teselas en la app. A propósito NO se permite google.com/android/find (interfaz web)."
         ),
@@ -443,8 +453,34 @@ object WhitelistCatalog {
         Entry(
             packageName = "com.thetransitapp.droid",
             label = "Transit",
-            allow = listOf("transitapp.com", "thetransitapp.com", "transit.land", "mapbox.com"),
-            note = "Usa Mapbox/Google Maps y CDN compartidos para mapas y horarios en vivo."
+            allow = listOf(
+                "transitapp.com",
+                "thetransitapp.com",
+                "transit.land",
+                "mapbox.com",
+                "maps.google.com",
+                "khm.google.com",
+                "khms.google.com",
+                "khm0.google.com",
+                "khm1.google.com",
+                "khm2.google.com",
+                "khm3.google.com",
+                "khms0.google.com",
+                "khms1.google.com",
+                "khms2.google.com",
+                "khms3.google.com",
+                "mt.google.com",
+                "mt0.google.com",
+                "mt1.google.com",
+                "mt2.google.com",
+                "mt3.google.com",
+                "mts.google.com",
+                "mts0.google.com",
+                "mts1.google.com",
+                "mts2.google.com",
+                "mts3.google.com"
+            ),
+            note = "Usa Google Maps SDK para mapas y rutas, Mapbox y CDN compartidos."
         ),
 
         Entry(
