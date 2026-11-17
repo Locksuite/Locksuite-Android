@@ -70,11 +70,20 @@ class DomainBlockingTest {
             "mt1.google.com",
             "mt2.google.com",
             "mt3.google.com",
+            "mt4.google.com",
+            "mt7.google.com",
             "mts.google.com",
             "mts0.google.com",
             "mts1.google.com",
             "mts2.google.com",
-            "mts3.google.com"
+            "mts3.google.com",
+            "mts5.google.com",
+            "lh3.google.com",
+            "lh6.google.com",
+            "clients1.google.com",
+            "clients5.google.com",
+            "geo.google.com",
+            "geocoding.google.com"
         )
         for (domain in mapDomains) {
             org.junit.Assert.assertFalse(
@@ -88,6 +97,9 @@ class DomainBlockingTest {
             "google.com",
             "www.google.com",
             "search.google.com",
+            "news.google.com",
+            "translate.google.com",
+            "images.google.com",
             "bing.com"
         )
         for (domain in searchDomains) {
@@ -127,5 +139,14 @@ class DomainBlockingTest {
         assertTrue("Debe permitir mt0.google.com", allowed.contains("mt0.google.com"))
         assertTrue("Debe permitir mt1.google.com", allowed.contains("mt1.google.com"))
         assertTrue("Debe permitir mts0.google.com", allowed.contains("mts0.google.com"))
+    }
+
+    @Test
+    fun transit_isConfiguredInCoreDomains() {
+        val core = WebViewPolicy.getCoreDomainsFor("com.thetransitapp.droid")
+        org.junit.Assert.assertNotNull("Transit debe estar registrado en CORE_DOMAINS", core)
+        assertTrue("CORE_DOMAINS debe contener transitapp.com", core!!.contains("transitapp.com"))
+        assertTrue("CORE_DOMAINS debe contener mapbox.com", core.contains("mapbox.com"))
+        assertTrue("CORE_DOMAINS debe contener googleapis.com", core.contains("googleapis.com"))
     }
 }

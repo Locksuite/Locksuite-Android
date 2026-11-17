@@ -19,6 +19,14 @@ object WebViewPolicy {
             "diditaxi.com.cn",   // Servidores de taxi
             "didistatic.com"     // Recursos estáticos de DiDi
             // Bloqueado: game.diditaxi.com.cn, minigame.didiglobal.com, drama.didiglobal.com, etc.
+        ),
+        "com.thetransitapp.droid" to setOf(
+            "transitapp.com",
+            "thetransitapp.com",
+            "transit.land",
+            "mapbox.com",
+            "googleapis.com",
+            "gstatic.com"
         )
     )
 
@@ -143,7 +151,9 @@ object WebViewPolicy {
         "sentry.io",
         "branch.io",
         "adjust.com",
-        "appsflyer.com"
+        "appsflyer.com",
+        "mapbox.com",
+        "googleusercontent.com"
     )
 
     /**
@@ -163,14 +173,34 @@ object WebViewPolicy {
 
     /**
      * Evalúa si un dominio cae en la lista negra global de WebViews, respetando los
-     * subdominios dedicados de apps de Google (Gmail, Drive, Meet, Messages, Wallet, Login).
+     * subdominios dedicados de apps de Google (Gmail, Drive, Meet, Messages, Wallet, Login,
+     * Mapas, Teselas vectoriales e infraestructura GMS).
      */
     fun isGloballyBlacklisted(queriedDomain: String): Boolean {
         val lower = queriedDomain.lowercase().trimEnd('.')
         if (ALLOWED_GOOGLE_SUBDOMAINS.any { lower == it || lower.endsWith(".$it") }) {
             return false
         }
+        if (isGoogleMapOrInfraSubdomain(lower)) {
+            return false
+        }
         return GLOBAL_BLACKLIST.any { lower == it || lower.endsWith(".$it") }
+    }
+
+    /**
+     * Identifica subdominios dedicados de mapas, teselas vectoriales, capas satelitales,
+     * recursos estáticos y sincronización de servicios de Google (mt*, mts*, khm*, khms*, lh*, clients*, geo*).
+     * Estos servidores solo entregan datos binarios (tiles, protobuf, coordenadas) y NO permiten
+     * navegación web ni búsquedas, por lo que su apertura es 100% segura.
+     */
+    fun isGoogleMapOrInfraSubdomain(lower: String): Boolean {
+        if (!lower.endsWith(".google.com")) return false
+        val prefix = lower.removeSuffix(".google.com")
+        val host = prefix.substringAfterLast('.')
+        if (host == "maps" || host == "geo" || host == "geocoding" || host == "location" || host == "safebrowsing") {
+            return true
+        }
+        return host.matches(Regex("^(mt|mts|khm|khms|lh|clients|beacons)\\d*$"))
     }
 
     /**

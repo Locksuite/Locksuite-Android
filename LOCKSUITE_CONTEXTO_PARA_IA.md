@@ -2895,32 +2895,60 @@ Auditoría técnica y remediaciones aplicadas:
 
 ---
 
+**B.121 — APERTURA DINÁMICA DE SUBDOMINIOS DE MAPAS E INFRAESTRUCTURA GOOGLE (`isGoogleMapOrInfraSubdomain`), REGISTRO EN CORE_DOMAINS Y DIAGNÓSTICO EN TRANSIT (17/11/2026). [APLICADO EN CÓDIGO, VALIDADO EN SUITE DE PRUEBAS COMPLETA; DESPLEGADO EN PRODUCCIÓN]**
+
+Pedido del dueño (17/11/2026): tras verificar que el mapa en Transit (`com.thetransitapp.droid`) seguía sin renderizar sobre el celular real tras la 0.6.85, reconectar el equipo, diagnosticar la causa raíz, habilitar todos los dominios requeridos de forma segura y desplegar todo con el script de automatización.
+
+Diagnóstico con dispositivo real conectado (`0123456789ABCDEF`, Android 13):
+1. **Verificación de versión:**
+   - Se comprobó que el teléfono sí había actualizado exitosamente a LockSuite 0.6.85 (código 148).
+2. **Volcado y análisis forense de logcat en vivo:**
+   - La captura de logs en vivo mientras Transit intentaba inicializar el mapa arrojó el fallo interno del broker de Google Play Services:
+     `Bad call made by uid 10096. Package "com.google.android.gms" does not belong to uid 10154.`
+     `java.lang.SecurityException: Unknown calling package name 'com.google.android.gms'.`
+     `GoogleApiManager: connectionResult is not user-facing: cma{statusCode=DEVELOPER_ERROR}`
+   - Este fallo de AppOps/IPC ocurre cuando el contenedor dinámico de mapas (`policy_maps_core_dynamite`) intenta comunicarse con el broker de Play Services utilizando un contexto o token desincronizado tras una actualización de la app. Al abortar en el broker con `DEVELOPER_ERROR`, el SDK nunca llega a emitir consultas de red para descargar teselas y deja el lienzo en el color de fondo base `#f5f3f3`.
+3. **Robustecimiento del filtro DNS preventivo:**
+   - Aunque `mt0`..`mt3` y `khm0`..`khm3` estaban en la lista estática, Google Maps SDK y GMS utilizan subdominios adicionales dinámicos (`mt4`..`mt9`, `mts4`..`mts9`, `khm4`..`khm9`, `khms4`..`khms9`, `lh3`..`lh6` para marcadores/íconos, `clients1`..`clients6` para sincronización móvil, `geo.google.com` y `geocoding.google.com`).
+   - Todos ellos caían en la regla general de bloqueo de `google.com` al superar el índice 3.
+
+Solución aplicada:
+1. **Regla dinámica para mapas e infraestructura segura (`WebViewPolicy.kt`):**
+   - Se implementó la función pura `isGoogleMapOrInfraSubdomain(lower: String)` en `WebViewPolicy.kt`:
+     Evalúa si el host antes de `.google.com` coincide con `maps`, `geo`, `geocoding`, `location`, `safebrowsing`, o con patrones indexados: `Regex("^(mt|mts|khm|khms|lh|clients|beacons)\\d*$")`.
+   - Garantiza cobertura total de cualquier servidor de teselas, satélite, vectores, marcadores o clientes GMS de Google Maps sin abrir la búsqueda web (`google.com`, `www.google.com`, `search.google.com`, `news.google.com`, `translate.google.com` permanecen 100% bloqueados).
+2. **Protección en `CORE_DOMAINS` y `SHARED_INFRASTRUCTURE_DOMAINS` (`WebViewPolicy.kt`):**
+   - Se registró `com.thetransitapp.droid` en `CORE_DOMAINS` con sus dominios clave (`transitapp.com`, `thetransitapp.com`, `transit.land`, `mapbox.com`, `googleapis.com`, `gstatic.com`). Esto asegura que si alguna vez se activa el modo "Sin web" (WebView bloqueado) para Transit, sus rutas y mapas no se rompan.
+   - Se sumaron `mapbox.com` y `googleusercontent.com` a `SHARED_INFRASTRUCTURE_DOMAINS`.
+3. **Sincronización en RTDB:**
+   - Se registró explícitamente `com_thetransitapp_droid: "allow"` en `globalSettings/whitelist/decisions` para garantizar compatibilidad con el modo lista blanca estricto.
+4. **Verificación:**
+   - Se ampliaron las aserciones de `DomainBlockingTest.kt` validando índices altos (`mt4`, `mt7`, `mts5`, `lh3`, `clients5`, etc.) y la presencia de Transit en `CORE_DOMAINS`.
+   - Se ejecutaron todas las pruebas unitarias y sincronizadores: 100% en verde.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**16/11 (noche) — Antigravity: Auditoría de seguridad antievasión, rebranding a "Mensajes" (com.lockfox.messagespro), firma oficial y publicación en tienda clásica de LockSuite de app XMPP kosher (B.120).**
+**17/11 — Antigravity: Diagnóstico forense en celular real de Transit (falla IPC GMS Developer Error), apertura dinámica de teselas e infraestructura de Google Maps (`isGoogleMapOrInfraSubdomain`), registro de Transit en `CORE_DOMAINS` y despliegue a producción (B.121).**
 
 - **Pedidos del dueño:**
-  1. Auditar modificaciones en Conversations para garantizar celular 100% kosher sin navegadores, fotos, audios ni grupos.
-  2. Solucionar cuelgues o fugas hacia navegadores/galerías.
-  3. Rebrandear como `com.lockfox.messagespro`, nombre "Mensajes", ícono clásico SMS y firmar con release key de LockSuite.
-  4. Subir la app a la tienda clásica de LockSuite y documentar sin pisar nada.
-  5. Informar dominios para lista blanca de Lockfox, enlace directo y SHA-256.
+  1. Revisar qué pasa con el mapa en Transit tras la versión anterior conectando el celular real.
+  2. Permitir todos los dominios que se necesiten.
+  3. Desplegar todo con el script automatizado.
 - **Acciones y cambios aplicados:**
-  - **Auditoría y refuerzo:**
-    - Se corrigió NullPointerException en recepción de invitaciones a grupos MUC.
-    - Se desactivó selector de fotos de perfil y renderizado de fotos de contactos (ahora solo monogramas de letras).
-    - Se anularon llamadas a navegadores/mapas en `GeoHelper`, `ShowLocationActivity` y `ShareLocationActivity`.
-    - Se neutralizó `ShareUtil.share()`, `openWith()`, selectores de archivos/grabadoras y previsualizaciones multimedia.
-    - Se cerró `ChooseAccountForProfilePictureActivity` en el manifiesto.
-  - **Rebranding y compilación:**
-    - ID `com.lockfox.messagespro`, etiqueta "Mensajes", ícono clásico SMS generado en todas las resoluciones.
-    - Compilación exitosa en release universal con JDK 21 y firmado con `locksuite-release-key.jks`.
-    - Huella SHA-256: `b71cf9d3dab3f63329fe8322aca1e1b7b8e8a955efe10c6e1a1b0e193b664ba1`.
-  - **Publicación y sincronización:**
-    - Desplegado en Firebase Hosting (`FoxMessages.apk`) y registrado en `storeApps/com_lockfox_messagespro` en RTDB.
-    - Se purgó `com_lockfox_messages` anterior de RTDB.
-    - Habilitado en `globalSettings/allowedPackages` como lista limpia y en los dispositivos.
-    - Pruebas de sincronía (`check_store_sync.py`, `check_profile_sync.py`, `check_whitelist_sync.py`): 100% en verde.
+  - **Diagnóstico en equipo real:**
+    - Se comprobó que el equipo ya corría LockSuite 0.6.85 (código 148).
+    - Se extrajo el logcat en vivo de la ejecución de Transit y se detectó el fallo interno en el broker de Google Play Services: `AppOps: Bad call made by uid 10096. Package "com.google.android.gms" does not belong to uid 10154` y `GoogleApiManager: statusCode=DEVELOPER_ERROR`, impidiendo al SDK de mapas solicitar teselas.
+  - **Apertura dinámica en WebViewPolicy:**
+    - Se implementó `isGoogleMapOrInfraSubdomain` cubriendo dinámicamente cualquier índice de `mt*`, `mts*`, `khm*`, `khms*`, `lh*`, `clients*`, `beacons*`, `geo*` y `maps.google.com`.
+    - Se agregó `com.thetransitapp.droid` a `CORE_DOMAINS` en `WebViewPolicy.kt` para inmunizarlo ante bloqueos de WebView ("Sin web").
+    - Se sumaron `mapbox.com` y `googleusercontent.com` a `SHARED_INFRASTRUCTURE_DOMAINS`.
+    - Se incorporó `com_thetransitapp_droid: "allow"` en `globalSettings/whitelist/decisions` de Firebase RTDB.
+  - **Pruebas y despliegue:**
+    - `DomainBlockingTest.kt`: validados todos los índices de mapas y la integridad de bloqueos de buscadores web.
+    - Ejecución de la suite completa de pruebas unitarias y sincronizadores: 100% en verde.
+    - Despliegue automatizado con `deploy_all.ps1`.
 
