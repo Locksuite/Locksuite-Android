@@ -2853,31 +2853,74 @@ Solución aplicada:
 
 ---
 
+**B.120 — ADAPTACIÓN KOSHER, AUDITORÍA ANTIEVASIÓN, REBRANDING ("MENSAJES"), FIRMA Y PUBLICACIÓN DE APP DE MENSAJERÍA XMPP EN LA TIENDA CLÁSICA (16/11/2026). [COMPILADA CON LLAVE DE RELEASE OFICIAL, PUBLICADA EN HOSTING Y REGISTRADA EN TIENDA CLÁSICA; VERIFICADA AL 100%]**
+
+Pedido del dueño (16/11/2026):
+1. Auditar la modificación inicial de Conversations (XMPP) para garantizar que sea estrictamente kosher (solo texto 1 a 1, llamadas y videollamadas 1 a 1, cero imágenes, audios, videos, estados, grupos MUC, navegación web o fugas a exploradores/galerías).
+2. Corregir cualquier vector de evasión o riesgo de fallo/crash.
+3. Rebrandear: nombre de paquete `com.lockfox.messagespro`, nombre visible "Mensajes", ícono clásico de burbuja de SMS.
+4. Firmar con la clave privada de producción de LockSuite (`locksuite-release-key.jks`, alias `locksuite-alias`).
+5. Compilar release APK universal.
+6. Subir a la tienda clásica de LockSuite (`storeApps`) en Firebase RTDB y Hosting.
+7. Determinar dominios requeridos para la lista blanca de Lockfox y huella SHA-256.
+
+Auditoría técnica y remediaciones aplicadas:
+1. **Prevención de Crash Crítico (NPE en invitaciones a salas MUC):**
+   - En `MultiUserChatManager.java`, la modificación previa eliminaba el handler de invitaciones pero dejaba referencias desprotegidas que causaban `NullPointerException` al recibir stanzas de invitación grupal. Se parcheó para interceptar y rechazar silenciosamente cualquier invitación MUC sin crashear el servicio.
+2. **Cierre de Vectores de Evasión Ocultos y Refuerzo Antievasión Estricto:**
+   - *Selector de Avatar / Galería:* Bloqueado en `ManageAccountActivity.java`, `PublishProfilePictureActivity.java` y `PublishGroupChatProfilePictureActivity.java`. Se desactivó la carga de imágenes de perfil. En `AndroidManifest.xml`, se deshabilitó la exportación de `ChooseAccountForProfilePictureActivity` (`exported="false"`) y se eliminó el intent-filter con `image/*`.
+   - *Avatares de contactos:* Forzados a monogramas de letras vectoriales estáticas en `AvatarService.java`; nunca se renderizan ni descargan fotos externas.
+   - *Apertura de Enlaces Externos y Mapas:* `GeoHelper.java` (`view`), `ShowLocationActivity.java` y `ShareLocationActivity.java` fueron neutralizados (`if (true) { finish(); return; }`) para evitar llamar a `ACTION_VIEW` hacia navegadores o Google Maps.
+   - *Descarga de adjuntos y menús de compartir:* Desactivada a nivel de protocolos en `HttpConnectionManager.java` (`createNewDownloadConnection` y `createNewUploadConnection` con return inmediato). En `ConversationFragment.java`, se ocultaron del menú contextual las opciones `shareWith`, `openWith`, `saveFile`, `downloadFile` y `copyUrl`, y se neutralizaron `attachFile()`, `invokeAttachFileIntent()`, `attachFileToConversation()` y `openWith()`.
+   - *Compartir hacia apps externas:* En `ShareUtil.java`, se neutralizó `share()` con salida temprana inmediata para no abrir el selector del sistema (`ACTION_SEND`). En `ShareWithActivity.java`, se purgó el manejo de adjuntos (`share.uris.clear()`), permitiendo solo recibir texto plano entrante si otra app lo comparte.
+   - *Actividades multimedia y de grabación:* `MediaBrowserActivity.java`, `RecordingActivity.java` y `ViewProfilePictureActivity.java` fueron interceptadas con `finish(); return;` inmediato en `onCreate`.
+3. **Rebranding e Iconografía:**
+   - Package name: `com.lockfox.messagespro`.
+   - Etiqueta de aplicación: `Mensajes`.
+   - Ícono: vector adaptativo y mapas de bits mipmap (mdpi a xxxhdpi) con burbuja de chat y líneas de texto clásicas.
+4. **Compilación y Firma:**
+   - Compilado con OpenJDK 21 en modo universal (`minSdk=26`, `targetSdk=36`).
+   - Firmado con V1 (Jar) y V2 (APK Scheme) usando la llave oficial `E:\Documentos\locksuite-release-key.jks`.
+   - Huella SHA-256 APK Universal: `b71cf9d3dab3f63329fe8322aca1e1b7b8e8a955efe10c6e1a1b0e193b664ba1`.
+5. **Publicación en LockSuite:**
+   - APK alojado en Firebase Hosting: `https://locksuite-nueva.web.app/FoxMessages.apk` (HTTP 200, Content-Type application/vnd.android.package-archive, verificado en vivo).
+   - Entrada en Firebase Realtime Database: `storeApps/com_lockfox_messagespro` (etiqueta "Mensajes", SHA-256 verificado `b71cf9d3dab3f63329fe8322aca1e1b7b8e8a955efe10c6e1a1b0e193b664ba1`). La versión anterior `com_lockfox_messages` fue removida.
+   - Paquete habilitado en `globalSettings/allowedPackages` como elemento de lista tipo String (`com.lockfox.messagespro`). Se corrigió el bug de formato previo en RTDB que causaba detención forzada de LockSuite.
+   - Copia local de resguardo en `release-apk/com.lockfox.messagespro-universal.apk` (60,5 MB) y en `admin-backend/public/FoxMessages.apk`.
+   - Binarios incorporados en `.gitignore` para no saturar el límite de GitHub.
+6. **Requisitos de Red para Lockfox (Lista Blanca):**
+   - Servidor XMPP: `conversations.im` (puertos TCP 5222 y 5223).
+   - Llamadas/Videollamadas (WebRTC STUN/TURN): `turn.conversations.im` (puertos UDP/TCP 3478, 5349).
+   - STUN fallback: `stun.l.google.com` (puerto 19302).
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**16/11 (tarde) — Antigravity: diagnóstico forense en celular real y apertura de dominios de mapas de Google (`mt*.google.com`) para Transit y Localizador (B.119).**
+**16/11 (noche) — Antigravity: Auditoría de seguridad antievasión, rebranding a "Mensajes" (com.lockfox.messagespro), firma oficial y publicación en tienda clásica de LockSuite de app XMPP kosher (B.120).**
 
 - **Pedidos del dueño:**
-  1. Diagnosticar con depuración USB en celular por qué no se ve el mapa en Transit al cargar un viaje.
-  2. Resolverlo permitiendo de forma segura los dominios necesarios.
-  3. Dejar listados aparte todos los dominios permitidos para Transit.
-  4. Actualizar documentación, bitácora C y desplegar todo.
+  1. Auditar modificaciones en Conversations para garantizar celular 100% kosher sin navegadores, fotos, audios ni grupos.
+  2. Solucionar cuelgues o fugas hacia navegadores/galerías.
+  3. Rebrandear como `com.lockfox.messagespro`, nombre "Mensajes", ícono clásico SMS y firmar con release key de LockSuite.
+  4. Subir la app a la tienda clásica de LockSuite y documentar sin pisar nada.
+  5. Informar dominios para lista blanca de Lockfox, enlace directo y SHA-256.
 - **Acciones y cambios aplicados:**
-  - **Diagnóstico en equipo real:**
-    - Se capturó pantalla del dispositivo con Transit mostrando un viaje: la polilínea de la ruta se dibujaba pero el fondo quedaba completamente beige (`#f5f3f3`).
-    - Se inspeccionó el APK de Transit: utiliza Google Maps SDK embebido (`MapView`), requiriendo servidores de teselas vectoriales de Google.
-    - Se probó la resolución DNS en el celular y se demostró que `mt0.google.com`, `mt1.google.com`, `mts.google.com`, etc. eran interceptados y bloqueados por LockSuite (`127.0.0.1`), impidiendo la carga de las calles.
-  - **Apertura segura de subdominios (`WebViewPolicy.kt`):**
-    - Se sumaron a `ALLOWED_GOOGLE_SUBDOMAINS` los servidores de mapas y teselas vectoriales: `mt.google.com`, `mt0.google.com`..`mt3.google.com`, `mts.google.com`, `mts0.google.com`..`mts3.google.com`.
-  - **Sincronización de catálogo (`WhitelistCatalog.kt`, `app.js`, `catalog.js`):**
-    - Transit (`com.thetransitapp.droid`) pasó de 4 a 25 dominios permitidos (incorporando mapas y teselas).
-    - Localizador (`com.google.android.apps.adm`) pasó de 12 a 22 dominios permitidos (incorporando teselas vectoriales `mt*` y `mts*`).
-    - Se regeneró `catalog.js` y se actualizaron los conteos en `app.js`.
-  - **Pruebas y verificación:**
-    - Se agregaron aserciones en `DomainBlockingTest.kt` validando que los dominios `mt*` no son bloqueados y que el catálogo de Transit y Localizador contienen los dominios de mapas.
-    - Se ejecutó la suite completa de pruebas unitarias y de sincronía: 100% en verde.
-  - **Despliegue:**
-    - Se ejecutó `deploy_all.ps1` incrementando versionCode/versionName, compilando APK release, desplegando a Firebase y GitHub.
+  - **Auditoría y refuerzo:**
+    - Se corrigió NullPointerException en recepción de invitaciones a grupos MUC.
+    - Se desactivó selector de fotos de perfil y renderizado de fotos de contactos (ahora solo monogramas de letras).
+    - Se anularon llamadas a navegadores/mapas en `GeoHelper`, `ShowLocationActivity` y `ShareLocationActivity`.
+    - Se neutralizó `ShareUtil.share()`, `openWith()`, selectores de archivos/grabadoras y previsualizaciones multimedia.
+    - Se cerró `ChooseAccountForProfilePictureActivity` en el manifiesto.
+  - **Rebranding y compilación:**
+    - ID `com.lockfox.messagespro`, etiqueta "Mensajes", ícono clásico SMS generado en todas las resoluciones.
+    - Compilación exitosa en release universal con JDK 21 y firmado con `locksuite-release-key.jks`.
+    - Huella SHA-256: `b71cf9d3dab3f63329fe8322aca1e1b7b8e8a955efe10c6e1a1b0e193b664ba1`.
+  - **Publicación y sincronización:**
+    - Desplegado en Firebase Hosting (`FoxMessages.apk`) y registrado en `storeApps/com_lockfox_messagespro` en RTDB.
+    - Se purgó `com_lockfox_messages` anterior de RTDB.
+    - Habilitado en `globalSettings/allowedPackages` como lista limpia y en los dispositivos.
+    - Pruebas de sincronía (`check_store_sync.py`, `check_profile_sync.py`, `check_whitelist_sync.py`): 100% en verde.
 

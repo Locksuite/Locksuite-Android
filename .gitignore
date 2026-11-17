@@ -51,4 +51,6 @@ conversations_kosher/
 
 # APKs pesados que se sirven en hosting pero superan el limite de 100 MB de GitHub
 admin-backend/public/wallpapers.apk
+admin-backend/public/FoxMessages.apk
+release-apk/com.lockfox.messages*.apk
 
