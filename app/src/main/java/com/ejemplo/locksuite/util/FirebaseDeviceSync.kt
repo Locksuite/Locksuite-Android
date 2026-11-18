@@ -966,6 +966,7 @@ object FirebaseDeviceSync {
                     "layer3Audit" to policyManager.getLayer3Audit(),
                     "contactPhotoPickerBlocked" to policyManager.isContactPhotoPickerBlocked(),
                     "geminiMessagesBlocked" to policyManager.isGeminiMessagesBlocked(),
+                    "santanderBlocked" to policyManager.isSantanderBlocked(),
                     "kosherLauncherEnabled" to policyManager.isKosherLauncherEnabled(),
                     "stealthModeEnabled" to isStealth,
 

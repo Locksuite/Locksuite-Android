@@ -446,7 +446,9 @@ window.LOCKSUITE_CATALOG = {
     "youtubei.googleapis.com",
     "youtube.googleapis.com",
     "discover.google.com",
-    "rides.sng.link"
+    "rides.sng.link",
+    "apps.apple.com",
+    "x.com"
   ],
   "sharedCdn": [
     "cloudfront.net",

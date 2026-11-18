@@ -624,6 +624,7 @@
                 <label class="toggle-row"><span>Tapar las imágenes de esa ventana (apagalo si un portal no deja iniciar sesión)</span><input type="checkbox" class="policy-switch" data-policy="captivePortalCoverImages" /></label>
                 <label class="toggle-row"><span>Bloquear selector de fotos e ilustraciones de contactos</span><input type="checkbox" class="policy-switch" data-policy="contactPhotoPickerBlocked" /></label>
                 <label class="toggle-row"><span>Bloqueo de gemini en mensajes</span><input type="checkbox" class="policy-switch" data-policy="geminiMessagesBlocked" /></label>
+                <label class="toggle-row"><span>Bloqueo de Santander</span><input type="checkbox" class="policy-switch" data-policy="santanderBlocked" /></label>
                 <label class="toggle-row"><span>Bloquear cambio de idioma del sistema</span><input type="checkbox" class="policy-switch" data-policy="localeChangeBlocked" /></label>
                 <label class="toggle-row"><span>Rebotar el menú de Accesibilidad de Ajustes</span><input type="checkbox" class="policy-switch" data-policy="accBounceSettings" /></label>
                 <label class="toggle-row"><span>Aviso insistente cada ~18 s si está apagada</span><input type="checkbox" class="policy-switch" data-policy="accNag" /></label>
@@ -901,6 +902,7 @@
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Tapar las imágenes de esa ventana (apagalo si un portal no deja iniciar sesión)</span><input type="checkbox" class="group-policy-switch" data-policy="captivePortalCoverImages" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear selector de fotos e ilustraciones de contactos</span><input type="checkbox" class="group-policy-switch" data-policy="contactPhotoPickerBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloqueo de gemini en mensajes</span><input type="checkbox" class="group-policy-switch" data-policy="geminiMessagesBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloqueo de Santander</span><input type="checkbox" class="group-policy-switch" data-policy="santanderBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear cambio de idioma del sistema</span><input type="checkbox" class="group-policy-switch" data-policy="localeChangeBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Rebotar el menú de Accesibilidad de Ajustes</span><input type="checkbox" class="group-policy-switch" data-policy="accBounceSettings" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Aviso insistente cada ~18 s si está apagada</span><input type="checkbox" class="group-policy-switch" data-policy="accNag" /></label>
@@ -1155,11 +1157,11 @@
   <!-- 26/10/2026 (B.95): app.js usa policies.js para saber qué interruptor toca cada
        comando pendiente (marca «⏳ pendiente»). Es el mismo archivo generado que ya usa
        la ficha nueva; si faltara, la barra funciona igual, solo sin esa marca. -->
-  <script src="policies.js?v=1"></script>
+  <script src="policies.js?v=2"></script>
   <!-- 29/10/2026 (B.101): aprobar un pedido de la Tienda Play usa la lógica pura de la pantalla
        tienda.html (TiendaLogic.approveRequest). Si faltara, el resto del panel sigue igual y solo
        esos pedidos avisan que no se pueden aprobar desde acá. -->
   <script src="tienda_logic.js?v=2"></script>
-  <script src="app.js?v=48"></script>
+  <script src="app.js?v=49"></script>
 </body>
 </html>

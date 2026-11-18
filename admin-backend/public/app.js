@@ -551,7 +551,7 @@ function updateSidebarUI(e, t) {
             return;
         }
         const defVal = (n === "googleAccountWebBlocked" || n === "contactPhotoPickerBlocked" || n === "geminiMessagesBlocked"
-                        || n === "whitelistSharedCdn" || n === "nokiaTouchEnabled");
+                        || n === "santanderBlocked" || n === "whitelistSharedCdn" || n === "nokiaTouchEnabled");
         e.checked = field(t, n, defVal) === true;
     });
     // 26/10/2026 (B.95): lo que todavía está en camino se muestra como pedido, con la
@@ -1840,6 +1840,7 @@ saveNameBtn.addEventListener("click", async () => {
             whitelistSharedCdn: ["ENABLE_WHITELIST_SHARED_CDN", "DISABLE_WHITELIST_SHARED_CDN"],
             contactPhotoPickerBlocked: ["BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER"],
             geminiMessagesBlocked: ["BLOCK_GEMINI_MESSAGES", "UNBLOCK_GEMINI_MESSAGES"],
+            santanderBlocked: ["BLOCK_SANTANDER", "UNBLOCK_SANTANDER"],
             localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
             accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],
@@ -3010,6 +3011,7 @@ if (savePresetBtn) {
             captivePortalCoverImages: dev.captivePortalCoverImages !== false,
             contactPhotoPickerBlocked: dev.contactPhotoPickerBlocked !== false,
             geminiMessagesBlocked: dev.geminiMessagesBlocked !== false,
+            santanderBlocked: dev.santanderBlocked !== false,
             accBounceSettings: !!dev.accBounceSettings,
             accNag: !!dev.accNag,
             accSuspendAll: !!dev.accSuspendAll,
@@ -3641,6 +3643,7 @@ if (groupSidebar) {
             captivePortalCoverImages: ["ENABLE_CAPTIVE_PORTAL_IMAGES", "DISABLE_CAPTIVE_PORTAL_IMAGES"],
             contactPhotoPickerBlocked: ["BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER"],
             geminiMessagesBlocked: ["BLOCK_GEMINI_MESSAGES", "UNBLOCK_GEMINI_MESSAGES"],
+            santanderBlocked: ["BLOCK_SANTANDER", "UNBLOCK_SANTANDER"],
             localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
             accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],

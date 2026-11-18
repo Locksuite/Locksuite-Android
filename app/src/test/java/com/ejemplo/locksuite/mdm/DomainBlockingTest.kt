@@ -55,6 +55,48 @@ class DomainBlockingTest {
     }
 
     @Test
+    fun appsAppleAndXCom_areGloballyBlockedForAllApps() {
+        for (domain in listOf("apps.apple.com", "x.com")) {
+            assertTrue(
+                "$domain debe estar en WhitelistCatalog.BLOCK_ALWAYS",
+                WhitelistCatalog.BLOCK_ALWAYS.contains(domain)
+            )
+            assertTrue(
+                "$domain debe estar bloqueado en WebViewPolicy",
+                WebViewPolicy.isGloballyBlacklisted(domain)
+            )
+            assertTrue(
+                "subdominios de $domain deben estar bloqueados en WebViewPolicy",
+                WebViewPolicy.isGloballyBlacklisted("www.$domain")
+            )
+        }
+
+        val rules = WhitelistManager.buildRules(
+            decisions = emptyMap(),
+            custom = emptyMap(),
+            includeSharedCdn = true
+        )
+        val trie = DomainRuleTrie.build(rules)
+        for (domain in listOf("apps.apple.com", "x.com")) {
+            assertEquals(
+                "$domain debe resolverse como BLOCK en buildRules",
+                RuleType.BLOCK,
+                rules[domain]
+            )
+            assertEquals(
+                "$domain debe resolverse como BLOCK en el Trie",
+                RuleType.BLOCK,
+                trie.resolve(domain)
+            )
+            assertEquals(
+                "subdominios de $domain deben resolverse como BLOCK en el Trie",
+                RuleType.BLOCK,
+                trie.resolve("sub.$domain")
+            )
+        }
+    }
+
+    @Test
     fun googleLocatorMapsDomains_areAllowedInWebViewPolicy_whileSearchIsBlocked() {
         // Servidores de mapas y teselas deben estar autorizados en WebViewPolicy
         val mapDomains = listOf(

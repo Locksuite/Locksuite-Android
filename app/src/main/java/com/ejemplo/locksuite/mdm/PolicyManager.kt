@@ -1434,6 +1434,23 @@ class PolicyManager(private val context: Context) {
     }
 
     /**
+     * Bloqueo de navegación externa en Santander Argentina (Capa 3).
+     * Encendido por defecto: bloquea únicamente cuando el usuario sale desde Términos y
+     * Condiciones o Políticas de Privacidad hacia Google Play, App Store o santander.com.ar,
+     * sin afectar la operatoria bancaria legítima.
+     */
+    fun isSantanderBlocked(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean(SantanderBlockPolicy.KEY_ENABLED, true)
+
+    fun setSantanderBlocked(enabled: Boolean): Boolean {
+        if (deferIfSuspended(SantanderBlockPolicy.KEY_ENABLED, enabled)) return true
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean(SantanderBlockPolicy.KEY_ENABLED, enabled)
+            .apply()
+        return true
+    }
+
+    /**
      * Modo del bloqueo de la cuenta de Google: "normal" (por defecto) o "strict".
      *
      * ⚠️ LEER ANTES DE CAMBIAR EL VALOR POR DEFECTO. La primera versión de este
@@ -1759,6 +1776,7 @@ class PolicyManager(private val context: Context) {
         dataObj.put("googleAccountWebBlocked", isGoogleAccountWebBlocked())
         dataObj.put("contactPhotoPickerBlocked", isContactPhotoPickerBlocked())
         dataObj.put("geminiMessagesBlocked", isGeminiMessagesBlocked())
+        dataObj.put("santanderBlocked", isSantanderBlocked())
         dataObj.put("captivePortalGuard", isCaptivePortalGuardEnabled())
         // ⚠️ 9/9/2026 — ESTA CLAVE VIAJABA DESDE EL PANEL Y NADIE LA LEÍA.
         //
@@ -1955,6 +1973,9 @@ class PolicyManager(private val context: Context) {
             )
             setGeminiMessagesBlocked(
                 dataObj.optBoolean("geminiMessagesBlocked", isGeminiMessagesBlocked())
+            )
+            setSantanderBlocked(
+                dataObj.optBoolean("santanderBlocked", isSantanderBlocked())
             )
             setCaptivePortalGuard(
                 dataObj.optBoolean("captivePortalGuard", isCaptivePortalGuardEnabled())

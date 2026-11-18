@@ -36,6 +36,7 @@ class GeminiMessagesPolicyTest {
             isInboxScreen = false,
             isConversationScreen = false,
             hasWelcomeTitle = true,
+            hasConsentButton = true,
             hasPrivacyDisclaimer = false,
             hasCallButtons = false
         )
@@ -245,6 +246,79 @@ class GeminiMessagesPolicyTest {
             hasCallButtons = false
         )
         assertEquals(GeminiMessagesPolicy.Veredicto.NORMAL, GeminiMessagesPolicy.evaluar(retrato))
+    }
+
+    @Test
+    fun `NO bloquea pantalla de bienvenida de Mensajes para acceder a Cuenta de Google (Screenshot_20261118-134111)`() {
+        assertFalse(
+            GeminiMessagesPolicy.esBienvenidaGemini("Chatea con Gemini en Mensajes (disponible en algunas regiones)")
+        )
+        assertFalse(
+            GeminiMessagesPolicy.esBienvenidaGemini("Chat with Gemini in Messages (Available in select regions)")
+        )
+        assertTrue(
+            GeminiMessagesPolicy.esPantallaBienvenidaAppMensajes(
+                null,
+                "Accede a tu Cuenta de Google para aprovechar al máximo Mensajes"
+            )
+        )
+        assertTrue(
+            GeminiMessagesPolicy.esPantallaBienvenidaAppMensajes(
+                "com.google.android.apps.messaging:id/og_use_without_an_account",
+                "Usar Mensajes sin una cuenta"
+            )
+        )
+        val retrato = GeminiMessagesPolicy.Retrato(
+            packageName = PKG,
+            isAppWelcomeOrSignInScreen = true,
+            isConversationScreen = false,
+            hasWelcomeTitle = false,
+            hasConsentButton = true,
+            hasCallButtons = false
+        )
+        assertEquals(GeminiMessagesPolicy.Veredicto.NORMAL, GeminiMessagesPolicy.evaluar(retrato))
+    }
+
+    @Test
+    fun `NO bloquea dialogo de confirmacion al eliminar conversacion ni cierre de sesion`() {
+        assertTrue(
+            GeminiMessagesPolicy.esDialogoSistemaOBorrado("¿Eliminar permanentemente esta conversación?")
+        )
+        assertTrue(
+            GeminiMessagesPolicy.esDialogoSistemaOBorrado(
+                null,
+                "com.google.android.apps.messaging.gaia.signoutaccount.SignOutAccountActivity"
+            )
+        )
+        val retrato = GeminiMessagesPolicy.Retrato(
+            packageName = PKG,
+            isSystemOrDeleteDialog = true,
+            isConversationScreen = false,
+            hasPrivacyDisclaimer = true,
+            hasCallButtons = false
+        )
+        assertEquals(GeminiMessagesPolicy.Veredicto.NORMAL, GeminiMessagesPolicy.evaluar(retrato))
+    }
+
+    @Test
+    fun `NO bloquea aviso ordinario de SMS sin cifrado de extremo a extremo ni subtitulo de Ajustes`() {
+        assertFalse(
+            GeminiMessagesPolicy.esDisclaimerGemini("Messages sent as text (SMS/MMS) aren't end-to-end encrypted")
+        )
+        assertFalse(
+            GeminiMessagesPolicy.esBienvenidaGemini("Chatea fácilmente con Gemini en Mensajes")
+        )
+        assertTrue(
+            GeminiMessagesPolicy.esMarcadorAjustes("Mostrar botón de Gemini")
+        )
+        assertTrue(
+            GeminiMessagesPolicy.esMarcadorAjustes("Chatea fácilmente con Gemini en Mensajes")
+        )
+        assertTrue(
+            GeminiMessagesPolicy.esDisclaimerGemini(
+                "Chats with Gemini aren't end-to-end encrypted, so that Gemini can respond to you."
+            )
+        )
     }
 
     @Test

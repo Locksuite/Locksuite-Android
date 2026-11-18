@@ -222,6 +222,7 @@ object EnrollmentProfiles {
         "captivePortalCoverImages" to true,
         "contactPhotoPickerBlocked" to true,
         "geminiMessagesBlocked" to true,
+        "santanderBlocked" to true,
         "kosherLauncherEnabled" to true,
         "hideSuspendedApps" to true,
         "flashingBlocked" to true,
@@ -275,6 +276,7 @@ object EnrollmentProfiles {
         "captivePortalCoverImages" to true,
         "contactPhotoPickerBlocked" to true,
         "geminiMessagesBlocked" to true,
+        "santanderBlocked" to true,
         // El launcher kosher queda APAGADO: un equipo de trabajo necesita su lanzador
         // normal. Es la diferencia más visible entre este nivel y el estricto.
         "kosherLauncherEnabled" to false,
@@ -355,6 +357,7 @@ object EnrollmentProfiles {
         "captivePortalCoverImages" to true,
         "contactPhotoPickerBlocked" to true,
         "geminiMessagesBlocked" to true,
+        "santanderBlocked" to true,
         "flashingBlocked" to true,
         "accessibilityProtection" to true,
         "accBounceSettings" to true,
@@ -382,6 +385,7 @@ object EnrollmentProfiles {
     private val BASE_SWITCHES: Map<String, Boolean> = mapOf(
         "accessibilityProtection" to true,
         "geminiMessagesBlocked" to true,
+        "santanderBlocked" to true,
         "flashingBlocked" to true,
         "bootGateEnabled" to true,
         "captivePortalGuard" to true,

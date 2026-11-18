@@ -55,11 +55,13 @@ object WebViewPolicy {
         "facebook.net",
         "instagram.com",
         "twitter.com",
+        "x.com",
         "t.co",
         "youtube.com",
         "youtu.be",
         "vimeo.com",
         "tiktok.com",
+        "apps.apple.com",
 
         // Juegos y Entretenimiento
         "game.diditaxi.com.cn",

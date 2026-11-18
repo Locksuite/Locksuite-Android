@@ -379,6 +379,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         /** Rebotar el selector de foto de contacto / Google Illustrations / Google Fotos. */
         val contactPhotoPicker: Boolean,
         val geminiMessages: Boolean,
+        val santanderBlock: Boolean,
         /** Vigilar la ventana de "Iniciar sesión en la red" (portal cautivo). */
         val captivePortalGuard: Boolean,
         /** Tapar las imágenes DE esa ventana. Se puede apagar sin apagar el guard. */
@@ -438,6 +439,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             ),
             contactPhotoPicker = p.getBoolean("block_contact_photo_picker", true),
             geminiMessages = p.getBoolean("block_gemini_messages", true),
+            santanderBlock = p.getBoolean(com.ejemplo.locksuite.mdm.SantanderBlockPolicy.KEY_ENABLED, true),
             captivePortalGuard = p.getBoolean(CaptivePortalPolicy.KEY_ENABLED, true),
             // Encendido por defecto, igual que el guard. Es la válvula de escape del
             // 8/9: si un portal real queda inusable con las imágenes tapadas, el
@@ -870,6 +872,21 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 }
             }
             handleGeminiMessagesBlocking(eventType)
+        }
+
+        // ── Bloqueo quirúrgico de navegación externa en Santander Argentina (switch: block_santander_external) ──
+        if (f.santanderBlock && (
+                packageName == com.ejemplo.locksuite.mdm.SantanderBlockPolicy.PKG_SANTANDER ||
+                (WEBVIEW_PROVIDER_PACKAGES.contains(packageName) &&
+                    getOriginApp() == com.ejemplo.locksuite.mdm.SantanderBlockPolicy.PKG_SANTANDER)
+            )
+        ) {
+            if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                ev.className?.toString()?.takeIf { it.isNotBlank() }?.let {
+                    lastSantanderWindowClass = it
+                }
+            }
+            handleSantanderBlocking(eventType)
         }
 
         // ── Selector de foto de contacto / Google Illustrations (switch: block_contact_photo_picker) ──
@@ -3164,6 +3181,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private class GeminiRetratoState {
         var isInbox = false
         var isSettings = false
+        var isAppWelcomeOrSignIn = false
+        var isSystemOrDeleteDialog = false
         var isConversation = false
         var title: String? = null
         var hint: String? = null
@@ -3181,6 +3200,22 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private fun buildGeminiRetrato(root: android.view.accessibility.AccessibilityNodeInfo): com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.Retrato {
         val estado = GeminiRetratoState()
+        val clsLower = lastGeminiMessagingWindowClass?.lowercase() ?: ""
+        if (clsLower.contains("settingsactivity") || clsLower.contains("geminisettingsactivity")) {
+            estado.isSettings = true
+        }
+        if (com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esPantallaBienvenidaAppMensajes(
+                null, null, lastGeminiMessagingWindowClass
+            )
+        ) {
+            estado.isAppWelcomeOrSignIn = true
+        }
+        if (com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esDialogoSistemaOBorrado(
+                null, lastGeminiMessagingWindowClass
+            )
+        ) {
+            estado.isSystemOrDeleteDialog = true
+        }
         root.getBoundsInScreen(estado.tempRect)
         val dm = resources.displayMetrics
         val density = dm.density.coerceAtLeast(1f)
@@ -3198,6 +3233,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             packageName = com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING,
             isInboxScreen = estado.isInbox,
             isSettingsScreen = estado.isSettings,
+            isAppWelcomeOrSignInScreen = estado.isAppWelcomeOrSignIn,
+            isSystemOrDeleteDialog = estado.isSystemOrDeleteDialog,
             isConversationScreen = estado.isConversation,
             conversationTitle = estado.title,
             composerHint = estado.hint,
@@ -3263,6 +3300,21 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val descLower = desc.lowercase()
         val text = node.text?.toString() ?: ""
         val textLower = text.lowercase()
+
+        if (!isBubbleNode && (
+                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esPantallaBienvenidaAppMensajes(viewId, text) ||
+                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esPantallaBienvenidaAppMensajes(null, desc)
+            )
+        ) {
+            estado.isAppWelcomeOrSignIn = true
+        }
+        if (!isBubbleNode && (
+                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esDialogoSistemaOBorrado(text) ||
+                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esDialogoSistemaOBorrado(desc)
+            )
+        ) {
+            estado.isSystemOrDeleteDialog = true
+        }
 
         // 1. Compositor editable de mensajes (solo área inferior, nunca buscador ni destinatario,
         //    y nunca texto tipeado por el usuario para evitar falsos positivos con amigos).
@@ -3366,6 +3418,184 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 child.recycle()
             }
         }
+    }
+
+    // ──────────────────────────────────────────────
+    // Bloqueo quirúrgico de navegación externa en Santander Argentina (Capa 3)
+    // ──────────────────────────────────────────────
+    private var santanderBlockInProgress = false
+    private var santanderFailedBounces = 0
+    private var santanderBackoffUntil = 0L
+    private var lastSantanderWindowClass: String? = null
+    private val SANTANDER_BACKOFF_MS = 2500L
+    private val MAX_SANTANDER_CADENAS = 160
+
+    private val santanderScanRunnable = Runnable {
+        com.ejemplo.locksuite.util.Safe.guard("a11y.santanderScan") {
+            if (flags().santanderBlock) {
+                scanForSantanderExternal()
+            }
+        }
+    }
+
+    private fun handleSantanderBlocking(eventType: Int) {
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_VIEW_SELECTED) {
+            mainHandler.removeCallbacks(santanderScanRunnable)
+            scanForSantanderExternal()
+        }
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            mainHandler.removeCallbacks(santanderScanRunnable)
+            mainHandler.postDelayed(santanderScanRunnable, 300)
+        }
+    }
+
+    private fun isSantanderOrChildWebView(pkg: String): Boolean =
+        pkg == com.ejemplo.locksuite.mdm.SantanderBlockPolicy.PKG_SANTANDER ||
+            (WEBVIEW_PROVIDER_PACKAGES.contains(pkg) &&
+                getOriginApp() == com.ejemplo.locksuite.mdm.SantanderBlockPolicy.PKG_SANTANDER)
+
+    private fun scanForSantanderExternal() {
+        val now = SystemClock.elapsedRealtime()
+        if (santanderBlockInProgress || now < santanderBackoffUntil) return
+        val root = rootInActiveWindow ?: return
+        try {
+            val rootPkg = root.packageName?.toString() ?: ""
+            if (isSantanderOrChildWebView(rootPkg)) {
+                val retrato = buildSantanderRetrato(root)
+                if (com.ejemplo.locksuite.mdm.SantanderBlockPolicy.evaluar(retrato) ==
+                    com.ejemplo.locksuite.mdm.SantanderBlockPolicy.Veredicto.BLOQUEAR
+                ) {
+                    triggerSantanderBlock(com.ejemplo.locksuite.mdm.SantanderBlockPolicy.motivo(retrato))
+                }
+            }
+        } finally {
+            root.recycle()
+        }
+    }
+
+    private fun triggerSantanderBlock(motivo: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (santanderBlockInProgress || now < santanderBackoffUntil) return
+        santanderBlockInProgress = true
+
+        val windowTag = lastSantanderWindowClass ?: "SantanderWebView"
+        Log.w(TAG, "🚫 Santander navegación externa bloqueada ($windowTag): $motivo")
+        com.ejemplo.locksuite.mdm.Layer3Audit.anotar(
+            applicationContext,
+            "santander",
+            com.ejemplo.locksuite.mdm.SantanderBlockPolicy.PKG_SANTANDER,
+            windowTag,
+            motivo,
+            true
+        )
+        mainHandler.post {
+            Toast.makeText(
+                applicationContext,
+                "🚫 Navegación externa bloqueada en Santander",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        performGlobalAction(GLOBAL_ACTION_BACK)
+
+        mainHandler.postDelayed({
+            try {
+                com.ejemplo.locksuite.util.Safe.guard("a11y.santanderVerify") {
+                    val current = rootInActiveWindow
+                    val stillBlocked = if (current == null) {
+                        false
+                    } else {
+                        try {
+                            val pkg = current.packageName?.toString() ?: ""
+                            isSantanderOrChildWebView(pkg) &&
+                                com.ejemplo.locksuite.mdm.SantanderBlockPolicy.evaluar(
+                                    buildSantanderRetrato(current)
+                                ) == com.ejemplo.locksuite.mdm.SantanderBlockPolicy.Veredicto.BLOQUEAR
+                        } finally {
+                            current.recycle()
+                        }
+                    }
+
+                    if (stillBlocked) {
+                        santanderFailedBounces++
+                        if (santanderFailedBounces >= 2) {
+                            Log.w(TAG, "🏠 Santander externo persiste tras dos intentos, forzando HOME")
+                            performGlobalAction(GLOBAL_ACTION_HOME)
+                            santanderFailedBounces = 0
+                            santanderBackoffUntil = SystemClock.elapsedRealtime() + SANTANDER_BACKOFF_MS
+                        }
+                    } else {
+                        santanderFailedBounces = 0
+                    }
+                }
+            } finally {
+                santanderBlockInProgress = false
+            }
+        }, 700)
+    }
+
+    private class SantanderRetratoState {
+        var tieneWebView = false
+        val ids = ArrayList<String>(48)
+        val textos = ArrayList<String>(160)
+        var remainingBudget = MAX_NODES_PER_SCAN
+    }
+
+    private fun buildSantanderRetrato(root: AccessibilityNodeInfo): com.ejemplo.locksuite.mdm.SantanderBlockPolicy.Retrato {
+        val estado = SantanderRetratoState()
+        scanSantanderNode(root, 0, estado)
+        return com.ejemplo.locksuite.mdm.SantanderBlockPolicy.Retrato(
+            packageName = com.ejemplo.locksuite.mdm.SantanderBlockPolicy.PKG_SANTANDER,
+            windowClass = lastSantanderWindowClass ?: root.className?.toString() ?: "",
+            tieneWebView = estado.tieneWebView,
+            idsDeVista = estado.ids,
+            textos = estado.textos
+        )
+    }
+
+    private fun scanSantanderNode(node: AccessibilityNodeInfo, depth: Int, estado: SantanderRetratoState) {
+        if (depth > MAX_TREE_DEPTH || estado.remainingBudget-- <= 0) return
+
+        val classLower = node.className?.toString()?.lowercase() ?: ""
+        val nodePkg = node.packageName?.toString()?.lowercase() ?: ""
+        val viewId = node.viewIdResourceName?.lowercase() ?: ""
+
+        if (viewId.isNotEmpty() && estado.ids.size < 48) {
+            estado.ids.add(viewId)
+        }
+
+        if (!estado.tieneWebView && (
+                classLower.contains("webview") ||
+                classLower.contains("webkit") ||
+                classLower.contains("chromium") ||
+                classLower.contains("renderframe") ||
+                viewId.contains("webview") ||
+                viewId.contains("web_view") ||
+                WEBVIEW_PROVIDER_PACKAGES.contains(nodePkg)
+            )
+        ) {
+            estado.tieneWebView = true
+        }
+
+        node.text?.let { if (it.isNotEmpty()) agregarTextoSantander(it, estado) }
+        node.contentDescription?.let { if (it.isNotEmpty()) agregarTextoSantander(it, estado) }
+
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
+            val child = node.getChild(i) ?: continue
+            try {
+                scanSantanderNode(child, depth + 1, estado)
+            } finally {
+                child.recycle()
+            }
+        }
+    }
+
+    private fun agregarTextoSantander(cs: CharSequence, estado: SantanderRetratoState) {
+        if (cs.length > com.ejemplo.locksuite.mdm.SantanderBlockPolicy.MAX_CARACTERES_UI) return
+        if (estado.textos.size >= MAX_SANTANDER_CADENAS) return
+        val normalized = com.ejemplo.locksuite.mdm.SantanderBlockPolicy.normalizar(cs)
+        if (normalized.isNotEmpty()) estado.textos.add(normalized)
     }
 
     // ──────────────────────────────────────────────

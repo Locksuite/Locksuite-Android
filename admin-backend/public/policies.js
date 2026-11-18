@@ -300,6 +300,13 @@ window.LOCKSUITE_POLICIES = {
       "off": "UNBLOCK_GEMINI_MESSAGES"
     },
     {
+      "field": "santanderBlocked",
+      "label": "Bloqueo de Santander",
+      "group": "Protecciones de Accesibilidad",
+      "on": "BLOCK_SANTANDER",
+      "off": "UNBLOCK_SANTANDER"
+    },
+    {
       "field": "localeChangeBlocked",
       "label": "Bloquear cambio de idioma del sistema",
       "group": "Protecciones de Accesibilidad",

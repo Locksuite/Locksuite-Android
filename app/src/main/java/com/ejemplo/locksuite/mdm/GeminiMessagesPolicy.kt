@@ -61,6 +61,8 @@ object GeminiMessagesPolicy {
         val packageName: String,
         val isInboxScreen: Boolean = false,
         val isSettingsScreen: Boolean = false,
+        val isAppWelcomeOrSignInScreen: Boolean = false,
+        val isSystemOrDeleteDialog: Boolean = false,
         val isConversationScreen: Boolean = false,
         val conversationTitle: String? = null,
         val composerHint: String? = null,
@@ -79,6 +81,13 @@ object GeminiMessagesPolicy {
             return Veredicto.NORMAL
         }
 
+        // Pantalla inicial de bienvenida / inicio de sesión en Mensajes ("Accede a tu Cuenta de Google
+        // para aprovechar al máximo Mensajes" / "Usar Mensajes sin una cuenta") ni diálogos de borrado o
+        // cierre de sesión: nunca se bloquean aunque mencionen Gemini en viñetas o avisos.
+        if (retrato.isAppWelcomeOrSignInScreen || retrato.isSystemOrDeleteDialog) {
+            return Veredicto.NORMAL
+        }
+
         // Página principal (bandeja de chats, incluso mostrando el logo/FAB de Gemini o
         // un hilo previo llamado Gemini): solo rebotar si hay un modal/sheet de consentimiento
         // superpuesto con el descargo legal de Gemini.
@@ -89,10 +98,12 @@ object GeminiMessagesPolicy {
             return if (isModalOnboardingOverInbox) Veredicto.GEMINI else Veredicto.NORMAL
         }
 
-        // Pantalla dedicada fuera de bandeja (bienvenida / consentimiento de Gemini, búsqueda, etc.)
+        // Pantalla dedicada fuera de bandeja (bienvenida / consentimiento real de Gemini)
         if (!retrato.isConversationScreen) {
-            val isDedicatedOnboarding = (retrato.hasWelcomeTitle || retrato.hasPrivacyDisclaimer) &&
-                !retrato.hasCallButtons
+            val isDedicatedOnboarding = (
+                (retrato.hasWelcomeTitle && (retrato.hasPrivacyDisclaimer || retrato.hasConsentButton)) ||
+                retrato.hasPrivacyDisclaimer
+            ) && !retrato.hasCallButtons
             return if (isDedicatedOnboarding) Veredicto.GEMINI else Veredicto.NORMAL
         }
 
@@ -164,8 +175,22 @@ object GeminiMessagesPolicy {
             lower.contains("שליחת הודעה אל gemini")
     }
 
-    fun esBienvenidaGemini(raw: String?): Boolean {
-        val lower = raw?.lowercase() ?: return false
+    fun esBienvenidaGemini(raw: CharSequence?): Boolean {
+        val lower = raw?.toString()?.lowercase() ?: return false
+        // Excluir explícitamente el texto promocional de la pantalla general de bienvenida de Mensajes
+        // (`gemini_upsell_description`) y el resumen de Ajustes (`gemini_preference_summary`).
+        if (lower.contains("disponible en algunas regiones") ||
+            lower.contains("disponible en algunos países") ||
+            lower.contains("disponible en algunos paises") ||
+            lower.contains("available in select regions") ||
+            lower.contains("זמין באזורים נבחרים") ||
+            lower.contains("chatea fácilmente con gemini") ||
+            lower.contains("chatea facilmente con gemini") ||
+            lower.contains("easily chat with gemini") ||
+            lower.contains("לדבר עם gemini ב-messages בקלות")
+        ) {
+            return false
+        }
         return lower.contains("chatear con gemini") ||
             lower.contains("chatea con gemini") ||
             lower.contains("chat with gemini") ||
@@ -174,6 +199,16 @@ object GeminiMessagesPolicy {
             lower.contains("conocé a gemini") ||
             lower.contains("te damos la bienvenida a gemini") ||
             lower.contains("welcome to gemini") ||
+            lower.contains("revisa la información clave para acceder a gemini") ||
+            lower.contains("consulta la información clave para acceder a gemini") ||
+            lower.contains("review key info to access gemini") ||
+            lower.contains("לפני התחלת השימוש ב-gemini") ||
+            lower.contains("para chatear con gemini, vuelve a iniciar sesión") ||
+            lower.contains("vuelve a acceder para chatear con gemini") ||
+            lower.contains("to chat with gemini, sign in again") ||
+            lower.contains("escribe, planifica, aprende y más con la ia de google") ||
+            lower.contains("escribe, planifica, aprende y mucho más con la ia de google") ||
+            lower.contains("write, plan, learn, and more with google ai") ||
             lower.contains("צ'אט עם gemini") ||
             lower.contains("שיחה עם gemini") ||
             lower.contains("לשוחח עם gemini") ||
@@ -181,19 +216,33 @@ object GeminiMessagesPolicy {
             lower.contains("הכירו את gemini")
     }
 
-    fun esDisclaimerGemini(raw: String?): Boolean {
-        val lower = raw?.lowercase() ?: return false
-        return lower.contains("no están encriptados de extremo a extremo") ||
+    fun esDisclaimerGemini(raw: CharSequence?): Boolean {
+        val lower = raw?.toString()?.lowercase() ?: return false
+        val mencionaGemini = lower.contains("gemini") || lower.contains("ג'מיני") || lower.contains("ג׳מיני")
+        val fraseCifrado = lower.contains("no están encriptados de extremo a extremo") ||
             lower.contains("no está encriptado de extremo a extremo") ||
+            lower.contains("no están cifradas de extremo a extremo") ||
             lower.contains("aren't end-to-end encrypted") ||
             lower.contains("not end-to-end encrypted") ||
             lower.contains("אינם מוצפנים מקצה לקצה") ||
             lower.contains("אינן מוצפנות מקצה לקצה") ||
+            lower.contains("לא מוצפנים מקצה לקצה")
+        // Los avisos ordinarios de SMS/MMS dicen "aren't end-to-end encrypted" sin nombrar a Gemini.
+        if (fraseCifrado && mencionaGemini) return true
+        return lower.contains("gemini comete errores") ||
             lower.contains("gemini puede cometer errores") ||
             lower.contains("gemini can make mistakes") ||
+            lower.contains("gemini may make things up") ||
+            lower.contains("gemini podría inventar información") ||
+            lower.contains("gemini puede inventarse contenido") ||
             lower.contains("gemini עלול לטעות") ||
+            lower.contains("gemini יכול לטעות") ||
             lower.contains("actividad en las aplicaciones de gemini") ||
-            lower.contains("gemini apps activity")
+            lower.contains("actividad en las apps con gemini") ||
+            lower.contains("gemini apps activity") ||
+            lower.contains("הפעילות בממשקי gemini") ||
+            lower.contains("la actividad en gemini se guarda") ||
+            lower.contains("gemini activity is saved")
     }
 
     fun esBotonConsentimientoGemini(raw: String?): Boolean {
@@ -218,7 +267,14 @@ object GeminiMessagesPolicy {
     fun esMarcadorAjustes(raw: String?): Boolean {
         val lower = raw?.lowercase() ?: return false
         return lower.contains("mostrar el botón de gemini") ||
+            lower.contains("mostrar botón de gemini") ||
+            lower.contains("mostrar boton de gemini") ||
             lower.contains("show gemini button") ||
+            lower.contains("chatea fácilmente con gemini") ||
+            lower.contains("chatea facilmente con gemini") ||
+            lower.contains("easily chat with gemini") ||
+            lower.contains("רוצה להוסיף לחצן להתחלת שיחה עם gemini") ||
+            lower.contains("לדבר עם gemini ב-messages בקלות") ||
             lower.contains("configuración de mensajes") ||
             lower.contains("ajustes de mensajes") ||
             lower.contains("messages settings") ||
@@ -227,6 +283,65 @@ object GeminiMessagesPolicy {
             lower.contains("הצגת לחצן gemini") ||
             lower.contains("הגדרות הודעות") ||
             lower.contains("הגדרות gemini")
+    }
+
+    fun esPantallaBienvenidaAppMensajes(
+        viewId: String?,
+        texto: CharSequence?,
+        windowClass: CharSequence? = null
+    ): Boolean {
+        val cls = windowClass?.toString()?.lowercase() ?: ""
+        if (cls.contains("bugleexpresssigninactivity") ||
+            cls.contains("signedinwelcomeactivity") ||
+            cls.contains("expresssigninactivity")
+        ) {
+            return true
+        }
+        val vid = viewId?.lowercase() ?: ""
+        if (vid.isNotEmpty() && !vid.contains("penpal") && (
+                vid.contains("og_use_without_an_account") ||
+                vid.contains("express_sign_in") ||
+                vid.contains("welcome_flow_v1") ||
+                vid.contains("welcome_account")
+            )
+        ) {
+            return true
+        }
+        val lower = texto?.toString()?.lowercase() ?: return false
+        return lower.contains("usar mensajes sin una cuenta") ||
+            lower.contains("usar sin una cuenta") ||
+            lower.contains("use messages without an account") ||
+            lower.contains("use without an account") ||
+            lower.contains("שימוש ללא חשבון") ||
+            lower.contains("לשימוש באפליקציה messages ללא חשבון") ||
+            lower.contains("שימוש ב-messages בלי חשבון") ||
+            lower.contains("aprovechar al máximo mensajes") ||
+            lower.contains("aprovechar al maximo mensajes") ||
+            lower.contains("get the very best of messages") ||
+            lower.contains("sincroniza los chats en tus dispositivos") ||
+            lower.contains("sync chats across") ||
+            lower.contains("crea copias de seguridad de los mensajes")
+    }
+
+    fun esDialogoSistemaOBorrado(
+        texto: CharSequence?,
+        windowClass: CharSequence? = null
+    ): Boolean {
+        val cls = windowClass?.toString()?.lowercase() ?: ""
+        if (cls.contains("signoutaccountactivity")) {
+            return true
+        }
+        val lower = texto?.toString()?.lowercase() ?: return false
+        return lower.contains("¿eliminar permanentemente esta conversación?") ||
+            lower.contains("¿eliminar permanentemente estas conversaciones?") ||
+            lower.contains("¿quieres borrar definitivamente esta conversación?") ||
+            lower.contains("¿quieres borrar definitivamente estas conversaciones?") ||
+            lower.contains("permanently delete this conversation?") ||
+            lower.contains("permanently delete these conversations?") ||
+            lower.contains("השיחה תימחק לתמיד") ||
+            lower.contains("si cierras sesión, estas funciones no estarán disponibles") ||
+            lower.contains("si sales de tu cuenta, las siguientes funciones no estarán disponibles") ||
+            lower.contains("not available when you sign out")
     }
 
     fun esBotonLlamadaToolbar(viewIdLower: String, descLower: String): Boolean {

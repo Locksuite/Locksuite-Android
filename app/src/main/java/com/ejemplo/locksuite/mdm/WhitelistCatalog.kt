@@ -199,7 +199,10 @@ object WhitelistCatalog {
         // Discovery / feed de contenido de Google (el "Descubre" del launcher).
         "discover.google.com",
         // Tracking y deep linking de viajes (Singular / rides) bloqueado por defecto en toda la flota
-        "rides.sng.link"
+        "rides.sng.link",
+        // Tiendas/redes externas bloqueadas por defecto para toda la flota en cualquier app
+        "apps.apple.com",
+        "x.com"
     )
 
     /**

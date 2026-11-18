@@ -1147,6 +1147,11 @@ fun PoliciesTabContent(context: Context) {
                     isChecked = remember(refreshKey) { policyManager.isGeminiMessagesBlocked() },
                     onCheckedChange = { policyManager.setGeminiMessagesBlocked(it).also { refreshKey++ } }
                 )
+                PolicySwitchRow(
+                    label = "Bloqueo de Santander",
+                    isChecked = remember(refreshKey) { policyManager.isSantanderBlocked() },
+                    onCheckedChange = { policyManager.setSantanderBlocked(it).also { refreshKey++ } }
+                )
                 // 4/9 (tarde) — el modo. En NORMAL se puede seguir administrando la
                 // cuenta (datos, seguridad, dispositivos) y se bloquea solo el
                 // historial/actividad; en ESTRICTO no se abre ninguna pantalla de la

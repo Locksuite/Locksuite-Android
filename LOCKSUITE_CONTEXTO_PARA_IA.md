@@ -2928,27 +2928,50 @@ Solución aplicada:
 
 ---
 
+**B.122 — BLOQUEO QUIRÚRGICO DE NAVEGACIÓN EXTERNA EN SANTANDER ARGENTINA (`SantanderBlockPolicy`), BLOQUEO GLOBAL DE `apps.apple.com` Y `x.com`, Y MEJORA DEL BLOQUEO DE GEMINI EN GOOGLE MENSAJES (18/11/2026).**
+
+Pedido del dueño (18/11/2026):
+1. Analizar Santander Argentina (`ar.com.santander.rio.mbanking`) y bloquear únicamente la navegación externa desde sus WebViews de *Términos y Condiciones* y *Política de Privacidad* hacia Google Play Web, Apple App Store y el portal público `www.santander.com.ar`, dejando leer T&C y Privacidad hasta que naveguen afuera y sin romper ninguna función del banco, con switch `"Bloqueo de Santander"` encendido por defecto.
+2. Bloquear `apps.apple.com` y `x.com` de forma global para cualquier app.
+3. Mejorar el bloqueo de Gemini en Google Mensajes tras el falso positivo reportado en la pantalla inicial de bienvenida/inicio de sesión de Cuenta de Google (`Screenshot_20261118-134111.png`).
+
+Análisis forense sobre APKs reales extraídos de la tablet conectada (`VISION260401131`, `NM_VISION`):
+1. **Santander Argentina (`ar.com.santander.rio.mbanking`, v4.21.0, code 336):**
+   - Los WebViews legales/públicos corren en `PrivacyTermsActivity` (`id/obu_webview`), `WebViewActivity` (`id/web_view`) y `GenericWebViewActivity` (`id/webview`), cuyo botón atrás invoca `finish()` o retrocede en el WebView sin romper el resto del banco (`SegurosWebViewActivity`, `CedipWebView`, etc.).
+   - No se puede bloquear `play.google.com` ni `santander.com.ar` entero por DNS porque rompería actualizaciones de apps y la operatoria bancaria.
+2. **Google Mensajes (`com.google.android.apps.messaging`, code 262371063):**
+   - La pantalla de bienvenida/inicio de sesión (`BugleExpressSignInActivity` / `SignedInWelcomeActivity` / `ExpressSignInActivity`) muestra `string/gemini_upsell_description` (*"Chatea con Gemini en Mensajes (disponible en algunas regiones)"*) como primera viñeta junto al botón *"Usar Mensajes sin una cuenta"* (`og_use_without_an_account`), lo que disparaba `esBienvenidaGemini()` fuera de una conversación.
+   - Se detectaron además en los recursos del APK otras tres fuentes potenciales de falso positivo: los avisos de SMS/MMS (*"aren't end-to-end encrypted"*) en `esDisclaimerGemini`, el diálogo de confirmación de borrado permanente de conversaciones (`¿Eliminar permanentemente esta conversación?`) / cierre de sesión (`SignOutAccountActivity`), y el resumen de ajustes (`Chatea fácilmente con Gemini en Mensajes` / `Mostrar botón de Gemini`).
+
+Cambios aplicados:
+1. **Bloqueo global en Capa 2 y WebView (`apps.apple.com`, `x.com`):**
+   - Agregados a `WhitelistCatalog.BLOCK_ALWAYS` y `WebViewPolicy.GLOBAL_BLACKLIST`.
+   - Regenerado `admin-backend/public/catalog.js` (`gen_catalog_js.py`) y agregadas aserciones en `DomainBlockingTest.kt`.
+2. **Bloqueo quirúrgico de Santander (`SantanderBlockPolicy.kt` y stack completo):**
+   - `SantanderBlockPolicy` evalúa únicamente ventanas de `ar.com.santander.rio.mbanking` con `tieneWebView == true` y bloquea exclusivamente cuando aparecen al menos 2 marcadores de destino externo: Google Play Web, App Store Web o el portal público `www.santander.com.ar` (`Online Banking`, `Hacete Cliente Ahora`, `Cajeros y Sucursales`, `Beneficios y Promociones`, `Centro de ayuda`, `Tus claves`, `Números útiles`, `¡Hola! ¿En qué podemos ayudarte?`).
+   - Switch **"Bloqueo de Santander"** (`block_santander_external`, clave de panel/perfil `santanderBlocked`, default `true`) conectado en `PolicyManager.kt`, `EnrollmentProfiles.kt`, `LockSuiteAccessibilityService.kt`, `CommandProcessor.kt`, `FirebaseDeviceSync.kt`, `DashboardActivity.kt`, `admin-backend/functions/index.js` (`BLOCK_SANTANDER` / `UNBLOCK_SANTANDER`), `admin-backend/public/app.js`, `index.html` y `policies.js`.
+   - Pruebas unitarias en `SantanderBlockPolicyTest.kt`.
+3. **Mejora en Google Mensajes (`GeminiMessagesPolicy.kt`, `LockSuiteAccessibilityService.kt`, `GeminiMessagesPolicyTest.kt`):**
+   - Excluidos expresamente `isAppWelcomeOrSignInScreen` (`BugleExpressSignInActivity`, `SignedInWelcomeActivity`, `ExpressSignInActivity`, `og_use_without_an_account`, textos de bienvenida de Mensajes), `isSystemOrDeleteDialog` (confirmación de borrado de conversación y `SignOutAccountActivity`), `gemini_upsell_description` (*"disponible en algunas regiones"*), `gemini_preference_summary` (*"Chatea fácilmente con Gemini"*) y avisos ordinarios de SMS/MMS sin cifrado E2EE que no nombran a Gemini.
+   - Reconocimiento directo de `SettingsActivity`/`GeminiSettingsActivity` en `lastGeminiMessagingWindowClass`.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**17/11 — Antigravity: Diagnóstico forense en celular real de Transit (falla IPC GMS Developer Error), apertura dinámica de teselas e infraestructura de Google Maps (`isGoogleMapOrInfraSubdomain`), registro de Transit en `CORE_DOMAINS` y despliegue a producción (B.121).**
+**18/11 — Antigravity: Bloqueo quirúrgico de navegación externa en Santander Argentina (`SantanderBlockPolicy`), bloqueo global de `apps.apple.com` y `x.com`, y corrección de falsos positivos de Gemini en Google Mensajes (B.122).**
 
 - **Pedidos del dueño:**
-  1. Revisar qué pasa con el mapa en Transit tras la versión anterior conectando el celular real.
-  2. Permitir todos los dominios que se necesiten.
-  3. Desplegar todo con el script automatizado.
+  1. Analizar Santander Argentina y agregar switch **"Bloqueo de Santander"** (encendido por defecto) para bloquear únicamente la salida hacia `santander.com.ar` público, Google Play y App Store sin bloquear *Términos y Condiciones* ni *Políticas de Privacidad* ni funciones bancarias.
+  2. Agregar `apps.apple.com` y `x.com` bloqueados globalmente para todas las apps.
+  3. Mejorar el bloqueo de Gemini en Google Mensajes corrigiendo el bloqueo de la pantalla inicial de bienvenida/cuenta (`Screenshot_20261118-134111.png`).
+  4. Desplegar directamente con `deploy_all.ps1`.
 - **Acciones y cambios aplicados:**
-  - **Diagnóstico en equipo real:**
-    - Se comprobó que el equipo ya corría LockSuite 0.6.85 (código 148).
-    - Se extrajo el logcat en vivo de la ejecución de Transit y se detectó el fallo interno en el broker de Google Play Services: `AppOps: Bad call made by uid 10096. Package "com.google.android.gms" does not belong to uid 10154` y `GoogleApiManager: statusCode=DEVELOPER_ERROR`, impidiendo al SDK de mapas solicitar teselas.
-  - **Apertura dinámica en WebViewPolicy:**
-    - Se implementó `isGoogleMapOrInfraSubdomain` cubriendo dinámicamente cualquier índice de `mt*`, `mts*`, `khm*`, `khms*`, `lh*`, `clients*`, `beacons*`, `geo*` y `maps.google.com`.
-    - Se agregó `com.thetransitapp.droid` a `CORE_DOMAINS` en `WebViewPolicy.kt` para inmunizarlo ante bloqueos de WebView ("Sin web").
-    - Se sumaron `mapbox.com` y `googleusercontent.com` a `SHARED_INFRASTRUCTURE_DOMAINS`.
-    - Se incorporó `com_thetransitapp_droid: "allow"` en `globalSettings/whitelist/decisions` de Firebase RTDB.
-  - **Pruebas y despliegue:**
-    - `DomainBlockingTest.kt`: validados todos los índices de mapas y la integridad de bloqueos de buscadores web.
-    - Ejecución de la suite completa de pruebas unitarias y sincronizadores: 100% en verde.
-    - Despliegue automatizado con `deploy_all.ps1`.
+  - Extracción e inspección de `ar.com.santander.rio.mbanking` y `com.google.android.apps.messaging` desde la tablet conectada (`VISION260401131`).
+  - `WhitelistCatalog.kt`, `WebViewPolicy.kt`, `catalog.js` y `DomainBlockingTest.kt`: bloqueo global de `apps.apple.com` y `x.com`.
+  - `SantanderBlockPolicy.kt` + `SantanderBlockPolicyTest.kt` + cableado full-stack del switch `"Bloqueo de Santander"` (`BLOCK_SANTANDER` / `UNBLOCK_SANTANDER`, default `true` en app, perfiles y panel web).
+  - `GeminiMessagesPolicy.kt`, `LockSuiteAccessibilityService.kt` y `GeminiMessagesPolicyTest.kt`: exclusión explícita de la pantalla de bienvenida/inicio de sesión de Mensajes, diálogos de borrado de conversación, cierre de sesión, `gemini_upsell_description` y avisos de cifrado SMS/MMS.
+  - Verificación completa: `testDebugUnitTest`, scripts de sincronía en `tools/` (`gen_catalog_js.py --check`, `gen_policies_js.py --check`, `check_whitelist_sync.py`, `check_command_sync.py`, `check_profile_sync.py`, `check_panel_commands.py`, `check_store_sync.py`, `check_diag_sync.py`), tests JS de `tools/` y despliegue con `.\deploy_all.ps1`.
 
