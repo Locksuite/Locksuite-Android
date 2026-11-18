@@ -2955,23 +2955,44 @@ Cambios aplicados:
    - Excluidos expresamente `isAppWelcomeOrSignInScreen` (`BugleExpressSignInActivity`, `SignedInWelcomeActivity`, `ExpressSignInActivity`, `og_use_without_an_account`, textos de bienvenida de Mensajes), `isSystemOrDeleteDialog` (confirmación de borrado de conversación y `SignOutAccountActivity`), `gemini_upsell_description` (*"disponible en algunas regiones"*), `gemini_preference_summary` (*"Chatea fácilmente con Gemini"*) y avisos ordinarios de SMS/MMS sin cifrado E2EE que no nombran a Gemini.
    - Reconocimiento directo de `SettingsActivity`/`GeminiSettingsActivity` en `lastGeminiMessagingWindowClass`.
 
+### B.123 — Panel Vista rápida (pestañas + buscador), unificación de perfiles, baja de `flashingBlocked` y paridad total de 83 switches Web ↔ App (18/11)
+
+Cambios aplicados (pendiente de prueba visual y operativa en equipo físico):
+1. **Arreglo de pestañas en Vista rápida (`admin-backend/public/styles.css`, `app.js`):**
+   - Durante el rediseño M3 habían quedado omitidas las reglas `.tab-panel { display: none; }` y `.tab-panel.active { display: flex; flex-direction: column; gap: 16px; }`, además del selector `.sidebar.expanded #tab-policies` en lugar de `#panel-policies.active`.
+   - Restauradas las reglas en `styles.css`, añadido `grid-column: 1 / -1` para `#panel-policies.active .search-box`, y actualizado el handler de pestañas en `app.js` con guardado seguro y reseteo de `scrollTop`.
+2. **Unificación de perfiles maestros (`EnrollmentProfiles.kt`, `app.js` `MASTER_PROFILES`, `celular.js` `NIVELES`, `EnrollmentProfilesStoreModeTest.kt`):**
+   - Todos los perfiles operativos (`solo_llamadas`, `kosher_estricto`, `trabajo`, `lite`, `gracia`) comparten exactamente `UNIFIED_RESTRICTIONS` + `UNIFIED_SWITCHES`: base de Trabajo sin launcher kosher (`kosherLauncherEnabled = false`), sin bloquear Zona WiFi (`DISALLOW_CONFIG_TETHERING = false`), fondo (`DISALLOW_SET_WALLPAPER = false`), idioma (`DISALLOW_CONFIG_LOCALE = false`), desinstalación de apps (`DISALLOW_UNINSTALL_APPS = false`, LockSuite sigue protegido como Device Owner), cuentas, controles de apps ni medios físicos, y con `accSuspendAll = true` + `bootGateWaitAccessibility = true`. Lo único que los distingue es `storeMode`.
+   - `Nivel 3 — Base mínima` mantiene su rol diagnóstico sin filtros de contenido (`storeMode = null`), heredando `DISALLOW_UNINSTALL_APPS = false`.
+   - `MasterProfile.postAlta` y `buildData()` ahora solo consideran `POST_ALTA` pendientes las restricciones en `true`.
+3. **Eliminación del switch de bloqueo de flasheo (`flashingBlocked` / `BLOCK_FLASHING` / `UNBLOCK_FLASHING`):**
+   - Removido de `PolicyManager.kt`, `FirebaseDeviceSync.kt`, `CommandProcessor.kt`, `EnrollmentProfiles.kt`, `DashboardActivity.kt`, `admin-backend/functions/index.js` (`ALLOWED_COMMANDS`), `index.html`, `app.js`, `policies.js` y presets (conservando `KnoxHardening.setFactoryResetBlocked`).
+4. **Paridad bidireccional de 83/83 switches Web ↔ App + búsqueda de políticas:**
+   - Web (`index.html`, `app.js`, `functions/index.js`, `FirebaseDeviceSync.kt`, `CommandProcessor.kt`, `PolicyManager.kt`, `celular.js`, `policies.js`): agregados `frpEnabled`, `settingsEvasionEnabled`, `iabFinderEnabled`/`iabFinderEnforce`, `browsersSuspended`, `systemWebViewSuspended`, `hideSuspendedApps` en políticas/grupos, `#sidebar-diag-upload-toggle`, búsqueda en Vista rápida (`#quick-policy-search`), y en `celular.js` búsqueda sin tildes (`normPol`), `valorActualPolitica` (banderas inversas/default-true) y confirmación para `iabFinderEnforce`.
+   - App Android (`DashboardActivity.kt`): buscador de políticas insensible a tildes/mayúsculas + chip `"Solo encendidas"` + contador dentro de `LazyColumn` (cumpliendo B.96), los 83 interruptores organizados en 11 grupos + tarjeta de suspensión (incluyendo las 20 `PolicySpec.EXTRA_RESTRICTIONS`, `frpEnabled`, `kioskLockTaskEnabled`, `nokiaTouchEnabled` siempre visible, portal cautivo/lista blanca/IAB/IA/WhatsApp/MP/`diagUploadEnabled`, diálogos de confirmación propios y `ServicesTabContent` Auto Evasión usando `PolicyManager`).
+   - Cache-busters actualizados en `index.html`, `celular.html`, `dominios.html` y `tienda.html`. Playwright (`tools/panel_render/*`) no pudo ejecutarse por ausencia local del módulo `playwright`.
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**18/11 — Antigravity: Bloqueo quirúrgico de navegación externa en Santander Argentina (`SantanderBlockPolicy`), bloqueo global de `apps.apple.com` y `x.com`, y corrección de falsos positivos de Gemini en Google Mensajes (B.122).**
+**18/11 — Antigravity: Arreglo de pestañas en Vista rápida, unificación de perfiles operativos, baja de `flashingBlocked`, buscador de políticas en app/web y paridad total de 83 switches Web ↔ App (B.123).**
 
 - **Pedidos del dueño:**
-  1. Analizar Santander Argentina y agregar switch **"Bloqueo de Santander"** (encendido por defecto) para bloquear únicamente la salida hacia `santander.com.ar` público, Google Play y App Store sin bloquear *Términos y Condiciones* ni *Políticas de Privacidad* ni funciones bancarias.
-  2. Agregar `apps.apple.com` y `x.com` bloqueados globalmente para todas las apps.
-  3. Mejorar el bloqueo de Gemini en Google Mensajes corrigiendo el bloqueo de la pantalla inicial de bienvenida/cuenta (`Screenshot_20261118-134111.png`).
-  4. Desplegar directamente con `deploy_all.ps1`.
+  1. Investigar y corregir el cambio de pestañas (`Políticas` / `Aplicaciones` / `Acciones`) en Vista rápida de la web.
+  2. Cambiar los perfiles personalizados: quitar el launcher kosher del modo kosher; igualar las restricciones en todos los perfiles operativos dejando como única diferencia cómo queda abierta la Tienda Play, tomando Trabajo como base pero sin bloquear zona WiFi, fondo de pantalla, idioma ni desinstalación de apps, y activando suspender todas las apps sin Accesibilidad y esperar la Accesibilidad en arranque protegido.
+  3. Quitar el switch de bloqueo de flasheo (`flashingBlocked`).
+  4. Lograr paridad completa de switches entre Web y App Android, y agregar búsqueda de políticas en la app igual que en la web.
+  5. Actualizar `LOCKSUITE_CONTEXTO_PARA_IA.md`, commitear y desplegar todo con `deploy_all.ps1`.
 - **Acciones y cambios aplicados:**
-  - Extracción e inspección de `ar.com.santander.rio.mbanking` y `com.google.android.apps.messaging` desde la tablet conectada (`VISION260401131`).
-  - `WhitelistCatalog.kt`, `WebViewPolicy.kt`, `catalog.js` y `DomainBlockingTest.kt`: bloqueo global de `apps.apple.com` y `x.com`.
-  - `SantanderBlockPolicy.kt` + `SantanderBlockPolicyTest.kt` + cableado full-stack del switch `"Bloqueo de Santander"` (`BLOCK_SANTANDER` / `UNBLOCK_SANTANDER`, default `true` en app, perfiles y panel web).
-  - `GeminiMessagesPolicy.kt`, `LockSuiteAccessibilityService.kt` y `GeminiMessagesPolicyTest.kt`: exclusión explícita de la pantalla de bienvenida/inicio de sesión de Mensajes, diálogos de borrado de conversación, cierre de sesión, `gemini_upsell_description` y avisos de cifrado SMS/MMS.
-  - Verificación completa: `testDebugUnitTest`, scripts de sincronía en `tools/` (`gen_catalog_js.py --check`, `gen_policies_js.py --check`, `check_whitelist_sync.py`, `check_command_sync.py`, `check_profile_sync.py`, `check_panel_commands.py`, `check_store_sync.py`, `check_diag_sync.py`), tests JS de `tools/` y despliegue con `.\deploy_all.ps1`.
+  - `admin-backend/public/styles.css`, `index.html`, `app.js`, `celular.js`, `policies.js`, `celular.html`, `dominios.html`, `tienda.html`, `admin-backend/functions/index.js`: arreglo de `.tab-panel` / `#panel-policies.active`, buscador `#quick-policy-search`, baja de `flashingBlocked`, alta de switches faltantes, `normPol`/`valorActualPolitica`, cache-busters y regeneración de `policies.js` (79 en 10 grupos + 3 especiales + `diagUploadEnabled`).
+  - `EnrollmentProfiles.kt` + `EnrollmentProfilesStoreModeTest.kt`: perfiles operativos unificados (`UNIFIED_RESTRICTIONS` / `UNIFIED_SWITCHES`) diferenciados únicamente por `storeMode`, `Nivel 3 Base mínima` actualizado en `DISALLOW_UNINSTALL_APPS` y baja de `flashingBlocked`.
+  - `PolicyManager.kt`, `FirebaseDeviceSync.kt`, `CommandProcessor.kt`, `DashboardActivity.kt`: baja de `flashingBlocked`, soporte remoto para `settingsEvasionEnabled`/`frpEnabled`/`browsersSuspended`/`systemWebViewSuspended`/`hideSuspendedApps`/`iabFinder*`, buscador y paridad de 83/83 switches en `PoliciesTabContent` (dentro de `LazyColumn`, acorde a B.96) + Auto Evasión sincronizada en `ServicesTabContent`.
+- **Verificación ejecutada:**
+  - Todos los chequeos de sincronía y sintaxis en `tools/` (`gen_policies_js.py --check`, `check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `check_store_sync.py`, `check_diag_sync.py`, `gen_catalog_js.py --check`, `node --check`, `test_functions_index.js`, `test_pin_security.js`, `test_tienda_logic.js`, `test_diag_logic.js`, `test_play_lookup.js`) aprobados.
+  - `.\gradlew.bat testDebugUnitTest --no-daemon`: 27 suites, 397 pruebas pasadas, 0 fallos.
+  - Verificación de paridad Web ↔ App: 83 switches en Web y 83 políticas + tarjetas equivalentes en App, sin faltantes de ningún lado.
+  - Despliegue ejecutado mediante `.\deploy_all.ps1`. Pendiente únicamente prueba en equipo real.
 

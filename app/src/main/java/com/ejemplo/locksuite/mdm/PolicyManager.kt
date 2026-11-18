@@ -187,24 +187,6 @@ class PolicyManager(private val context: Context) {
         return ok
     }
 
-    fun setFlashingBlocked(block: Boolean): Boolean {
-        if (deferIfSuspended("flashing_blocked", block)) return true
-        return try {
-            PrefsHelper.getMdmPrefs(context).edit().putBoolean("flashing_blocked", block).apply()
-            // Bloqueo de flasheo por Odin/Download mode: solo existe via Knox SDK en
-            // Samsung — no hay equivalente en DevicePolicyManager estandar de Android.
-            KnoxHardening.setFlashingBlocked(context, block)
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
-    }
-
-    fun isFlashingBlocked(): Boolean {
-        return PrefsHelper.getMdmPrefs(context).getBoolean("flashing_blocked", false)
-    }
-
     fun setInstallAppsBlocked(block: Boolean): Boolean {
         val prefs = PrefsHelper.getMdmPrefs(context)
         val previousState = prefs.getBoolean("install_apps_blocked_admin", false)
@@ -1605,6 +1587,16 @@ class PolicyManager(private val context: Context) {
     fun isEmbeddedBrowserSimulation(): Boolean =
         PrefsHelper.getMdmPrefs(context).getBoolean(EmbeddedBrowserDetector.KEY_SIMULATION, true)
 
+    fun setSettingsEvasionEnabled(enabled: Boolean): Boolean {
+        if (deferIfSuspended("settings_evasion_enabled", enabled)) return true
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("settings_evasion_enabled", enabled).apply()
+        return true
+    }
+
+    fun isSettingsEvasionEnabled(): Boolean {
+        return PrefsHelper.getMdmPrefs(context).getBoolean("settings_evasion_enabled", false)
+    }
+
     /** Cuántas veces se abrió la ventana del portal. Visibilidad, no bloqueo. */
     fun getCaptivePortalOpens(): Int =
         PrefsHelper.getMdmPrefs(context).getInt("captive_portal_opens", 0)
@@ -1800,8 +1792,10 @@ class PolicyManager(private val context: Context) {
         // 2/9/2026 — interruptores que existen en la app y en el panel pero que el perfil
         // no guardaba. Sin esto, "exportar el perfil de un equipo bien configurado y
         // aplicarlo a otro" dejaba afuera justamente las protecciones más nuevas.
-        dataObj.put("flashingBlocked", isFlashingBlocked())
         dataObj.put("hideSuspendedApps", isHideSuspendedApps())
+        dataObj.put("settingsEvasionEnabled", isSettingsEvasionEnabled())
+        dataObj.put("browsersSuspended", areBrowsersSuspended())
+        dataObj.put("systemWebViewSuspended", isSystemWebViewSuspended())
         dataObj.put("accessibilityProtection", isAccessibilityProtectionEnabled())
         dataObj.put("accBounceSettings", isAccBounceSettingsEnabled())
         dataObj.put("accNag", isAccNagEnabled())
@@ -1995,8 +1989,10 @@ class PolicyManager(private val context: Context) {
             // estas claves) no debe APAGAR protecciones que el equipo ya tiene puestas —
             // en particular el arranque protegido y la protección de accesibilidad, que
             // vienen encendidas por defecto. Un perfil solo cambia lo que dice.
-            setFlashingBlocked(dataObj.optBoolean("flashingBlocked", isFlashingBlocked()))
             setHideSuspendedApps(dataObj.optBoolean("hideSuspendedApps", isHideSuspendedApps()))
+            setSettingsEvasionEnabled(dataObj.optBoolean("settingsEvasionEnabled", isSettingsEvasionEnabled()))
+            setBrowsersSuspended(dataObj.optBoolean("browsersSuspended", areBrowsersSuspended()))
+            setSystemWebViewSuspended(dataObj.optBoolean("systemWebViewSuspended", isSystemWebViewSuspended()))
             setAccessibilityProtection(dataObj.optBoolean("accessibilityProtection", isAccessibilityProtectionEnabled()))
             setAccBounceSettings(dataObj.optBoolean("accBounceSettings", isAccBounceSettingsEnabled()))
             setAccNag(dataObj.optBoolean("accNag", isAccNagEnabled()))
@@ -2852,9 +2848,6 @@ class PolicyManager(private val context: Context) {
         if (isRestrictionEnabled(UserManager.DISALLOW_FACTORY_RESET)) {
             KnoxHardening.setFactoryResetBlocked(context, true)
         }
-        if (isFlashingBlocked()) {
-            KnoxHardening.setFlashingBlocked(context, true)
-        }
 
         // Suspender todos los navegadores independientes instalados si la política está activa
         if (areBrowsersSuspended()) {
@@ -3234,7 +3227,6 @@ class PolicyManager(private val context: Context) {
         safely { dpm.setPermittedAccessibilityServices(adminComponent, null) }
         safely { clearFrpPolicy() }
         safely { KnoxHardening.setFactoryResetBlocked(context, false) }
-        safely { KnoxHardening.setFlashingBlocked(context, false) }
 
         // Cortar el filtro de red
         safely {
@@ -3365,8 +3357,7 @@ class PolicyManager(private val context: Context) {
 
         // Limpiar endurecimiento Knox (Samsung)
         KnoxHardening.setFactoryResetBlocked(context, false)
-        KnoxHardening.setFlashingBlocked(context, false)
-        PrefsHelper.getMdmPrefs(context).edit().putBoolean("flashing_blocked", false).apply()
+        setSettingsEvasionEnabled(false)
 
         // Habilitar Google Play Store
         try {

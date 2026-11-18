@@ -20,11 +20,11 @@ window.LOCKSUITE_POLICIES = {
       "off": "UNBLOCK_FACTORY_RESET"
     },
     {
-      "field": "flashingBlocked",
-      "label": "Bloquear Flasheo (Odin — Samsung/Knox)",
+      "field": "frpEnabled",
+      "label": "Protección de Restablecimiento (FRP)",
       "group": "Políticas de Sistema (Device Owner)",
-      "on": "BLOCK_FLASHING",
-      "off": "UNBLOCK_FLASHING"
+      "on": "ENABLE_FRP",
+      "off": "DISABLE_FRP"
     },
     {
       "field": "installAppsBlocked",
@@ -314,6 +314,13 @@ window.LOCKSUITE_POLICIES = {
       "off": "UNBLOCK_LOCALE_CHANGE"
     },
     {
+      "field": "settingsEvasionEnabled",
+      "label": "Auto Evasión en Ajustes",
+      "group": "Protecciones de Accesibilidad",
+      "on": "ENABLE_SETTINGS_EVASION",
+      "off": "DISABLE_SETTINGS_EVASION"
+    },
+    {
       "field": "accBounceSettings",
       "label": "Rebotar el menú de Accesibilidad de Ajustes",
       "group": "Protecciones de Accesibilidad",
@@ -340,6 +347,20 @@ window.LOCKSUITE_POLICIES = {
       "group": "Protecciones de Accesibilidad",
       "on": "ENABLE_BOOT_GATE_ACCESSIBILITY",
       "off": "DISABLE_BOOT_GATE_ACCESSIBILITY"
+    },
+    {
+      "field": "iabFinderEnabled",
+      "label": "Detector de navegadores embebidos (IAB)",
+      "group": "Protecciones de Accesibilidad",
+      "on": "ENABLE_IAB_FINDER",
+      "off": "DISABLE_IAB_FINDER"
+    },
+    {
+      "field": "iabFinderEnforce",
+      "label": "↳ Bloquear de verdad navegadores embebidos (apagado = solo simular)",
+      "group": "Protecciones de Accesibilidad",
+      "on": "DISABLE_IAB_SIMULATION",
+      "off": "ENABLE_IAB_SIMULATION"
     },
     {
       "field": "whitelistEnabled",
@@ -417,6 +438,20 @@ window.LOCKSUITE_POLICIES = {
       "group": "Conectividad y Filtros",
       "on": "BLOCK_INTERNET",
       "off": "UNBLOCK_INTERNET"
+    },
+    {
+      "field": "browsersSuspended",
+      "label": "Deshabilitar Navegadores de Internet (Chrome, Firefox, etc.)",
+      "group": "Conectividad y Filtros",
+      "on": "SUSPEND_BROWSERS",
+      "off": "UNSUSPEND_BROWSERS"
+    },
+    {
+      "field": "systemWebViewSuspended",
+      "label": "Deshabilitar WebView del Sistema (Bloqueo Global)",
+      "group": "Conectividad y Filtros",
+      "on": "SUSPEND_SYSTEM_WEBVIEW",
+      "off": "UNSUSPEND_SYSTEM_WEBVIEW"
     },
     {
       "field": "bluetoothBlocked",
@@ -522,6 +557,13 @@ window.LOCKSUITE_POLICIES = {
       "group": "Filtros de Servicios",
       "on": "BLOCK_POPULAR_NON_KOSHER",
       "off": "UNBLOCK_POPULAR_NON_KOSHER"
+    },
+    {
+      "field": "hideSuspendedApps",
+      "label": "Ocultar icono al suspender aplicaciones",
+      "group": "Filtros de Servicios",
+      "on": "ENABLE_HIDE_SUSPENDED_APPS",
+      "off": "DISABLE_HIDE_SUSPENDED_APPS"
     }
   ],
   "handledSeparately": [

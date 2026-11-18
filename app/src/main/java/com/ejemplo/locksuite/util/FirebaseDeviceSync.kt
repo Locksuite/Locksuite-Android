@@ -872,7 +872,7 @@ object FirebaseDeviceSync {
                     "installAppsBlocked" to policyManager.isInstallAppsBlocked(),
                     "uninstallAppsBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_UNINSTALL_APPS),
                     "factoryResetBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_FACTORY_RESET),
-                    "flashingBlocked" to policyManager.isFlashingBlocked(),
+                    "frpEnabled" to policyManager.isFrpEnabled(),
                     "adbBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_DEBUGGING_FEATURES),
                     "userSwitchBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_USER_SWITCH),
                     "modifyAccountsBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_MODIFY_ACCOUNTS),
@@ -893,6 +893,8 @@ object FirebaseDeviceSync {
                     "statusBarDisabled" to policyManager.isStatusBarDisabled(),
                     "keyguardDisabled" to policyManager.isKeyguardDisabled(),
                     "internetBlocked" to policyManager.isInternetBlocked(),
+                    "browsersSuspended" to policyManager.areBrowsersSuspended(),
+                    "systemWebViewSuspended" to policyManager.isSystemWebViewSuspended(),
                     "adBlockingEnabled" to policyManager.isAdBlockingEnabled(),
                     "gifsBlocked" to policyManager.isGifsBlocked(),
                     "aiModeEnabled" to com.ejemplo.locksuite.mdm.ImageBlockManager.isGlobalAiEnabled(context),
@@ -976,6 +978,9 @@ object FirebaseDeviceSync {
                     "locksuiteSuspended" to policyManager.isLockSuiteSuspended(),
                     "locksuiteSuspendedAt" to policyManager.getLockSuiteSuspendedAt(),
                     "accessibilityProtected" to policyManager.isAccessibilityProtectionEnabled(),
+                    "settingsEvasionEnabled" to policyManager.isSettingsEvasionEnabled(),
+                    "iabFinderEnabled" to policyManager.isEmbeddedBrowserFinderEnabled(),
+                    "iabFinderSimulation" to policyManager.isEmbeddedBrowserSimulation(),
 
                     // Sub-interruptores de Protecciones de Accesibilidad (17/8/2026).
                     // El panel los muestra como una sección propia; sin esto los switches

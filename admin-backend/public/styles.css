@@ -1154,14 +1154,18 @@ button.google-btn:hover {
   max-width: 1400px !important;
 }
 
-.sidebar.expanded #tab-policies {
+.sidebar.expanded #panel-policies.active {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 16px;
   align-items: start;
 }
 
-.sidebar.expanded #tab-policies .sidebar-card {
+.sidebar.expanded #panel-policies.active .search-box {
+  grid-column: 1 / -1;
+}
+
+.sidebar.expanded #panel-policies.active .sidebar-card {
   margin-bottom: 0 !important;
   height: 100%;
 }
@@ -1221,6 +1225,16 @@ button.google-btn:hover {
   padding: 18px;
   overflow-y: auto;
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
   display: flex;
   flex-direction: column;
   gap: 16px;

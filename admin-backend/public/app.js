@@ -489,6 +489,11 @@ async function openDeviceSidebar(e, t) {
         pinNoPublicado = true;
     }
     
+    const quickSearchEl = document.getElementById("quick-policy-search");
+    if (quickSearchEl) {
+        quickSearchEl.value = "";
+        if (typeof filtrarPoliticasRapidas === "function") filtrarPoliticasRapidas();
+    }
     sidebar.classList.remove("hidden");
     updateSidebarUI(e, t);
     if (pinNoPublicado) setCommandStatus("⚠️ " + TEXTO_PIN_NO_PUBLICADO);
@@ -550,10 +555,19 @@ function updateSidebarUI(e, t) {
             e.checked = field(t, "whitelistSimulation", true) === false;
             return;
         }
+        if (n === "iabFinderEnforce") {
+            e.checked = field(t, "iabFinderSimulation", true) === false;
+            return;
+        }
         const defVal = (n === "googleAccountWebBlocked" || n === "contactPhotoPickerBlocked" || n === "geminiMessagesBlocked"
-                        || n === "santanderBlocked" || n === "whitelistSharedCdn" || n === "nokiaTouchEnabled");
+                        || n === "santanderBlocked" || n === "whitelistSharedCdn" || n === "nokiaTouchEnabled"
+                        || n === "captivePortalGuard" || n === "captivePortalCoverImages");
         e.checked = field(t, n, defVal) === true;
     });
+    const diagUploadToggle = document.getElementById("sidebar-diag-upload-toggle");
+    if (diagUploadToggle) {
+        diagUploadToggle.checked = field(t, "diagUploadEnabled", true) !== false;
+    }
     // 26/10/2026 (B.95): lo que todavía está en camino se muestra como pedido, con la
     // marca «⏳», en vez de "volver solo" al valor viejo. Y la tarjeta del canal de
     // comandos dice por dónde le llegan las cosas a este equipo. Ver cada función.
@@ -728,6 +742,10 @@ function updateSidebarUI(e, t) {
     const i = apps.com_android_vending || null,
         d = field(t, "installAppsBlocked", false) === true;
     playstoreHidden.checked = i ? i.isHidden === true : d, playstoreSuspended.checked = i ? i.isSuspended === true : d;
+    const hideSuspEl = document.getElementById("hide-suspended-apps-toggle");
+    if (hideSuspEl) {
+        hideSuspEl.checked = field(t, "hideSuspendedApps", false) === true;
+    }
     // 22/9/2026: la lista de apps solo se rearma si cambió (o si es otro equipo). Antes
     // se rearmaba con cada latido y cerraba el panel ⚙️ abierto.
     const firmaApps = e + "|" + JSON.stringify(apps);
@@ -761,8 +779,15 @@ function updateSidebarUI(e, t) {
 }
 sidebarCloseBtn.addEventListener("click", closeDeviceSidebar), sidebarTabButtons.forEach(e => {
     e.addEventListener("click", () => {
-        sidebarTabButtons.forEach(e => e.classList.remove("active")), sidebarTabPanels.forEach(e => e.classList.remove("active")), e.classList.add("active"), activeTabId = e.getAttribute("data-tab"), document.getElementById(activeTabId).classList.add("active")
-    })
+        sidebarTabButtons.forEach(btn => btn.classList.remove("active"));
+        sidebarTabPanels.forEach(panel => panel.classList.remove("active"));
+        e.classList.add("active");
+        activeTabId = e.getAttribute("data-tab");
+        const targetPanel = document.getElementById(activeTabId);
+        if (targetPanel) targetPanel.classList.add("active");
+        const sc = sidebar && sidebar.querySelector(".sidebar-content");
+        if (sc) sc.scrollTop = 0;
+    });
 });
 const sidebarExpandBtn = document.getElementById("sidebar-expand-btn");
 if (sidebarExpandBtn) {
@@ -1772,6 +1797,16 @@ saveNameBtn.addEventListener("click", async () => {
             return;
         }
     }
+    if (n === "iabFinderEnforce" && a) {
+        if (!confirm(
+            "A partir de ahora el detector de navegadores embebidos va a BLOQUEAR de verdad en este celular.\n\n" +
+            "Antes de seguir, mirá la auditoría en la ficha completa: un falso positivo puede dejar una " +
+            "app sin funcionar sin mensaje que lo explique.\n\n¿Seguimos?"
+        )) {
+            t.checked = false;
+            return;
+        }
+    }
     if (n === "locksuiteSuspended") {
         if (a && !confirm("¿Suspender LockSuite en este celular?\n\nSe van a levantar TODAS las restricciones y a desbloquear todas las aplicaciones, incluidas las protecciones que impiden desinstalar LockSuite y restaurar de fábrica. Mientras dure la suspensión el equipo queda sin ninguna protección.\n\nAl desactivarla, todo vuelve exactamente a como estaba.")) {
             t.checked = false;
@@ -1785,7 +1820,7 @@ saveNameBtn.addEventListener("click", async () => {
     }
     const i = {
             factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
-            flashingBlocked: ["BLOCK_FLASHING", "UNBLOCK_FLASHING"],
+            frpEnabled: ["ENABLE_FRP", "DISABLE_FRP"],
             installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],
             uninstallAppsBlocked: ["BLOCK_UNINSTALL_APPS", "UNBLOCK_UNINSTALL_APPS"],
             adbBlocked: ["BLOCK_ADB", "UNBLOCK_ADB"],
@@ -1802,6 +1837,8 @@ saveNameBtn.addEventListener("click", async () => {
             statusBarDisabled: ["DISABLE_STATUSBAR", "ENABLE_STATUSBAR"],
             keyguardDisabled: ["DISABLE_KEYGUARD", "ENABLE_KEYGUARD"],
             internetBlocked: ["BLOCK_INTERNET", "UNBLOCK_INTERNET"],
+            browsersSuspended: ["SUSPEND_BROWSERS", "UNSUSPEND_BROWSERS"],
+            systemWebViewSuspended: ["SUSPEND_SYSTEM_WEBVIEW", "UNSUSPEND_SYSTEM_WEBVIEW"],
             bluetoothBlocked: ["BLOCK_BLUETOOTH", "UNBLOCK_BLUETOOTH"],
             bluetoothSharingBlocked: ["BLOCK_BLUETOOTH_SHARING", "UNBLOCK_BLUETOOTH_SHARING"],
             externalMediaBlocked: ["BLOCK_EXTERNAL_MEDIA", "UNBLOCK_EXTERNAL_MEDIA"],
@@ -1817,6 +1854,7 @@ saveNameBtn.addEventListener("click", async () => {
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             blockMlInMp: ["BLOCK_ML_IN_MP", "UNBLOCK_ML_IN_MP"],
             blockPopularNonKosher: ["BLOCK_POPULAR_NON_KOSHER", "UNBLOCK_POPULAR_NON_KOSHER"],
+            hideSuspendedApps: ["ENABLE_HIDE_SUSPENDED_APPS", "DISABLE_HIDE_SUSPENDED_APPS"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
@@ -1842,10 +1880,13 @@ saveNameBtn.addEventListener("click", async () => {
             geminiMessagesBlocked: ["BLOCK_GEMINI_MESSAGES", "UNBLOCK_GEMINI_MESSAGES"],
             santanderBlocked: ["BLOCK_SANTANDER", "UNBLOCK_SANTANDER"],
             localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
+            settingsEvasionEnabled: ["ENABLE_SETTINGS_EVASION", "DISABLE_SETTINGS_EVASION"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
             accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],
             accSuspendAll: ["ENABLE_ACC_SUSPEND_ALL", "DISABLE_ACC_SUSPEND_ALL"],
             bootGateWaitAccessibility: ["ENABLE_BOOT_GATE_ACCESSIBILITY", "DISABLE_BOOT_GATE_ACCESSIBILITY"],
+            iabFinderEnabled: ["ENABLE_IAB_FINDER", "DISABLE_IAB_FINDER"],
+            iabFinderEnforce: ["DISABLE_IAB_SIMULATION", "ENABLE_IAB_SIMULATION"],
             // Arranque protegido y filtro visual
             bootGateEnabled: ["ENABLE_BOOT_GATE", "DISABLE_BOOT_GATE"],
             imageStrictScroll: ["ENABLE_IMAGE_STRICT_SCROLL", "DISABLE_IMAGE_STRICT_SCROLL"],
@@ -1906,6 +1947,48 @@ if (hideSuspendedAppsToggle) {
             hideSuspendedAppsToggle.checked = !e;
         }, { enabled: e });
     });
+}
+const sidebarDiagUploadToggle = document.getElementById("sidebar-diag-upload-toggle");
+if (sidebarDiagUploadToggle) {
+    sidebarDiagUploadToggle.addEventListener("change", () => {
+        const e = sidebarDiagUploadToggle.checked;
+        sidebarDiagUploadToggle.disabled = !0;
+        runCommandOnDevice(selectedDeviceId, "SET_DIAGNOSTICS_UPLOAD", null, sidebarDiagUploadToggle, () => {
+            sidebarDiagUploadToggle.checked = !e;
+        }, { enabled: e });
+    });
+}
+const quickPolicySearch = document.getElementById("quick-policy-search");
+function normPolicyText(str) {
+    return String(str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+}
+function filtrarPoliticasRapidas() {
+    const panel = document.getElementById("panel-policies");
+    if (!panel || !quickPolicySearch) return;
+    const q = normPolicyText(quickPolicySearch.value);
+    panel.querySelectorAll(".sidebar-card").forEach(card => {
+        if (card.id === "device-command-channel") return;
+        const rows = card.querySelectorAll(".toggle-row");
+        if (!rows.length) {
+            card.style.display = q ? "none" : "";
+            return;
+        }
+        const h3 = card.querySelector("h3");
+        const groupMatch = q && h3 && normPolicyText(h3.textContent).includes(q);
+        let anyVisible = false;
+        rows.forEach(row => {
+            const inp = row.querySelector("[data-policy]");
+            const policyKey = inp ? normPolicyText(inp.getAttribute("data-policy")) : "";
+            const labelMatch = normPolicyText(row.textContent).includes(q) || (policyKey && policyKey.includes(q));
+            const show = !q || groupMatch || labelMatch;
+            row.style.display = show ? "" : "none";
+            if (show) anyVisible = true;
+        });
+        card.style.display = (!q || anyVisible) ? "" : "none";
+    });
+}
+if (quickPolicySearch) {
+    quickPolicySearch.addEventListener("input", filtrarPoliticasRapidas);
 }
 sidebarAllowlistBtn.addEventListener("click", () => {
     const e = sidebarAllowlistInput.value.split(",").map(e => e.trim()).filter(Boolean);
@@ -2483,24 +2566,24 @@ const MASTER_PROFILES = [
         id: "kosher_estricto",
         label: "Nivel 1 — Kosher estricto",
         icon: "🕍",
-        summary: "Llamadas, mensajes, bancos y las apps permitidas. Sin navegador, sin estados de WhatsApp, sin ofertas, con launcher kosher. La Tienda Play queda en modo Kosher (solo las pocas apps del nivel 1).",
-        warning: "Bloquea agregar y quitar cuentas de Google, y bloquea el cambio de idioma. Aplicalo DESPUÉS de haber agregado la cuenta de Google y de haber dejado el equipo en el idioma definitivo.",
+        summary: "Mismas protecciones unificadas (sin launcher kosher; permite zona WiFi, fondo, idioma y desinstalar apps). Lo único que cambia es la Tienda Play en modo Kosher (nivel 1).",
+        warning: "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo.",
         tone: "strict"
     },
     {
         id: "trabajo",
         label: "Nivel 2 — Trabajo",
         icon: "💼",
-        summary: "Todo lo del Nivel 1 salvo el launcher kosher, y deja agregar cuentas de correo y manejar las apps del equipo. La Tienda Play pasa a modo Trabajo (niveles 1 y 2).",
-        warning: "Bloquea el cambio de idioma del sistema: dejá el equipo en el idioma definitivo antes de aplicarlo.",
+        summary: "Mismas protecciones unificadas (sin launcher kosher; permite zona WiFi, fondo, idioma y desinstalar apps). La Tienda Play pasa a modo Trabajo (niveles 1 y 2).",
+        warning: "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo.",
         tone: "work"
     },
     {
         id: "gracia",
         label: "Nivel 4 — Período de gracia",
         icon: "⏳",
-        summary: "Bloquea todo lo claramente no kosher y deja lo dudoso a criterio del usuario, con la Tienda Play abierta completa. Al vencer el plazo se cierra solo aplicando el nivel elegido (por omisión el Nivel 1, que deja la Tienda Play en modo Kosher).",
-        warning: "Mientras dure, el equipo queda más abierto: puede instalar apps y usar su lanzador normal. A cambio, LockSuite va anotando qué dominios usa de verdad — miralos en la pestaña Lista blanca antes de que cierre.",
+        summary: "Mismas protecciones unificadas con la Tienda Play abierta completa por el plazo elegido. Al vencer se cierra aplicando el Nivel 1, que deja la Tienda Play en modo Kosher.",
+        warning: "Mientras dure, la Tienda Play queda abierta completa y al vencer pasa a modo Kosher. Activa la suspensión de apps sin Accesibilidad y su espera en el arranque protegido.",
         tone: "grace",
         // El único nivel que pide un dato más al aplicarlo. Ver GracePeriodManager.
         needsDuration: true
@@ -2512,16 +2595,16 @@ const MASTER_PROFILES = [
         id: "solo_llamadas",
         label: "Nivel 5 — Solo llamadas",
         icon: "📞",
-        summary: "Las mismas protecciones del Nivel 1, con la Tienda Play CERRADA: no se puede instalar nada desde la tienda.",
-        warning: "Bloquea agregar y quitar cuentas de Google, y bloquea el cambio de idioma. Aplicalo DESPUÉS de haber agregado la cuenta de Google y de haber dejado el equipo en el idioma definitivo.",
+        summary: "Mismas protecciones unificadas (sin launcher kosher; permite zona WiFi, fondo, idioma y desinstalar apps), con la Tienda Play CERRADA: no se puede instalar nada desde la tienda.",
+        warning: "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo.",
         tone: "strict"
     },
     {
         id: "lite",
         label: "Nivel 6 — Lite",
         icon: "🛍️",
-        summary: "Las mismas protecciones del Nivel 2 (Trabajo), con la Tienda Play abierta COMPLETA: los niveles 1, 2 y 3 del catálogo.",
-        warning: "Bloquea el cambio de idioma del sistema: dejá el equipo en el idioma definitivo antes de aplicarlo.",
+        summary: "Mismas protecciones unificadas (sin launcher kosher; permite zona WiFi, fondo, idioma y desinstalar apps), con la Tienda Play abierta COMPLETA: los niveles 1, 2 y 3 del catálogo.",
+        warning: "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo.",
         tone: "work"
     },
     {
@@ -2999,8 +3082,10 @@ if (savePresetBtn) {
             // perfil no guardaba. Los nombres de la izquierda son las claves del perfil
             // (las que lee PolicyManager.importPolicyPresetJson); los de la derecha, los
             // campos tal como los reporta el celular.
-            flashingBlocked: !!dev.flashingBlocked,
             hideSuspendedApps: !!dev.hideSuspendedApps,
+            settingsEvasionEnabled: !!dev.settingsEvasionEnabled,
+            browsersSuspended: !!dev.browsersSuspended,
+            systemWebViewSuspended: !!dev.systemWebViewSuspended,
             accessibilityProtection: !!dev.accessibilityProtected,
             // 4/9/2026 — la clave tiene que llamarse igual que en
             // PolicyManager.importPolicyPresetJson(): "googleAccountWebBlocked".
@@ -3540,7 +3625,7 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
 
         const mapping = {
             factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
-            flashingBlocked: ["BLOCK_FLASHING", "UNBLOCK_FLASHING"],
+            frpEnabled: ["ENABLE_FRP", "DISABLE_FRP"],
             installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],
             uninstallAppsBlocked: ["BLOCK_UNINSTALL_APPS", "UNBLOCK_UNINSTALL_APPS"],
             adbBlocked: ["BLOCK_ADB", "UNBLOCK_ADB"],
@@ -3557,6 +3642,8 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
             statusBarDisabled: ["DISABLE_STATUSBAR", "ENABLE_STATUSBAR"],
             keyguardDisabled: ["DISABLE_KEYGUARD", "ENABLE_KEYGUARD"],
             internetBlocked: ["BLOCK_INTERNET", "UNBLOCK_INTERNET"],
+            browsersSuspended: ["SUSPEND_BROWSERS", "UNSUSPEND_BROWSERS"],
+            systemWebViewSuspended: ["SUSPEND_SYSTEM_WEBVIEW", "UNSUSPEND_SYSTEM_WEBVIEW"],
             bluetoothBlocked: ["BLOCK_BLUETOOTH", "UNBLOCK_BLUETOOTH"],
             bluetoothSharingBlocked: ["BLOCK_BLUETOOTH_SHARING", "UNBLOCK_BLUETOOTH_SHARING"],
             externalMediaBlocked: ["BLOCK_EXTERNAL_MEDIA", "UNBLOCK_EXTERNAL_MEDIA"],
@@ -3572,6 +3659,8 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             blockMlInMp: ["BLOCK_ML_IN_MP", "UNBLOCK_ML_IN_MP"],
             blockPopularNonKosher: ["BLOCK_POPULAR_NON_KOSHER", "UNBLOCK_POPULAR_NON_KOSHER"],
+            hideSuspendedApps: ["ENABLE_HIDE_SUSPENDED_APPS", "DISABLE_HIDE_SUSPENDED_APPS"],
+            settingsEvasionEnabled: ["ENABLE_SETTINGS_EVASION", "DISABLE_SETTINGS_EVASION"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
@@ -3600,7 +3689,7 @@ if (groupSidebar) {
         
         const mapping = {
             factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
-            flashingBlocked: ["BLOCK_FLASHING", "UNBLOCK_FLASHING"],
+            frpEnabled: ["ENABLE_FRP", "DISABLE_FRP"],
             installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],
             uninstallAppsBlocked: ["BLOCK_UNINSTALL_APPS", "UNBLOCK_UNINSTALL_APPS"],
             adbBlocked: ["BLOCK_ADB", "UNBLOCK_ADB"],
@@ -3617,6 +3706,8 @@ if (groupSidebar) {
             statusBarDisabled: ["DISABLE_STATUSBAR", "ENABLE_STATUSBAR"],
             keyguardDisabled: ["DISABLE_KEYGUARD", "ENABLE_KEYGUARD"],
             internetBlocked: ["BLOCK_INTERNET", "UNBLOCK_INTERNET"],
+            browsersSuspended: ["SUSPEND_BROWSERS", "UNSUSPEND_BROWSERS"],
+            systemWebViewSuspended: ["SUSPEND_SYSTEM_WEBVIEW", "UNSUSPEND_SYSTEM_WEBVIEW"],
             bluetoothBlocked: ["BLOCK_BLUETOOTH", "UNBLOCK_BLUETOOTH"],
             bluetoothSharingBlocked: ["BLOCK_BLUETOOTH_SHARING", "UNBLOCK_BLUETOOTH_SHARING"],
             externalMediaBlocked: ["BLOCK_EXTERNAL_MEDIA", "UNBLOCK_EXTERNAL_MEDIA"],
@@ -3632,6 +3723,7 @@ if (groupSidebar) {
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             blockMlInMp: ["BLOCK_ML_IN_MP", "UNBLOCK_ML_IN_MP"],
             blockPopularNonKosher: ["BLOCK_POPULAR_NON_KOSHER", "UNBLOCK_POPULAR_NON_KOSHER"],
+            hideSuspendedApps: ["ENABLE_HIDE_SUSPENDED_APPS", "DISABLE_HIDE_SUSPENDED_APPS"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
@@ -3645,6 +3737,7 @@ if (groupSidebar) {
             geminiMessagesBlocked: ["BLOCK_GEMINI_MESSAGES", "UNBLOCK_GEMINI_MESSAGES"],
             santanderBlocked: ["BLOCK_SANTANDER", "UNBLOCK_SANTANDER"],
             localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
+            settingsEvasionEnabled: ["ENABLE_SETTINGS_EVASION", "DISABLE_SETTINGS_EVASION"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
             accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],
             accSuspendAll: ["ENABLE_ACC_SUSPEND_ALL", "DISABLE_ACC_SUSPEND_ALL"],

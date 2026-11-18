@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Search
@@ -56,12 +57,15 @@ import com.ejemplo.locksuite.mdm.AppController
 import com.ejemplo.locksuite.mdm.AppInfoData
 import com.ejemplo.locksuite.mdm.EnrollmentProfiles
 import com.ejemplo.locksuite.mdm.PolicyManager
+import com.ejemplo.locksuite.mdm.PolicySpec
 import com.ejemplo.locksuite.security.SessionManager
 import com.ejemplo.locksuite.util.PrefsHelper
 import com.ejemplo.locksuite.util.LocaleManager
 import com.google.firebase.database.FirebaseDatabase
 import com.ejemplo.locksuite.dns.*
 import com.ejemplo.locksuite.LockSuiteApplication
+import java.text.Normalizer
+import java.util.Locale
 
 class DashboardActivity : ComponentActivity() {
 
@@ -641,6 +645,7 @@ fun HomeTabContent(context: Context, onIrA: (Int) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PoliciesTabContent(context: Context) {
     val policyManager = remember { PolicyManager(context) }
@@ -652,6 +657,565 @@ fun PoliciesTabContent(context: Context) {
     val isSuspendedNow = remember(refreshKey) { policyManager.isLockSuiteSuspended() }
     val suspendedSince = remember(refreshKey) { policyManager.getLockSuiteSuspendedAt() }
     var pendingSuspendConfirm by remember { mutableStateOf(false) }
+    var pendingKioskConfirm by remember { mutableStateOf(false) }
+    var pendingNokiaTouchOffConfirm by remember { mutableStateOf(false) }
+    var pendingIabEnforceConfirm by remember { mutableStateOf(false) }
+    var policySearchQuery by rememberSaveable { mutableStateOf("") }
+    var onlyEnabledPolicies by rememberSaveable { mutableStateOf(false) }
+
+    val allSections = remember(refreshKey) {
+        listOf(
+            PolicySection(
+                title = "Políticas de Sistema (Device Owner)",
+                items = listOf(
+                    PolicySwitchItem(
+                        key = "factoryResetBlocked",
+                        label = "Bloquear Restauración de Fábrica",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_FACTORY_RESET),
+                        onCheckedChange = { policyManager.setFactoryResetBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "frpEnabled",
+                        label = "Protección de Restablecimiento (FRP)",
+                        isChecked = policyManager.isFrpEnabled(),
+                        onCheckedChange = { policyManager.setFrpPolicy(policyManager.getFrpAccounts(), policyManager.useDefaultFrp(), it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "installAppsBlocked",
+                        label = "Bloquear Instalación de Apps",
+                        isChecked = policyManager.isInstallAppsBlocked(),
+                        onCheckedChange = { policyManager.setInstallAppsBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "uninstallAppsBlocked",
+                        label = "Bloquear Desinstalación de Apps",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_UNINSTALL_APPS),
+                        onCheckedChange = { policyManager.setUninstallAppsBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "adbBlocked",
+                        label = "Bloquear ADB y Opciones de Desarrollador",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_DEBUGGING_FEATURES),
+                        onCheckedChange = { policyManager.setDebuggingFeaturesBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "userSwitchBlocked",
+                        label = "Bloquear Cambio de Usuario",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_USER_SWITCH),
+                        onCheckedChange = { policyManager.setUserSwitchBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "modifyAccountsBlocked",
+                        label = "Bloquear Modificación de Cuentas",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_MODIFY_ACCOUNTS),
+                        onCheckedChange = { policyManager.setModifyAccountsBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "safeBootBlocked",
+                        label = "Bloquear Reinicio Seguro (Safe Boot)",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_SAFE_BOOT),
+                        onCheckedChange = { policyManager.setSafeBootBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "unknownSourcesBlocked",
+                        label = "Bloquear Orígenes Desconocidos (APK)",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES),
+                        onCheckedChange = { policyManager.setUnknownSourcesBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "wifiBlocked",
+                        label = "Bloquear Ajustes de Red / WiFi / Datos",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_WIFI),
+                        onCheckedChange = { policyManager.setWifiConfigBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "vpnBlocked",
+                        label = "Bloquear Ajustes de VPN",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_VPN),
+                        onCheckedChange = { policyManager.setVpnConfigBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "appsControlBlocked",
+                        label = "Bloquear Control de Apps",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_APPS_CONTROL),
+                        onCheckedChange = { policyManager.setAppsControlBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "adjustVolumeBlocked",
+                        label = "Bloquear Ajuste de Volumen",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_ADJUST_VOLUME),
+                        onCheckedChange = { policyManager.setAdjustVolumeBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "accessibilityProtected",
+                        label = "Proteger Servicio de Accesibilidad",
+                        isChecked = policyManager.isAccessibilityProtectionEnabled(),
+                        onCheckedChange = { policyManager.setAccessibilityProtection(it).also { refreshKey++ } }
+                    )
+                )
+            ),
+            PolicySection(
+                title = "Restricciones Adicionales",
+                items = PolicySpec.EXTRA_RESTRICTIONS.map { spec ->
+                    PolicySwitchItem(
+                        key = spec.reportField,
+                        label = spec.label,
+                        subtitle = if (spec.supportedHere) null
+                        else "No soportado en Android ${Build.VERSION.RELEASE} (requiere API ${spec.minSdk}).",
+                        isChecked = policyManager.isExtraRestrictionEnabled(spec),
+                        enabled = spec.supportedHere,
+                        onCheckedChange = { enabled ->
+                            policyManager.setExtraRestriction(spec, enabled).also { refreshKey++ }
+                        }
+                    )
+                }
+            ),
+            PolicySection(
+                title = "Modo Teléfono de Teclas",
+                items = listOf(
+                    PolicySwitchItem(
+                        key = "kioskLockTaskEnabled",
+                        label = "Modo kiosco (anclar al launcher kosher)",
+                        isChecked = policyManager.isKioskLockTaskEnabled(),
+                        onCheckedChange = { wantKiosk ->
+                            if (wantKiosk) {
+                                pendingKioskConfirm = true
+                                false
+                            } else {
+                                policyManager.setKioskLockTaskEnabled(false).also { refreshKey++ }
+                            }
+                        }
+                    ),
+                    PolicySwitchItem(
+                        key = "nokiaKeypadMode",
+                        label = "Activar modo teléfono de teclas (Nokia)",
+                        isChecked = policyManager.isNokiaKeypadMode(),
+                        onCheckedChange = { isChecked ->
+                            if (isChecked && !policyManager.isKosherLauncherEnabled()) {
+                                policyManager.setKosherLauncherEnabled(true)
+                            }
+                            policyManager.setNokiaKeypadMode(isChecked).also { refreshKey++ }
+                        }
+                    ),
+                    PolicySwitchItem(
+                        key = "nokiaTouchEnabled",
+                        label = "  ↳ Táctil del launcher de teclas",
+                        isChecked = policyManager.isNokiaTouchEnabled(),
+                        onCheckedChange = { wantTouch ->
+                            if (!wantTouch) {
+                                pendingNokiaTouchOffConfirm = true
+                                false
+                            } else {
+                                policyManager.setNokiaTouchEnabled(true).also { refreshKey++ }
+                            }
+                        }
+                    )
+                )
+            ),
+            PolicySection(
+                title = "Protecciones de Accesibilidad",
+                items = listOf(
+                    PolicySwitchItem(
+                        key = "googleAccountWebBlocked",
+                        label = "Bloquear ajustes de la cuenta de Google (historial y actividad)",
+                        isChecked = policyManager.isGoogleAccountWebBlocked(),
+                        onCheckedChange = { policyManager.setGoogleAccountWebBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "googleAccountBlockStrict",
+                        label = "  ↳ Modo estricto (no abrir NINGUNA pantalla de la cuenta)",
+                        isChecked = policyManager.isGoogleAccountBlockStrict(),
+                        onCheckedChange = { policyManager.setGoogleAccountBlockStrict(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "captivePortalGuard",
+                        label = "Vigilar la ventana de inicio de sesión de Wi-Fi (portal cautivo)",
+                        isChecked = policyManager.isCaptivePortalGuardEnabled(),
+                        onCheckedChange = { policyManager.setCaptivePortalGuard(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "captivePortalCoverImages",
+                        label = "  ↳ Tapar imágenes del portal cautivo (apagar si no deja iniciar sesión)",
+                        isChecked = policyManager.isCaptivePortalCoverImagesEnabled(),
+                        onCheckedChange = { policyManager.setCaptivePortalCoverImages(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "contactPhotoPickerBlocked",
+                        label = "Bloquear selector de fotos e ilustraciones de contactos",
+                        isChecked = policyManager.isContactPhotoPickerBlocked(),
+                        onCheckedChange = { policyManager.setContactPhotoPickerBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "geminiMessagesBlocked",
+                        label = "Bloqueo de gemini en mensajes",
+                        isChecked = policyManager.isGeminiMessagesBlocked(),
+                        onCheckedChange = { policyManager.setGeminiMessagesBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "santanderBlocked",
+                        label = "Bloqueo de Santander",
+                        isChecked = policyManager.isSantanderBlocked(),
+                        onCheckedChange = { policyManager.setSantanderBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "localeChangeBlocked",
+                        label = "Bloquear cambio de idioma del sistema",
+                        isChecked = policyManager.isLocaleChangeBlocked(),
+                        onCheckedChange = { policyManager.setLocaleChangeBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "settingsEvasionEnabled",
+                        label = "Auto Evasión en Ajustes",
+                        isChecked = policyManager.isSettingsEvasionEnabled(),
+                        onCheckedChange = { policyManager.setSettingsEvasionEnabled(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "accBounceSettings",
+                        label = "Rebotar el menú de Accesibilidad de Ajustes",
+                        isChecked = policyManager.isAccBounceSettingsEnabled(),
+                        onCheckedChange = { policyManager.setAccBounceSettings(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "accNag",
+                        label = "Aviso insistente cada ~18 s si está apagada",
+                        isChecked = policyManager.isAccNagEnabled(),
+                        onCheckedChange = { policyManager.setAccNag(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "accSuspendAll",
+                        label = "Suspender TODAS las apps mientras esté apagada",
+                        isChecked = policyManager.isAccSuspendAllEnabled(),
+                        onCheckedChange = { policyManager.setAccSuspendAll(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "bootGateWaitAccessibility",
+                        label = "Arranque protegido: esperar también a la Accesibilidad",
+                        isChecked = policyManager.isBootGateWaitAccessibilityEnabled(),
+                        onCheckedChange = { policyManager.setBootGateWaitAccessibility(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "iabFinderEnabled",
+                        label = "Detector de navegadores embebidos (IAB)",
+                        isChecked = policyManager.isEmbeddedBrowserFinderEnabled(),
+                        onCheckedChange = { policyManager.setEmbeddedBrowserFinder(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "iabFinderEnforce",
+                        label = "  ↳ Bloquear de verdad navegadores embebidos (apagado = solo simular)",
+                        isChecked = !policyManager.isEmbeddedBrowserSimulation(),
+                        onCheckedChange = { enforce ->
+                            if (enforce) {
+                                pendingIabEnforceConfirm = true
+                                false
+                            } else {
+                                policyManager.setEmbeddedBrowserSimulation(true).also { refreshKey++ }
+                            }
+                        }
+                    )
+                )
+            ),
+            PolicySection(
+                title = "🛡️ Modo lista blanca",
+                items = listOf(
+                    PolicySwitchItem(
+                        key = "whitelistEnabled",
+                        label = "Activar el filtro de lista blanca",
+                        isChecked = policyManager.isWhitelistModeEnabled(),
+                        onCheckedChange = { policyManager.setWhitelistModeEnabled(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "whitelistEnforce",
+                        label = "  ↳ Bloquear de verdad (apagado = solo simular)",
+                        isChecked = !policyManager.isWhitelistSimulation(),
+                        onCheckedChange = { policyManager.setWhitelistSimulation(!it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "whitelistSharedCdn",
+                        label = "  ↳ Permitir CDN compartidos (CloudFront, Akamai, Fastly)",
+                        isChecked = policyManager.isWhitelistSharedCdnAllowed(),
+                        onCheckedChange = { policyManager.setWhitelistSharedCdnAllowed(it).also { refreshKey++ } }
+                    )
+                )
+            ),
+            PolicySection(
+                title = "Arranque protegido y filtro visual",
+                items = listOf(
+                    PolicySwitchItem(
+                        key = "bootGateEnabled",
+                        label = "Arranque protegido (cerrar la red hasta que el filtro esté listo)",
+                        isChecked = policyManager.isBootGateEnabled(),
+                        onCheckedChange = { policyManager.setBootGateEnabled(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "imageStrictScroll",
+                        label = "Imágenes: tapado estricto al desplazar",
+                        isChecked = policyManager.isImageBlockStrictScrollEnabled(),
+                        onCheckedChange = { policyManager.setImageBlockStrictScroll(it).also { refreshKey++ } }
+                    )
+                )
+            ),
+            PolicySection(
+                title = "Control de Hardware y Pantalla",
+                items = listOf(
+                    PolicySwitchItem(
+                        key = "cameraDisabled",
+                        label = "Deshabilitar Cámara Física",
+                        isChecked = policyManager.isCameraDisabled(),
+                        onCheckedChange = { policyManager.setCameraDisabled(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "screenCaptureBlocked",
+                        label = "Bloquear Capturas de Pantalla (Screenshots)",
+                        isChecked = policyManager.isScreenCaptureBlocked(),
+                        onCheckedChange = { policyManager.setScreenCaptureBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "statusBarDisabled",
+                        label = "Bloquear Barra de Notificaciones (Android 9+)",
+                        isChecked = policyManager.isStatusBarDisabled(),
+                        onCheckedChange = { policyManager.setStatusBarDisabled(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "keyguardDisabled",
+                        label = "Deshabilitar Bloqueo de Pantalla (Keyguard)",
+                        isChecked = policyManager.isKeyguardDisabled(),
+                        onCheckedChange = { policyManager.setKeyguardDisabled(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "kosherLauncherEnabled",
+                        label = "Activar Modo Launcher MP3 Kosher",
+                        isChecked = policyManager.isKosherLauncherEnabled(),
+                        onCheckedChange = { isChecked ->
+                            if (isChecked && !android.provider.Settings.canDrawOverlays(context)) {
+                                try {
+                                    DashboardActivity.isLaunchingInternalFlow = true
+                                    val intent = Intent(
+                                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                    context.startActivity(intent)
+                                    Toast.makeText(context, "Por favor, concede el permiso de superposición para la marca de agua", Toast.LENGTH_LONG).show()
+                                } catch (e: Exception) {
+                                    try {
+                                        DashboardActivity.isLaunchingInternalFlow = true
+                                        val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                                        context.startActivity(intent)
+                                    } catch (ex: Exception) {
+                                        DashboardActivity.isLaunchingInternalFlow = false
+                                        ex.printStackTrace()
+                                    }
+                                }
+                            }
+                            policyManager.setKosherLauncherEnabled(isChecked).also { refreshKey++ }
+                        }
+                    )
+                )
+            ),
+            PolicySection(
+                title = "Conectividad y Filtros",
+                items = listOf(
+                    PolicySwitchItem(
+                        key = "internetBlocked",
+                        label = "Bloquear Todo el Internet (WiFi y Datos)",
+                        isChecked = policyManager.isInternetBlocked(),
+                        onCheckedChange = { policyManager.setInternetBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "browsersSuspended",
+                        label = "Deshabilitar Navegadores de Internet (Chrome, Firefox, etc.)",
+                        isChecked = policyManager.areBrowsersSuspended(),
+                        onCheckedChange = { policyManager.setBrowsersSuspended(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "systemWebViewSuspended",
+                        label = "Deshabilitar WebView del Sistema (Bloqueo Global)",
+                        isChecked = policyManager.isSystemWebViewSuspended(),
+                        onCheckedChange = { policyManager.setSystemWebViewSuspended(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "bluetoothBlocked",
+                        label = "Bloquear Bluetooth",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH),
+                        onCheckedChange = { policyManager.setBluetoothBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "bluetoothSharingBlocked",
+                        label = "Bloquear Envío de Archivos Bluetooth",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH_SHARING),
+                        onCheckedChange = { policyManager.setBluetoothSharingBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "externalMediaBlocked",
+                        label = "Bloquear Montaje de Medios Externos (USB OTG/SD)",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA),
+                        onCheckedChange = { policyManager.setExternalMediaBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "tetheringBlocked",
+                        label = "Bloquear Zona WiFi / Tethering",
+                        isChecked = policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_TETHERING),
+                        onCheckedChange = { policyManager.setTetheringBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "adBlockingEnabled",
+                        label = "Filtro de Anuncios DNS (AdBlock)",
+                        isChecked = policyManager.isAdBlockingEnabled(),
+                        onCheckedChange = { policyManager.setAdBlockingEnabled(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "gifsBlocked",
+                        label = "Bloquear GIFs y Stickers en Gboard (Tenor)",
+                        isChecked = policyManager.isGifsBlocked(),
+                        onCheckedChange = { policyManager.setGifsBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "stealthModeEnabled",
+                        label = "Modo Oculto (Stealth Mode)",
+                        isChecked = isStealthModeEnabled(context),
+                        onCheckedChange = { setStealthModeEnabled(context, it).also { refreshKey++ } }
+                    )
+                )
+            ),
+            PolicySection(
+                title = "Inteligencia Artificial",
+                items = listOf(
+                    PolicySwitchItem(
+                        key = "aiModeEnabled",
+                        label = "Activar Modo IA (Filtro de Siluetas)",
+                        isChecked = com.ejemplo.locksuite.mdm.ImageBlockManager.isGlobalAiEnabled(context),
+                        onCheckedChange = {
+                            com.ejemplo.locksuite.mdm.ImageBlockManager.setGlobalAiEnabled(context, it)
+                            if (!it) com.ejemplo.locksuite.service.AIContentGate.releaseAll()
+                            refreshKey++
+                            true
+                        }
+                    ),
+                    PolicySwitchItem(
+                        key = "mapsImageBlockingEnabled",
+                        label = "Bloqueo de Imágenes en Maps",
+                        isChecked = com.ejemplo.locksuite.mdm.ImageBlockManager.isMapsImageBlockingEnabled(context),
+                        onCheckedChange = {
+                            com.ejemplo.locksuite.mdm.ImageBlockManager.setMapsImageBlockingEnabled(context, it)
+                            refreshKey++
+                            true
+                        }
+                    )
+                )
+            ),
+            PolicySection(
+                title = "Filtros de Servicios",
+                items = listOf(
+                    PolicySwitchItem(
+                        key = "whatsappBlockStatus",
+                        label = "Bloquear Estados (WhatsApp)",
+                        isChecked = policyManager.isWhatsAppBlockStatusEnabled(),
+                        onCheckedChange = {
+                            policyManager.setWhatsAppBlockStatus(it)
+                            refreshKey++
+                            true
+                        }
+                    ),
+                    PolicySwitchItem(
+                        key = "whatsappBlockChannels",
+                        label = "Bloquear Canales (WhatsApp)",
+                        isChecked = policyManager.isWhatsAppBlockChannelsEnabled(),
+                        onCheckedChange = {
+                            policyManager.setWhatsAppBlockChannels(it)
+                            refreshKey++
+                            true
+                        }
+                    ),
+                    PolicySwitchItem(
+                        key = "mercadoPagoBlockOffersAccessibility",
+                        label = "Mercado Pago: Bloquear Ofertas (Accesibilidad)",
+                        isChecked = policyManager.isMercadoPagoBlockOffersAccessibilityEnabled(),
+                        onCheckedChange = {
+                            policyManager.setMercadoPagoBlockOffersAccessibility(it)
+                            refreshKey++
+                            true
+                        }
+                    ),
+                    PolicySwitchItem(
+                        key = "mercadoPagoBlockOffersVpn",
+                        label = "Mercado Pago: Bloquear Ofertas (por VPN)",
+                        isChecked = policyManager.isMercadoPagoBlockOffersVpnEnabled(),
+                        onCheckedChange = {
+                            policyManager.setMercadoPagoBlockOffersVpn(it)
+                            refreshKey++
+                            true
+                        }
+                    ),
+                    PolicySwitchItem(
+                        key = "blockMlInMp",
+                        label = "Bloqueo de Mercado Libre en Mercado Pago",
+                        isChecked = policyManager.isMercadoLibreInMpBlocked(),
+                        onCheckedChange = {
+                            policyManager.setMercadoLibreInMpBlocked(it)
+                            refreshKey++
+                            true
+                        }
+                    ),
+                    PolicySwitchItem(
+                        key = "blockPopularNonKosher",
+                        label = "Bloquear apps populares no kosher",
+                        isChecked = policyManager.isBlockPopularNonKosherEnabled(),
+                        onCheckedChange = { policyManager.setBlockPopularNonKosher(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "hideSuspendedApps",
+                        label = "Ocultar icono al suspender aplicaciones",
+                        isChecked = policyManager.isHideSuspendedApps(),
+                        onCheckedChange = {
+                            policyManager.setHideSuspendedApps(it)
+                            refreshKey++
+                            true
+                        }
+                    )
+                )
+            ),
+            PolicySection(
+                title = "Diagnóstico remoto",
+                items = listOf(
+                    PolicySwitchItem(
+                        key = "diagUploadEnabled",
+                        label = "Subir diagnóstico remoto al panel",
+                        isChecked = com.ejemplo.locksuite.diag.DiagLog.isUploadEnabled(),
+                        onCheckedChange = {
+                            com.ejemplo.locksuite.diag.DiagLog.setUploadEnabled(context, it)
+                            refreshKey++
+                            true
+                        }
+                    )
+                )
+            )
+        )
+    }
+
+    val normalizedQuery = normalizePolicySearch(policySearchQuery.trim())
+    val activeCount = allSections.sumOf { s -> s.items.count { it.isChecked } } + if (isSuspendedNow) 1 else 0
+    val totalCount = allSections.sumOf { it.items.size } + 1
+    val filteredSections = remember(allSections, normalizedQuery, onlyEnabledPolicies) {
+        allSections.mapNotNull { section ->
+            val sectionMatches = normalizedQuery.isNotBlank() && (
+                normalizePolicySearch(section.title).contains(normalizedQuery) ||
+                    normalizePolicySearch(LocaleManager.t(section.title)).contains(normalizedQuery)
+                )
+            val matchingItems = section.items.filter { item ->
+                val matchesEnabled = !onlyEnabledPolicies || item.isChecked
+                val matchesQuery = normalizedQuery.isBlank() ||
+                    sectionMatches ||
+                    normalizePolicySearch(item.label).contains(normalizedQuery) ||
+                    normalizePolicySearch(LocaleManager.t(item.label)).contains(normalizedQuery) ||
+                    normalizePolicySearch(item.key).contains(normalizedQuery)
+                matchesEnabled && matchesQuery
+            }
+            if (matchingItems.isEmpty()) null else section.copy(items = matchingItems)
+        }
+    }
+    val showSuspendCard = (normalizedQuery.isBlank() ||
+        normalizePolicySearch("Suspender LockSuite Suspensión activa locksuiteSuspended").contains(normalizedQuery)) &&
+        (!onlyEnabledPolicies || isSuspendedNow)
+    val showSetupCards = normalizedQuery.isBlank() && !onlyEnabledPolicies
 
     val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     val isDeviceOwner = dpm.isDeviceOwnerApp(context.packageName)
@@ -683,6 +1247,57 @@ fun PoliciesTabContent(context: Context) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        item(key = "policy_search_bar") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = policySearchQuery,
+                    onValueChange = { policySearchQuery = it },
+                    placeholder = { Text("Buscar política...", color = Color.Gray) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFFF5C438)) },
+                    trailingIcon = {
+                        if (policySearchQuery.isNotEmpty()) {
+                            IconButton(onClick = { policySearchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Limpiar búsqueda", tint = Color.White.copy(alpha = 0.7f))
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFFF5C438),
+                        unfocusedBorderColor = Color.White.copy(alpha = 0.4f),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedContainerColor = Color(0xFF1A222C),
+                        unfocusedContainerColor = Color(0xFF1A222C)
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = onlyEnabledPolicies,
+                        onClick = { onlyEnabledPolicies = !onlyEnabledPolicies },
+                        label = { Text("Solo encendidas", fontSize = 12.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = Color(0xFF1A222C),
+                            labelColor = Color.White.copy(alpha = 0.85f),
+                            selectedContainerColor = Color(0xFFF5C438),
+                            selectedLabelColor = Color(0xFF0E141B)
+                        )
+                    )
+                    Text(
+                        text = "$activeCount/$totalCount encendidas",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+
         // ──────────────────────────────────────────────
         // Suspensión temporal de LockSuite
         //
@@ -690,63 +1305,66 @@ fun PoliciesTabContent(context: Context) {
         // de esta pantalla que apaga TODO lo demás, y un equipo que quedó
         // suspendido por olvido es un equipo sin ninguna protección.
         // ──────────────────────────────────────────────
-        item {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isSuspendedNow) Color(0xFF7F3B12) else Color(0xFF1A222C)
-                ),
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        if (isSuspendedNow) "⚠ LockSuite SUSPENDIDO" else "Suspender LockSuite",
-                        color = if (isSuspendedNow) Color.White else Color(0xFFF5C438),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
-                    )
-                    Text(
-                        if (isSuspendedNow)
-                            "Todas las restricciones están levantadas y todas las aplicaciones desbloqueadas. El equipo está funcionando como si LockSuite no estuviera instalado — incluido poder desinstalarlo o restaurarlo de fábrica. Desactivá la suspensión para que todo vuelva exactamente a como estaba."
-                        else
-                            "Levanta temporalmente TODAS las restricciones y desbloquea todas las aplicaciones, como si LockSuite no estuviera instalado. Al desactivarla, todo vuelve exactamente a como estaba: no hace falta reconfigurar nada.",
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 12.sp
-                    )
-                    if (isSuspendedNow && suspendedSince > 0L) {
+        if (showSuspendCard) {
+            item(key = "suspend_locksuite_card") {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isSuspendedNow) Color(0xFF7F3B12) else Color(0xFF1A222C)
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            "Suspendido desde: " + java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
-                                .format(java.util.Date(suspendedSince)),
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 11.sp
+                            if (isSuspendedNow) "⚠ LockSuite SUSPENDIDO" else "Suspender LockSuite",
+                            color = if (isSuspendedNow) Color.White else Color(0xFFF5C438),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                        Text(
+                            if (isSuspendedNow)
+                                "Todas las restricciones están levantadas y todas las aplicaciones desbloqueadas. El equipo está funcionando como si LockSuite no estuviera instalado — incluido poder desinstalarlo o restaurarlo de fábrica. Desactivá la suspensión para que todo vuelva exactamente a como estaba."
+                            else
+                                "Levanta temporalmente TODAS las restricciones y desbloquea todas las aplicaciones, como si LockSuite no estuviera instalado. Al desactivarla, todo vuelve exactamente a como estaba: no hace falta reconfigurar nada.",
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 12.sp
+                        )
+                        if (isSuspendedNow && suspendedSince > 0L) {
+                            Text(
+                                "Suspendido desde: " + java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
+                                    .format(java.util.Date(suspendedSince)),
+                                color = Color.White.copy(alpha = 0.7f),
+                                fontSize = 11.sp
+                            )
+                        }
+                        PolicySwitchRow(
+                            label = "Suspensión activa",
+                            isChecked = isSuspendedNow,
+                            onCheckedChange = { wantSuspend ->
+                                if (wantSuspend) {
+                                    // Confirmación obligatoria: es destructivo en el
+                                    // sentido de que deja el equipo completamente abierto.
+                                    pendingSuspendConfirm = true
+                                    false // el switch se mueve recién si el admin confirma
+                                } else {
+                                    val ok = policyManager.setLockSuiteSuspended(false)
+                                    if (ok) {
+                                        Toast.makeText(context, "Suspensión desactivada. Restricciones restauradas.", Toast.LENGTH_LONG).show()
+                                    }
+                                    refreshKey++
+                                    ok
+                                }
+                            }
                         )
                     }
-                    PolicySwitchRow(
-                        label = "Suspensión activa",
-                        isChecked = isSuspendedNow,
-                        onCheckedChange = { wantSuspend ->
-                            if (wantSuspend) {
-                                // Confirmación obligatoria: es destructivo en el
-                                // sentido de que deja el equipo completamente abierto.
-                                pendingSuspendConfirm = true
-                                false // el switch se mueve recién si el admin confirma
-                            } else {
-                                val ok = policyManager.setLockSuiteSuspended(false)
-                                if (ok) {
-                                    Toast.makeText(context, "Suspensión desactivada. Restricciones restauradas.", Toast.LENGTH_LONG).show()
-                                }
-                                refreshKey++
-                                ok
-                            }
-                        }
-                    )
                 }
             }
         }
 
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
+        if (showSetupCards) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             ) {
@@ -908,363 +1526,38 @@ fun PoliciesTabContent(context: Context) {
                 }
             }
         }
-
-        // Grupo 1: Políticas de Sistema
-        item {
-            PolicyGroupCard(title = "Políticas de Sistema (Device Owner)") {
-                PolicySwitchRow(
-                    label = "Bloquear Restauración de Fábrica (Ajustes + recovery en Samsung/Knox)",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_FACTORY_RESET) },
-                    onCheckedChange = { policyManager.setFactoryResetBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Flasheo (Odin / Download mode — solo Samsung/Knox)",
-                    isChecked = remember(refreshKey) { policyManager.isFlashingBlocked() },
-                    onCheckedChange = { policyManager.setFlashingBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Instalación de Apps",
-                    isChecked = remember(refreshKey) { policyManager.isInstallAppsBlocked() },
-                    onCheckedChange = { policyManager.setInstallAppsBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Desinstalación de Apps",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_UNINSTALL_APPS) },
-                    onCheckedChange = { policyManager.setUninstallAppsBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear ADB y Opciones de Desarrollador",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_DEBUGGING_FEATURES) },
-                    onCheckedChange = { policyManager.setDebuggingFeaturesBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Cambio de Usuario",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_USER_SWITCH) },
-                    onCheckedChange = { policyManager.setUserSwitchBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Modificación de Cuentas",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_MODIFY_ACCOUNTS) },
-                    onCheckedChange = { policyManager.setModifyAccountsBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Reinicio Seguro (Safe Boot)",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_SAFE_BOOT) },
-                    onCheckedChange = { policyManager.setSafeBootBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Orígenes Desconocidos (APK)",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES) },
-                    onCheckedChange = { policyManager.setUnknownSourcesBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Ajustes de Red / WiFi / Datos",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_WIFI) },
-                    onCheckedChange = { policyManager.setWifiConfigBlocked(it).also { refreshKey++ } }
-                )
-            }
         }
 
-        // Grupo 2: Control de Hardware y Pantalla
-        item {
-            PolicyGroupCard(title = "Control de Hardware y Pantalla") {
-                PolicySwitchRow(
-                    label = "Deshabilitar Cámara Física",
-                    isChecked = remember(refreshKey) { policyManager.isCameraDisabled() },
-                    onCheckedChange = { policyManager.setCameraDisabled(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Capturas de Pantalla (Screenshots)",
-                    isChecked = remember(refreshKey) { policyManager.isScreenCaptureBlocked() },
-                    onCheckedChange = { policyManager.setScreenCaptureBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Barra de Notificaciones (Android 9+)",
-                    isChecked = remember(refreshKey) { policyManager.isStatusBarDisabled() },
-                    onCheckedChange = { policyManager.setStatusBarDisabled(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Activar Modo Launcher MP3 Kosher",
-                    isChecked = remember(refreshKey) { policyManager.isKosherLauncherEnabled() },
-                    onCheckedChange = { isChecked ->
-                        if (isChecked && !android.provider.Settings.canDrawOverlays(context)) {
-                            try {
-                                DashboardActivity.isLaunchingInternalFlow = true
-                                val intent = Intent(
-                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}")
-                                )
-                                context.startActivity(intent)
-                                Toast.makeText(context, "Por favor, concede el permiso de superposición para la marca de agua", Toast.LENGTH_LONG).show()
-                            } catch (e: Exception) {
-                                try {
-                                    DashboardActivity.isLaunchingInternalFlow = true
-                                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
-                                    context.startActivity(intent)
-                                } catch (ex: Exception) {
-                                    DashboardActivity.isLaunchingInternalFlow = false
-                                    ex.printStackTrace()
-                                }
-                            }
-                        }
-                        policyManager.setKosherLauncherEnabled(isChecked).also { refreshKey++ }
-                    }
-                )
-                PolicySwitchRow(
-                    label = "Activar modo teléfono de teclas (Nokia)",
-                    isChecked = remember(refreshKey) { policyManager.isNokiaKeypadMode() },
-                    onCheckedChange = { isChecked ->
-                        if (isChecked && !policyManager.isKosherLauncherEnabled()) {
-                            policyManager.setKosherLauncherEnabled(true)
-                        }
-                        policyManager.setNokiaKeypadMode(isChecked).also { refreshKey++ }
-                    }
-                )
-                if (policyManager.isNokiaKeypadMode()) {
-                    PolicySwitchRow(
-                        label = "  ↳ Habilitar pantalla táctil en modo teclas",
-                        isChecked = remember(refreshKey) { policyManager.isNokiaTouchEnabled() },
-                        onCheckedChange = { policyManager.setNokiaTouchEnabled(it).also { refreshKey++ } }
+        if (filteredSections.isEmpty() && !showSuspendCard) {
+            item(key = "policy_empty_state") {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = "Ninguna política coincide.",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(16.dp)
                     )
                 }
-                PolicySwitchRow(
-                    label = "Deshabilitar Pantalla de Bloqueo (Keyguard)",
-                    isChecked = remember(refreshKey) { policyManager.isKeyguardDisabled() },
-                    onCheckedChange = { policyManager.setKeyguardDisabled(it).also { refreshKey++ } }
-                )
-
-                PolicySwitchRow(
-                    label = "Bloquear Ajustes de Volumen",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_ADJUST_VOLUME) },
-                    onCheckedChange = { policyManager.setAdjustVolumeBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Controles de Aplicación (Ajustes)",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_APPS_CONTROL) },
-                    onCheckedChange = { policyManager.setAppsControlBlocked(it).also { refreshKey++ } }
-                )
             }
         }
 
-        // Grupo 3: Control de Conectividad
-        item {
-            PolicyGroupCard(title = "Control de Conectividad") {
-                PolicySwitchRow(
-                    label = "Bloquear Bluetooth",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH) },
-                    onCheckedChange = { policyManager.setBluetoothBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Envío de Archivos Bluetooth",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH_SHARING) },
-                    onCheckedChange = { policyManager.setBluetoothSharingBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Medios Externos (USB OTG/SD)",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA) },
-                    onCheckedChange = { policyManager.setExternalMediaBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Zona WiFi / Compartir Internet",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_TETHERING) },
-                    onCheckedChange = { policyManager.setTetheringBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Configuración de VPN",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_VPN) },
-                    onCheckedChange = { policyManager.setVpnConfigBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Internet Completo (WiFi y Datos)",
-                    isChecked = remember(refreshKey) { policyManager.isInternetBlocked() },
-                    onCheckedChange = { policyManager.setInternetBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Deshabilitar Navegadores de Internet (Chrome, Firefox, etc.)",
-                    isChecked = remember(refreshKey) { policyManager.areBrowsersSuspended() },
-                    onCheckedChange = { policyManager.setBrowsersSuspended(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Deshabilitar WebView del Sistema (Bloqueo Global)",
-                    isChecked = remember(refreshKey) { policyManager.isSystemWebViewSuspended() },
-                    onCheckedChange = { policyManager.setSystemWebViewSuspended(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear Anuncios en todo el Dispositivo (Global)",
-                    isChecked = remember(refreshKey) { policyManager.isAdBlockingEnabled() },
-                    onCheckedChange = { policyManager.setAdBlockingEnabled(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear GIFs y Stickers en Gboard (Tenor)",
-                    isChecked = remember(refreshKey) { policyManager.isGifsBlocked() },
-                    onCheckedChange = { policyManager.setGifsBlocked(it).also { refreshKey++ } }
-                )
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Grupo 3-bis: PROTECCIONES DE ACCESIBILIDAD  (17/8/2026)
-        //
-        // La Capa 3 (filtro visual: imágenes, Estados/Canales de WhatsApp, ofertas
-        // de Mercado Pago) depende del servicio de Accesibilidad, y ese servicio se
-        // puede apagar desde Ajustes del sistema. Android NO ofrece ninguna API para
-        // impedirlo — no existe `DISALLOW_CONFIG_ACCESSIBILITY` y un Device Owner no
-        // puede escribir `ENABLED_ACCESSIBILITY_SERVICES`. Es deliberado de Google.
-        //
-        // Estos cuatro interruptores son las cuatro barreras posibles. Van apagados
-        // por defecto porque cada uno tiene un costo de comodidad distinto; el
-        // administrador elige cuánto pagar. El interruptor maestro es "Protección de
-        // Accesibilidad" (`accessibility_protection_enabled`, encendido por defecto):
-        // con ese apagado, ninguno de estos hace nada.
-        // ─────────────────────────────────────────────────────────────────────
-        item {
-            PolicyGroupCard(title = "Protecciones de Accesibilidad") {
-                // Va PRIMERO porque es la más importante de la sección: sin esto,
-                // cambiar el idioma del equipo deja mudo a cualquier filtro que compare
-                // texto de pantalla (ofertas de Mercado Pago, anti-evasión de Ajustes).
-                PolicySwitchRow(
-                    label = "Bloquear cambio de idioma del sistema",
-                    isChecked = remember(refreshKey) { policyManager.isLocaleChangeBlocked() },
-                    onCheckedChange = { policyManager.setLocaleChangeBlocked(it).also { refreshKey++ } }
-                )
-                // 4/9/2026 — el agujero que encontró el dueño: el historial de YouTube
-                // y Mi Actividad se ven DENTRO de Ajustes, sin ningún navegador.
-                // Es el único de esta sección que viene ENCENDIDO de fábrica: lo que
-                // abre no tiene uso legítimo en un equipo kosher, y un interruptor
-                // apagado por defecto solo protege a quien se acuerde de encenderlo.
-                PolicySwitchRow(
-                    label = "Bloquear ajustes de la cuenta de Google (historial y actividad)",
-                    isChecked = remember(refreshKey) { policyManager.isGoogleAccountWebBlocked() },
-                    onCheckedChange = { policyManager.setGoogleAccountWebBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear selector de fotos e ilustraciones de contactos",
-                    isChecked = remember(refreshKey) { policyManager.isContactPhotoPickerBlocked() },
-                    onCheckedChange = { policyManager.setContactPhotoPickerBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloqueo de gemini en mensajes",
-                    isChecked = remember(refreshKey) { policyManager.isGeminiMessagesBlocked() },
-                    onCheckedChange = { policyManager.setGeminiMessagesBlocked(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Bloqueo de Santander",
-                    isChecked = remember(refreshKey) { policyManager.isSantanderBlocked() },
-                    onCheckedChange = { policyManager.setSantanderBlocked(it).also { refreshKey++ } }
-                )
-                // 4/9 (tarde) — el modo. En NORMAL se puede seguir administrando la
-                // cuenta (datos, seguridad, dispositivos) y se bloquea solo el
-                // historial/actividad; en ESTRICTO no se abre ninguna pantalla de la
-                // cuenta. Normal es el valor de fábrica: la primera versión venía en
-                // estricto de hecho y dejó al dueño sin poder tocar su cuenta.
-                PolicySwitchRow(
-                    label = "  ↳ Modo estricto (no abrir NINGUNA pantalla de la cuenta)",
-                    isChecked = remember(refreshKey) { policyManager.isGoogleAccountBlockStrict() },
-                    onCheckedChange = { policyManager.setGoogleAccountBlockStrict(it).also { refreshKey++ } }
-                )
-                // 5/9 — la ventana de "Iniciar sesión en la red" (portal cautivo).
-                // No se puede filtrar por DNS: esquiva la VPN por diseño de Android.
-                // Esto tapa sus imágenes, la cierra apenas la red valida y le pone un
-                // tope de 3 minutos.
-                PolicySwitchRow(
-                    label = "Vigilar la ventana de inicio de sesión de Wi-Fi (portal cautivo)",
-                    isChecked = remember(refreshKey) { policyManager.isCaptivePortalGuardEnabled() },
-                    onCheckedChange = { policyManager.setCaptivePortalGuard(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Protección de Accesibilidad (maestro)",
-                    isChecked = remember(refreshKey) { policyManager.isAccessibilityProtectionEnabled() },
-                    onCheckedChange = { policyManager.setAccessibilityProtection(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Rebotar el menú de Accesibilidad de Ajustes",
-                    isChecked = remember(refreshKey) { policyManager.isAccBounceSettingsEnabled() },
-                    onCheckedChange = { policyManager.setAccBounceSettings(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Aviso insistente si la Accesibilidad está apagada",
-                    isChecked = remember(refreshKey) { policyManager.isAccNagEnabled() },
-                    onCheckedChange = { policyManager.setAccNag(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Suspender TODAS las apps mientras esté apagada",
-                    isChecked = remember(refreshKey) { policyManager.isAccSuspendAllEnabled() },
-                    onCheckedChange = { policyManager.setAccSuspendAll(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Arranque protegido: esperar también a la Accesibilidad",
-                    isChecked = remember(refreshKey) { policyManager.isBootGateWaitAccessibilityEnabled() },
-                    onCheckedChange = { policyManager.setBootGateWaitAccessibility(it).also { refreshKey++ } }
-                )
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Grupo 3-ter: ARRANQUE PROTEGIDO Y FILTRO VISUAL  (17/8/2026)
-        // ─────────────────────────────────────────────────────────────────────
-        item {
-            PolicyGroupCard(title = "Arranque protegido y filtro visual") {
-                PolicySwitchRow(
-                    label = "Arranque protegido (cerrar la red hasta que el filtro esté listo)",
-                    isChecked = remember(refreshKey) { policyManager.isBootGateEnabled() },
-                    onCheckedChange = { policyManager.setBootGateEnabled(it).also { refreshKey++ } }
-                )
-                PolicySwitchRow(
-                    label = "Imágenes: tapado estricto al desplazar",
-                    isChecked = remember(refreshKey) { policyManager.isImageBlockStrictScrollEnabled() },
-                    onCheckedChange = { policyManager.setImageBlockStrictScroll(it).also { refreshKey++ } }
-                )
-            }
-        }
-
-        // Grupo 4: Opciones Avanzadas de Aplicaciones y Mercado Pago
-        item {
-            PolicyGroupCard(title = "Opciones Avanzadas de Aplicaciones y Mercado Pago") {
-                PolicySwitchRow(
-                    label = "Ocultar icono al suspender aplicaciones",
-                    isChecked = remember(refreshKey) { policyManager.isHideSuspendedApps() },
-                    onCheckedChange = { 
-                        policyManager.setHideSuspendedApps(it)
-                        refreshKey++
-                        true
+        items(filteredSections, key = { it.title }) { section ->
+            PolicyGroupCard(title = section.title) {
+                section.items.forEach { switchItem ->
+                    key(switchItem.key) {
+                        PolicySwitchRow(
+                            label = switchItem.label,
+                            isChecked = switchItem.isChecked,
+                            subtitle = switchItem.subtitle,
+                            enabled = switchItem.enabled,
+                            onCheckedChange = switchItem.onCheckedChange
+                        )
                     }
-                )
-                PolicySwitchRow(
-                    label = "Bloquear apps populares no kosher",
-                    isChecked = remember(refreshKey) { policyManager.isBlockPopularNonKosherEnabled() },
-                    onCheckedChange = { 
-                        policyManager.setBlockPopularNonKosher(it)
-                        refreshKey++
-                        true
-                    }
-                )
-                PolicySwitchRow(
-                    label = "Mercado Pago: Bloquear Ofertas (por Accesibilidad)",
-                    isChecked = remember(refreshKey) { policyManager.isMercadoPagoBlockOffersAccessibilityEnabled() },
-                    onCheckedChange = { 
-                        policyManager.setMercadoPagoBlockOffersAccessibility(it)
-                        refreshKey++
-                        true
-                    }
-                )
-                PolicySwitchRow(
-                    label = "Mercado Pago: Bloquear Ofertas (por VPN DNS)",
-                    isChecked = remember(refreshKey) { policyManager.isMercadoPagoBlockOffersVpnEnabled() },
-                    onCheckedChange = { 
-                        policyManager.setMercadoPagoBlockOffersVpn(it)
-                        refreshKey++
-                        true
-                    }
-                )
-                PolicySwitchRow(
-                    label = "Bloqueo de Mercado Libre en Mercado Pago",
-                    isChecked = remember(refreshKey) { policyManager.isMercadoLibreInMpBlocked() },
-                    onCheckedChange = { 
-                        policyManager.setMercadoLibreInMpBlocked(it)
-                        refreshKey++
-                        true
-                    }
-                )
+                }
             }
         }
 
@@ -1273,8 +1566,11 @@ fun PoliciesTabContent(context: Context) {
         // Qué modo de la tienda tiene este equipo (cerrada / kosher / trabajo / lite).
         // Las apps de cada nivel las define el administrador en el panel web.
         // ─────────────────────────────────────────────────────────────────────
-        item {
-            PlayStoreModeGroup(refreshKey = refreshKey, onChanged = { refreshKey++ })
+        if (!onlyEnabledPolicies && (normalizedQuery.isBlank() ||
+                normalizePolicySearch("Tienda Play Modo Cerrada Kosher Trabajo Lite").contains(normalizedQuery))) {
+            item {
+                PlayStoreModeGroup(refreshKey = refreshKey, onChanged = { refreshKey++ })
+            }
         }
     }
 
@@ -1312,6 +1608,150 @@ fun PoliciesTabContent(context: Context) {
             }
         )
     }
+
+    if (pendingKioskConfirm) {
+        AlertDialog(
+            onDismissRequest = { pendingKioskConfirm = false },
+            containerColor = Color(0xFF0E141B),
+            title = { Text("¿Anclar equipo al launcher kosher?", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Android va a permitir abrir ÚNICAMENTE las apps de la lista permitida. Ninguna notificación ni enlace va a poder abrir otra cosa.\n\n" +
+                        "⚠️ IMPORTANTE: si el marcador telefónico NO está en la lista permitida, en este equipo no se va a poder marcar el código de recuperación *#*#9999#*#*.",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingKioskConfirm = false
+                    val ok = policyManager.setKioskLockTaskEnabled(true)
+                    if (!ok) {
+                        Toast.makeText(context, "No se pudo activar el modo kiosco.", Toast.LENGTH_LONG).show()
+                    }
+                    refreshKey++
+                }) {
+                    Text("Sí, anclar", color = Color(0xFFE67E22), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingKioskConfirm = false }) {
+                    Text("Cancelar", color = Color.White.copy(alpha = 0.7f))
+                }
+            }
+        )
+    }
+
+    if (pendingNokiaTouchOffConfirm) {
+        AlertDialog(
+            onDismissRequest = { pendingNokiaTouchOffConfirm = false },
+            containerColor = Color(0xFF0E141B),
+            title = { Text("¿Apagar el táctil del launcher?", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "La pantalla de inicio va a responder únicamente a las teclas físicas.\n\n" +
+                        "⚠️ Si este celular NO tiene cruceta ni teclas de navegación, la pantalla de inicio va a quedar manejable solo desde el panel.\n\n" +
+                        "Salida de emergencia en el equipo: mantener 3 segundos el dedo en la esquina superior derecha.",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingNokiaTouchOffConfirm = false
+                    policyManager.setNokiaTouchEnabled(false)
+                    refreshKey++
+                }) {
+                    Text("Sí, apagar táctil", color = Color(0xFFE67E22), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingNokiaTouchOffConfirm = false }) {
+                    Text("Cancelar", color = Color.White.copy(alpha = 0.7f))
+                }
+            }
+        )
+    }
+
+    if (pendingIabEnforceConfirm) {
+        AlertDialog(
+            onDismissRequest = { pendingIabEnforceConfirm = false },
+            containerColor = Color(0xFF0E141B),
+            title = { Text("¿Bloquear navegadores embebidos?", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "A partir de ahora el detector de navegadores embebidos (IAB) va a BLOQUEAR de verdad en este celular.\n\n" +
+                        "Si venís probando apps, revisá primero la auditoría en el panel: un falso positivo puede dejar una app sin funcionar sin mensaje que lo explique.",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingIabEnforceConfirm = false
+                    policyManager.setEmbeddedBrowserSimulation(false)
+                    refreshKey++
+                }) {
+                    Text("Sí, bloquear", color = Color(0xFFE67E22), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingIabEnforceConfirm = false }) {
+                    Text("Cancelar", color = Color.White.copy(alpha = 0.7f))
+                }
+            }
+        )
+    }
+}
+
+private data class PolicySwitchItem(
+    val key: String,
+    val label: String,
+    val isChecked: Boolean,
+    val subtitle: String? = null,
+    val enabled: Boolean = true,
+    val onCheckedChange: (Boolean) -> Boolean
+)
+
+private data class PolicySection(
+    val title: String,
+    val items: List<PolicySwitchItem>
+)
+
+private fun normalizePolicySearch(text: String): String {
+    val nfd = Normalizer.normalize(text, Normalizer.Form.NFD)
+    return nfd.replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
+        .lowercase(Locale.ROOT)
+}
+
+private fun isStealthModeEnabled(context: Context): Boolean {
+    return try {
+        val aliasComponent = ComponentName(context, "com.ejemplo.locksuite.LauncherAlias")
+        context.packageManager.getComponentEnabledSetting(aliasComponent) ==
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun setStealthModeEnabled(context: Context, enabled: Boolean): Boolean {
+    return try {
+        val aliasComponent = ComponentName(context, "com.ejemplo.locksuite.LauncherAlias")
+        val state = if (enabled) {
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        } else {
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+        }
+        context.packageManager.setComponentEnabledSetting(
+            aliasComponent,
+            state,
+            PackageManager.DONT_KILL_APP
+        )
+        true
+    } catch (e: Exception) {
+        e.printStackTrace()
+        false
+    }
 }
 
 
@@ -1341,6 +1781,8 @@ fun PolicyGroupCard(title: String, content: @Composable ColumnScope.() -> Unit) 
 fun PolicySwitchRow(
     label: String,
     isChecked: Boolean,
+    subtitle: String? = null,
+    enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Boolean   // devuelve true si el DPM aceptó el cambio
 ) {
     // Estado local para dar feedback visual instantáneo; se revierte si el DPM rechaza
@@ -1353,14 +1795,29 @@ fun PolicySwitchRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = LocaleManager.t(label),
-            color = Color.White,
-            fontSize = 14.sp,
-            modifier = Modifier.weight(1f)
-        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp)
+        ) {
+            Text(
+                text = LocaleManager.t(label),
+                color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f),
+                fontSize = 14.sp
+            )
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    text = subtitle,
+                    color = Color.White.copy(alpha = if (enabled) 0.6f else 0.35f),
+                    fontSize = 11.sp,
+                    lineHeight = 14.sp,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
         Switch(
             checked = checked,
+            enabled = enabled,
             onCheckedChange = { newValue ->
                 checked = newValue          // movimiento optimista
                 val accepted = onCheckedChange(newValue)
@@ -1370,7 +1827,11 @@ fun PolicySwitchRow(
                 checkedThumbColor = Color(0xFF0E141B),
                 checkedTrackColor = Color(0xFFF5C438),
                 uncheckedThumbColor = Color.Gray,
-                uncheckedTrackColor = Color(0xFF0E141B)
+                uncheckedTrackColor = Color(0xFF0E141B),
+                disabledCheckedThumbColor = Color(0xFF0E141B).copy(alpha = 0.5f),
+                disabledCheckedTrackColor = Color(0xFFF5C438).copy(alpha = 0.4f),
+                disabledUncheckedThumbColor = Color.Gray.copy(alpha = 0.4f),
+                disabledUncheckedTrackColor = Color(0xFF0E141B).copy(alpha = 0.5f)
             )
         )
     }
@@ -2893,15 +3354,17 @@ fun ServicesTabContent(
                                 modifier = Modifier.padding(top = 2.dp)
                             )
                         }
-                        var evasionEnabledState by remember { 
-                            mutableStateOf(PrefsHelper.getMdmPrefs(context).getBoolean("settings_evasion_enabled", false)) 
+                        var evasionEnabledState by remember {
+                            mutableStateOf(policyManager.isSettingsEvasionEnabled())
                         }
                         Switch(
                             checked = evasionEnabledState,
                             onCheckedChange = { enabled ->
-                                PrefsHelper.getMdmPrefs(context).edit().putBoolean("settings_evasion_enabled", enabled).apply()
-                                evasionEnabledState = enabled
-                                Toast.makeText(context, if (enabled) "Auto Evasión Activada." else "Auto Evasión Desactivada.", Toast.LENGTH_SHORT).show()
+                                val ok = policyManager.setSettingsEvasionEnabled(enabled)
+                                if (ok) {
+                                    evasionEnabledState = enabled
+                                    Toast.makeText(context, if (enabled) "Auto Evasión Activada." else "Auto Evasión Desactivada.", Toast.LENGTH_SHORT).show()
+                                }
                             },
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color(0xFF0E141B),

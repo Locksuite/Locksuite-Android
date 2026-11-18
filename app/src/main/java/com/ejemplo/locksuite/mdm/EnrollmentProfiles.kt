@@ -106,10 +106,10 @@ object EnrollmentProfiles {
     ) {
         /**
          * Las restricciones de este perfil que NO se pueden aplicar durante el
-         * aprovisionamiento por QR (B.61). Se calcula, no se declara: así una
-         * restricción nueva que caiga en [POST_ALTA] queda cubierta sola.
+         * aprovisionamiento por QR (B.61). Se calcula solo sobre restricciones en `true`:
+         * las que van explícitamente en `false` no bloquean el alta.
          */
-        val postAlta: Set<String> get() = restrictions.keys.intersect(POST_ALTA)
+        val postAlta: Set<String> get() = restrictions.filterValues { it }.keys.intersect(POST_ALTA)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -168,43 +168,37 @@ object EnrollmentProfiles {
     // lleva (`exportPolicyPresetJson`), y está bien que sea así: ahí hubo una persona
     // mirando el equipo. La diferencia entre los dos casos es deliberada.
 
-    /** Restricciones anti-manipulación. Es el piso de los tres perfiles. */
+    /** Restricciones anti-manipulación. Es el piso de todos los perfiles. */
     private val ANTI_TAMPER: Map<String, Boolean> = mapOf(
         UserManager.DISALLOW_FACTORY_RESET to true,
         UserManager.DISALLOW_SAFE_BOOT to true,
         UserManager.DISALLOW_DEBUGGING_FEATURES to true,
-        UserManager.DISALLOW_UNINSTALL_APPS to true,
+        // LockSuite sigue protegido contra desinstalación como Device Owner (setUninstallBlocked),
+        // pero el usuario puede desinstalar aplicaciones normales.
+        UserManager.DISALLOW_UNINSTALL_APPS to false,
         UserManager.DISALLOW_USER_SWITCH to true,
         UserManager.DISALLOW_CONFIG_VPN to true
     )
 
-    private val STRICT_RESTRICTIONS: Map<String, Boolean> = ANTI_TAMPER + mapOf(
+    /**
+     * Restricciones unificadas para todos los perfiles operativos (18/11/2026):
+     * base del modo Trabajo, dejando habilitados Zona WiFi, fondo de pantalla, idioma,
+     * desinstalación de apps, cuentas y medios físicos. Lo único que distingue a los
+     * perfiles operativos entre sí es el modo de la Tienda Play (`storeMode`).
+     */
+    private val UNIFIED_RESTRICTIONS: Map<String, Boolean> = ANTI_TAMPER + mapOf(
         UserManager.DISALLOW_INSTALL_APPS to true,
         UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES to true,
-        UserManager.DISALLOW_APPS_CONTROL to true,
-        UserManager.DISALLOW_CONFIG_TETHERING to true,
-        UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA to true,
-        UserManager.DISALLOW_BLUETOOTH_SHARING to true,
-        UserManager.DISALLOW_NETWORK_RESET to true,
-        // B.19 — la defensa más barata contra la evasión por idioma: cualquier filtro
-        // que compare texto de pantalla queda mudo si el equipo cambia a un idioma no
-        // previsto. Cuesta que el instalador tenga que dejar el idioma bien ANTES.
-        UserManager.DISALLOW_CONFIG_LOCALE to true,
-        // B.33 — sin esto el Watchdog tiene que reimponer "DNS privado apagado" cada 60 s,
-        // y en esa ventana el filtro DNS no ve nada. Es la más valiosa de las 20 nuevas.
         UserManager.DISALLOW_CONFIG_PRIVATE_DNS to true,
-        UserManager.DISALLOW_CONFIG_CREDENTIALS to true,
-        UserManager.DISALLOW_SET_WALLPAPER to true,
-        UserManager.DISALLOW_CONFIG_DATE_TIME to true,
-        // ⚠️ Bloquea agregar y quitar cuentas de Google. Va en el aviso del perfil: si se
-        // aplica ANTES de terminar el alta de la cuenta, el equipo no se puede dar de
-        // alta. Es el mismo error de razonamiento que costó B.41 punto 3 y B.43: LockSuite
-        // se instala con el equipo SIN cuenta, así que "todavía no hay cuenta" es el
-        // estado de fábrica del procedimiento, no un caso raro.
-        UserManager.DISALLOW_MODIFY_ACCOUNTS to true
+        UserManager.DISALLOW_CONFIG_TETHERING to false,
+        UserManager.DISALLOW_SET_WALLPAPER to false,
+        UserManager.DISALLOW_CONFIG_LOCALE to false,
+        UserManager.DISALLOW_MODIFY_ACCOUNTS to false,
+        UserManager.DISALLOW_APPS_CONTROL to false,
+        UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA to false
     )
 
-    private val STRICT_SWITCHES: Map<String, Boolean> = mapOf(
+    private val UNIFIED_SWITCHES: Map<String, Boolean> = mapOf(
         "adBlockingEnabled" to true,
         "gifsBlocked" to true,
         "whatsappBlockStatus" to true,
@@ -214,161 +208,22 @@ object EnrollmentProfiles {
         "blockMlInMp" to true,
         "blockPopularNonKosher" to true,
         "googleAccountWebBlocked" to true,
-        // B.43 — NORMAL, no estricto. El modo estricto cierra la administración entera de
-        // la cuenta de Google (datos, seguridad, dispositivos, pagos) porque todo eso vive
-        // detrás de UNA sola Activity. El dueño ya reportó eso como bloqueo de más el 4/9.
         "googleAccountBlockStrict" to false,
         "captivePortalGuard" to true,
         "captivePortalCoverImages" to true,
         "contactPhotoPickerBlocked" to true,
         "geminiMessagesBlocked" to true,
         "santanderBlocked" to true,
-        "kosherLauncherEnabled" to true,
+        // Sin launcher kosher en ningún perfil (decisión 18/11/2026).
+        "kosherLauncherEnabled" to false,
         "hideSuspendedApps" to true,
-        "flashingBlocked" to true,
         "accessibilityProtection" to true,
         "accBounceSettings" to true,
         "accNag" to true,
         "bootGateEnabled" to true,
+        // Activadas en todos los perfiles operativos (18/11/2026).
         "bootGateWaitAccessibility" to true,
-        // Explícitamente en false: son las que se decidió no encender de fábrica (ver el
-        // bloque de arriba). Nombrarlas con su valor seguro es mejor que omitirlas,
-        // porque deja el resultado del perfil sin ambigüedad.
-        "accSuspendAll" to false,
-        "kioskLockTask" to false,
-        "nokiaKeypadMode" to false,
-        "nokiaTouchEnabled" to true,
-        "imageBlockStrictScroll" to false,
-        "internetBlocked" to false,
-        "cameraDisabled" to false,
-        "screenCaptureBlocked" to false,
-        "statusBarDisabled" to false,
-        "keyguardDisabled" to false
-    )
-
-    private val WORK_RESTRICTIONS: Map<String, Boolean> = ANTI_TAMPER + mapOf(
-        UserManager.DISALLOW_INSTALL_APPS to true,
-        UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES to true,
-        UserManager.DISALLOW_CONFIG_TETHERING to true,
-        UserManager.DISALLOW_CONFIG_LOCALE to true,
-        UserManager.DISALLOW_CONFIG_PRIVATE_DNS to true,
-        UserManager.DISALLOW_SET_WALLPAPER to true,
-        // Las tres diferencias con el estricto, y son las que hacen que el equipo sirva
-        // para trabajar: se pueden agregar cuentas (correo de la empresa), controlar apps
-        // y usar medios físicos.
-        UserManager.DISALLOW_MODIFY_ACCOUNTS to false,
-        UserManager.DISALLOW_APPS_CONTROL to false,
-        UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA to false
-    )
-
-    private val WORK_SWITCHES: Map<String, Boolean> = mapOf(
-        "adBlockingEnabled" to true,
-        "gifsBlocked" to true,
-        "whatsappBlockStatus" to true,
-        "whatsappBlockChannels" to true,
-        "mercadoPagoBlockOffersAccessibility" to true,
-        "mercadoPagoBlockOffersVpn" to true,
-        "blockMlInMp" to true,
-        "blockPopularNonKosher" to true,
-        "googleAccountWebBlocked" to true,
-        "googleAccountBlockStrict" to false,
-        "captivePortalGuard" to true,
-        "captivePortalCoverImages" to true,
-        "contactPhotoPickerBlocked" to true,
-        "geminiMessagesBlocked" to true,
-        "santanderBlocked" to true,
-        // El launcher kosher queda APAGADO: un equipo de trabajo necesita su lanzador
-        // normal. Es la diferencia más visible entre este nivel y el estricto.
-        "kosherLauncherEnabled" to false,
-        "hideSuspendedApps" to true,
-        "flashingBlocked" to true,
-        "accessibilityProtection" to true,
-        "accBounceSettings" to true,
-        "accNag" to true,
-        "bootGateEnabled" to true,
-        // Costo medio (B.15): esperar a que una persona vaya a Ajustes puede tardar. En un
-        // equipo de trabajo eso es tiempo sin red, así que acá va apagado.
-        "bootGateWaitAccessibility" to false,
-        "accSuspendAll" to false,
-        "kioskLockTask" to false,
-        "nokiaKeypadMode" to false,
-        "nokiaTouchEnabled" to true,
-        "imageBlockStrictScroll" to false,
-        "internetBlocked" to false,
-        "cameraDisabled" to false,
-        "screenCaptureBlocked" to false,
-        "statusBarDisabled" to false,
-        "keyguardDisabled" to false
-    )
-
-    // ── NIVEL 4 — PERÍODO DE GRACIA (auto-personalización) ────────────────────
-    //
-    // La idea, en una línea: **lo claramente no kosher se cierra ya; lo dudoso se deja
-    // abierto un tiempo y se observa.**
-    //
-    // Lo que hace distinto a este perfil de los otros tres no es lo que bloquea, sino lo
-    // que DELIBERADAMENTE deja abierto:
-    //
-    //  · `DISALLOW_INSTALL_APPS` en false → la tienda queda abierta, que es lo que pidió
-    //    el dueño. Es la única de las cuatro entradas de alta donde eso pasa.
-    //  · `kosherLauncherEnabled` en false → el usuario usa su lanzador normal y organiza
-    //    el equipo como quiere. Es "lo que no es tan claro queda a decisión del usuario".
-    //  · `DISALLOW_APPS_CONTROL` en false → puede desinstalar y reordenar sus apps.
-    //
-    // Y lo que NO se negocia ni siquiera durante la gracia:
-    //
-    //  · El piso anti-manipulación entero (no se puede formatear, ni modo seguro, ni
-    //    desinstalar LockSuite). Un período de gracia no es un equipo sin MDM.
-    //  · `DISALLOW_CONFIG_DATE_TIME` → **es la defensa del propio vencimiento.** Sin esto,
-    //    atrasar el reloj alcanza para que el cierre no llegue nunca. Es la única
-    //    restricción de este perfil que está por un motivo mecánico y no de contenido, y
-    //    por eso está anotada acá: si alguien la saca "porque molesta", rompe la función
-    //    entera y no va a ser evidente.
-    //  · Todos los filtros de contenido claros: apps populares no kosher, estados y
-    //    canales de WhatsApp, ofertas de Mercado Pago, historial de la cuenta de Google,
-    //    GIFs, anuncios, portal cautivo, selector de fotos de contacto.
-    private val GRACE_RESTRICTIONS: Map<String, Boolean> = ANTI_TAMPER + mapOf(
-        UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES to true,
-        UserManager.DISALLOW_CONFIG_PRIVATE_DNS to true,
-        UserManager.DISALLOW_CONFIG_LOCALE to true,
-        // La que sostiene el vencimiento. Ver el comentario de arriba.
-        UserManager.DISALLOW_CONFIG_DATE_TIME to true,
-        UserManager.DISALLOW_CONFIG_TETHERING to true,
-        // Explícitamente abiertas durante la gracia:
-        UserManager.DISALLOW_INSTALL_APPS to false,
-        UserManager.DISALLOW_APPS_CONTROL to false,
-        UserManager.DISALLOW_MODIFY_ACCOUNTS to false,
-        UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA to false
-    )
-
-    private val GRACE_SWITCHES: Map<String, Boolean> = mapOf(
-        // Lo claramente no kosher: cerrado desde el minuto cero.
-        "adBlockingEnabled" to true,
-        "gifsBlocked" to true,
-        "whatsappBlockStatus" to true,
-        "whatsappBlockChannels" to true,
-        "mercadoPagoBlockOffersAccessibility" to true,
-        "mercadoPagoBlockOffersVpn" to true,
-        "blockMlInMp" to true,
-        "blockPopularNonKosher" to true,
-        "googleAccountWebBlocked" to true,
-        "googleAccountBlockStrict" to false,
-        "captivePortalGuard" to true,
-        "captivePortalCoverImages" to true,
-        "contactPhotoPickerBlocked" to true,
-        "geminiMessagesBlocked" to true,
-        "santanderBlocked" to true,
-        "flashingBlocked" to true,
-        "accessibilityProtection" to true,
-        "accBounceSettings" to true,
-        "accNag" to true,
-        "bootGateEnabled" to true,
-        // Lo dudoso: abierto, a criterio del usuario, hasta que venza.
-        "kosherLauncherEnabled" to false,
-        "hideSuspendedApps" to false,
-        "bootGateWaitAccessibility" to false,
-        // Nunca, en ningún perfil de alta:
-        "accSuspendAll" to false,
+        "accSuspendAll" to true,
         "kioskLockTask" to false,
         "nokiaKeypadMode" to false,
         "nokiaTouchEnabled" to true,
@@ -386,7 +241,6 @@ object EnrollmentProfiles {
         "accessibilityProtection" to true,
         "geminiMessagesBlocked" to true,
         "santanderBlocked" to true,
-        "flashingBlocked" to true,
         "bootGateEnabled" to true,
         "captivePortalGuard" to true,
         "captivePortalCoverImages" to true,
@@ -407,84 +261,72 @@ object EnrollmentProfiles {
      * Los números del nombre ("Nivel 5", "Nivel 6") son los que usa el dueño y NO siguen
      * este orden: se agregaron después y los viejos no se renumeran.
      *
-     * **Modo de la Tienda Play de cada uno (B.101):**
-     *  · Nivel 1 Estricto → `kosher` · Nivel 2 Trabajo → `trabajo` · Nivel 5 Solo llamadas
-     *    → `cerrada` · Nivel 6 Lite → `lite`.
-     *  · Nivel 4 Gracia → `lite` mientras dure (toda la tienda); al vencer se aplica el
-     *    perfil de cierre —por omisión el Nivel 1— y la tienda queda en `kosher`.
-     *  · Nivel 3 Base mínima → `null`: es un perfil de diagnóstico y no decide sobre la
-     *    tienda (clave ausente = no se toca).
+     * **Políticas unificadas (18/11/2026):**
+     * Los 5 perfiles operativos (Niveles 5, 1, 2, 6 y 4) aplican exactamente las mismas
+     * restricciones e interruptores (sin launcher kosher, permitiendo zona WiFi, fondo de
+     * pantalla, idioma, desinstalar apps y cuentas, con suspensión sin accesibilidad y espera
+     * de accesibilidad en arranque protegido activas). Solo cambia `storeMode`:
+     *  · Nivel 5 Solo llamadas → `cerrada` · Nivel 1 Kosher → `kosher` · Nivel 2 Trabajo →
+     *    `trabajo` · Nivel 6 Lite → `lite` · Nivel 4 Gracia → `lite` mientras dure y `kosher`
+     *    al terminar (al aplicar Nivel 1).
+     *  · Nivel 3 Base mínima → `null`: perfil diagnóstico sin filtros de contenido; no toca la tienda.
      */
     val ALL: List<MasterProfile> = listOf(
         MasterProfile(
             id = LEVEL_CALLS_ONLY,
             label = "Nivel 5 — Solo llamadas",
-            summary = "Las mismas protecciones del Nivel 1, con la Tienda Play CERRADA: " +
-                "no se puede instalar nada desde la tienda.",
-            // Usa las restricciones del Nivel 1, así que tiene el mismo riesgo de alta.
-            warning = "Bloquea agregar y quitar cuentas de Google, y bloquea el cambio de " +
-                "idioma. Aplicalo DESPUÉS de haber agregado la cuenta de Google y de haber " +
-                "dejado el equipo en el idioma definitivo.",
-            restrictions = STRICT_RESTRICTIONS,
-            switches = STRICT_SWITCHES,
+            summary = "Mismas protecciones unificadas que el resto de los niveles (sin launcher kosher; " +
+                "permite zona WiFi, fondo, idioma y desinstalar apps), con la Tienda Play CERRADA.",
+            warning = "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de " +
+                "Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo.",
+            restrictions = UNIFIED_RESTRICTIONS,
+            switches = UNIFIED_SWITCHES,
             storeMode = PlayStoreCatalog.MODE_CLOSED
         ),
         MasterProfile(
             id = LEVEL_STRICT,
             label = "Nivel 1 — Kosher estricto",
-            summary = "Llamadas, mensajes, bancos y las apps permitidas. Sin navegador, " +
-                "sin estados de WhatsApp, sin ofertas, con launcher kosher. La Tienda " +
-                "Play queda en modo kosher (solo las pocas apps del nivel 1).",
-            // El aviso es la parte más importante de esta entrada. Un perfil de alta que
-            // se aplica en el momento equivocado deja un equipo que no se puede dar de
-            // alta, y el instalador no tendría cómo saber por qué.
-            warning = "Bloquea agregar y quitar cuentas de Google, y bloquea el cambio de " +
-                "idioma. Aplicalo DESPUÉS de haber agregado la cuenta de Google y de haber " +
-                "dejado el equipo en el idioma definitivo.",
-            restrictions = STRICT_RESTRICTIONS,
-            switches = STRICT_SWITCHES,
+            summary = "Mismas protecciones unificadas (sin launcher kosher; permite zona WiFi, fondo, " +
+                "idioma y desinstalar apps; sin navegador, ofertas ni estados). Lo único que cambia " +
+                "es la Tienda Play en modo kosher (nivel 1).",
+            warning = "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de " +
+                "Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo.",
+            restrictions = UNIFIED_RESTRICTIONS,
+            switches = UNIFIED_SWITCHES,
             storeMode = PlayStoreCatalog.MODE_KOSHER
         ),
         MasterProfile(
             id = LEVEL_WORK,
             label = "Nivel 2 — Trabajo",
-            summary = "Todo lo del Nivel 1 salvo el launcher kosher, y deja agregar " +
-                "cuentas de correo y manejar las apps del equipo. La Tienda Play queda " +
-                "en modo trabajo (niveles 1 y 2).",
-            warning = "Bloquea el cambio de idioma del sistema: dejá el equipo en el " +
-                "idioma definitivo antes de aplicarlo.",
-            restrictions = WORK_RESTRICTIONS,
-            switches = WORK_SWITCHES,
+            summary = "Mismas protecciones unificadas (sin launcher kosher; permite zona WiFi, fondo, " +
+                "idioma y desinstalar apps). La Tienda Play queda en modo trabajo (niveles 1 y 2).",
+            warning = "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de " +
+                "Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo.",
+            restrictions = UNIFIED_RESTRICTIONS,
+            switches = UNIFIED_SWITCHES,
             storeMode = PlayStoreCatalog.MODE_WORK
         ),
         MasterProfile(
             id = LEVEL_LITE,
             label = "Nivel 6 — Lite",
-            summary = "Las mismas protecciones del Nivel 2 (Trabajo), con la Tienda Play " +
-                "abierta COMPLETA: los niveles 1, 2 y 3 del catálogo.",
-            warning = "Bloquea el cambio de idioma del sistema: dejá el equipo en el " +
-                "idioma definitivo antes de aplicarlo.",
-            restrictions = WORK_RESTRICTIONS,
-            switches = WORK_SWITCHES,
+            summary = "Mismas protecciones unificadas (sin launcher kosher; permite zona WiFi, fondo, " +
+                "idioma y desinstalar apps), con la Tienda Play abierta COMPLETA: niveles 1, 2 y 3.",
+            warning = "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de " +
+                "Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo.",
+            restrictions = UNIFIED_RESTRICTIONS,
+            switches = UNIFIED_SWITCHES,
             storeMode = PlayStoreCatalog.MODE_LITE
         ),
         MasterProfile(
             id = LEVEL_GRACE,
             label = "Nivel 4 — Período de gracia",
-            summary = "Bloquea todo lo claramente no kosher y deja lo dudoso a criterio " +
-                "del usuario, con la tienda abierta (la Tienda Play completa). Al vencer " +
-                "el plazo se cierra solo aplicando el Nivel 1, que deja la tienda en modo " +
-                "kosher.",
-            // Los dos avisos que importan: que el equipo queda MÁS abierto de lo normal
-            // mientras dure, y qué se gana a cambio — porque si el administrador no sabe
-            // que la auditoría se está llenando, no la va a mirar y se pierde la mitad del
-            // valor de esperar dos días.
-            warning = "Mientras dure, el equipo queda más abierto: puede instalar apps y " +
-                "usar su lanzador normal. A cambio, LockSuite va anotando qué dominios usa " +
-                "de verdad — miralos en la pestaña Lista blanca antes de cerrar. " +
+            summary = "Mismas protecciones unificadas con la Tienda Play abierta COMPLETA por un plazo " +
+                "elegido. Al vencer se aplica el Nivel 1, pasando la Tienda Play a modo kosher.",
+            warning = "Mientras dure, la Tienda Play queda abierta completa (niveles 1, 2 y 3) y al vencer " +
+                "pasa a modo kosher. Activa la suspensión de apps sin Accesibilidad y su espera en arranque. " +
                 "El plazo se elige al aplicarlo.",
-            restrictions = GRACE_RESTRICTIONS,
-            switches = GRACE_SWITCHES,
+            restrictions = UNIFIED_RESTRICTIONS,
+            switches = UNIFIED_SWITCHES,
             storeMode = PlayStoreCatalog.MODE_LITE
         ),
         MasterProfile(
@@ -493,7 +335,7 @@ object EnrollmentProfiles {
             summary = "Solo el piso anti-manipulación: no se puede formatear, ni entrar " +
                 "en modo seguro, ni desinstalar LockSuite. Ningún filtro de contenido. " +
                 "No toca la Tienda Play.",
-            // Este es el único de los tres que AFLOJA. Decirlo en el aviso y no en la
+            // Este es el único que AFLOJA. Decirlo en el aviso y no en la
             // descripción: la confirmación es lo único que la persona lee seguro.
             warning = "Este perfil APAGA los filtros de contenido (anuncios, GIFs, estados " +
                 "de WhatsApp, ofertas, cuenta de Google, launcher kosher). Usalo para " +
@@ -523,11 +365,9 @@ object EnrollmentProfiles {
 
         val restrictionsObj = JSONObject()
         for ((key, value) in profile.restrictions) {
-            // B.61 — durante el aprovisionamiento por QR se omiten las de [POST_ALTA].
-            // Se OMITEN (la clave no aparece), no se ponen en `false`: el importador
-            // trata "clave ausente" como "no se toca", y ponerlas en false las
-            // levantaría explícitamente en un equipo que ya las tuviera puestas.
-            if (!incluirPostAlta && key in POST_ALTA) continue
+            // B.61 — durante el aprovisionamiento por QR se omiten las de [POST_ALTA] en true.
+            // Si están en false no bloquean el alta y se conservan explícitas.
+            if (!incluirPostAlta && value && key in POST_ALTA) continue
             restrictionsObj.put(key, value)
         }
         data.put("restrictions", restrictionsObj)

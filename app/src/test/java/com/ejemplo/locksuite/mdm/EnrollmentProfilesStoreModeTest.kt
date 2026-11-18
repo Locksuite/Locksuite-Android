@@ -108,4 +108,48 @@ class EnrollmentProfilesStoreModeTest {
         assertEquals(b.restrictions, a.restrictions)
         assertEquals(b.switches, a.switches)
     }
+
+    @Test
+    fun perfilesOperativos_compartenMismasRestriccionesYSwitches_soloCambiaLaTienda() {
+        val operativos = listOf(
+            EnrollmentProfiles.LEVEL_CALLS_ONLY,
+            EnrollmentProfiles.LEVEL_STRICT,
+            EnrollmentProfiles.LEVEL_WORK,
+            EnrollmentProfiles.LEVEL_LITE,
+            EnrollmentProfiles.LEVEL_GRACE
+        ).map { EnrollmentProfiles.byId(it)!! }
+
+        val ref = operativos.first()
+        for (p in operativos) {
+            assertEquals("Restricciones distintas en ${p.id}", ref.restrictions, p.restrictions)
+            assertEquals("Switches distintos en ${p.id}", ref.switches, p.switches)
+        }
+
+        // Reglas explícitas del dueño (18/11/2026)
+        assertEquals(false, ref.switches["kosherLauncherEnabled"])
+        assertEquals(true, ref.switches["accSuspendAll"])
+        assertEquals(true, ref.switches["bootGateWaitAccessibility"])
+        assertEquals(false, ref.restrictions[android.os.UserManager.DISALLOW_CONFIG_TETHERING])
+        assertEquals(false, ref.restrictions[android.os.UserManager.DISALLOW_SET_WALLPAPER])
+        assertEquals(false, ref.restrictions[android.os.UserManager.DISALLOW_CONFIG_LOCALE])
+        assertEquals(false, ref.restrictions[android.os.UserManager.DISALLOW_UNINSTALL_APPS])
+        assertEquals(false, ref.restrictions[android.os.UserManager.DISALLOW_MODIFY_ACCOUNTS])
+    }
+
+    @Test
+    fun ningunPerfilTieneFlashingBlocked_yPostAltaQuedaVacioSiEstanEnFalse() {
+        for (p in EnrollmentProfiles.ALL) {
+            assertTrue("flashingBlocked sigue presente en ${p.id}", !p.switches.containsKey("flashingBlocked"))
+            assertEquals(false, p.restrictions[android.os.UserManager.DISALLOW_UNINSTALL_APPS])
+        }
+        for (id in listOf(
+            EnrollmentProfiles.LEVEL_CALLS_ONLY,
+            EnrollmentProfiles.LEVEL_STRICT,
+            EnrollmentProfiles.LEVEL_WORK,
+            EnrollmentProfiles.LEVEL_LITE,
+            EnrollmentProfiles.LEVEL_GRACE
+        )) {
+            assertTrue("postAlta no debería exigir bloqueo para $id", EnrollmentProfiles.pendientesDeAlta(id).isEmpty())
+        }
+    }
 }

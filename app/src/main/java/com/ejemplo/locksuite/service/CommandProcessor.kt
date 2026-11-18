@@ -265,8 +265,8 @@ class CommandProcessor(private val context: Context) {
                 "UNBLOCK_UNINSTALL_APPS" -> policyManager.setUninstallAppsBlocked(false)
                 "BLOCK_FACTORY_RESET" -> policyManager.setFactoryResetBlocked(true)
                 "UNBLOCK_FACTORY_RESET" -> policyManager.setFactoryResetBlocked(false)
-                "BLOCK_FLASHING" -> policyManager.setFlashingBlocked(true)
-                "UNBLOCK_FLASHING" -> policyManager.setFlashingBlocked(false)
+                "ENABLE_FRP" -> policyManager.setFrpPolicy(policyManager.getFrpAccounts(), policyManager.useDefaultFrp(), true)
+                "DISABLE_FRP" -> policyManager.setFrpPolicy(policyManager.getFrpAccounts(), policyManager.useDefaultFrp(), false)
                 "BLOCK_ADB" -> policyManager.setDebuggingFeaturesBlocked(true)
                 "UNBLOCK_ADB" -> policyManager.setDebuggingFeaturesBlocked(false)
                 "BLOCK_USER_SWITCH" -> policyManager.setUserSwitchBlocked(true)
@@ -333,6 +333,10 @@ class CommandProcessor(private val context: Context) {
                 "ENABLE_KEYGUARD" -> policyManager.setKeyguardDisabled(false)
                 "BLOCK_INTERNET" -> policyManager.setInternetBlocked(true)
                 "UNBLOCK_INTERNET" -> policyManager.setInternetBlocked(false)
+                "SUSPEND_BROWSERS" -> policyManager.setBrowsersSuspended(true)
+                "UNSUSPEND_BROWSERS" -> policyManager.setBrowsersSuspended(false)
+                "SUSPEND_SYSTEM_WEBVIEW" -> policyManager.setSystemWebViewSuspended(true)
+                "UNSUSPEND_SYSTEM_WEBVIEW" -> policyManager.setSystemWebViewSuspended(false)
                 "ENABLE_ADBLOCK" -> policyManager.setAdBlockingEnabled(true)
                 "DISABLE_ADBLOCK" -> policyManager.setAdBlockingEnabled(false)
                 "BLOCK_GIFS" -> policyManager.setGifsBlocked(true)
@@ -436,6 +440,16 @@ class CommandProcessor(private val context: Context) {
                     policyManager.setHideSuspendedApps(enabled)
                     true
                 }
+                "ENABLE_HIDE_SUSPENDED_APPS" -> {
+                    policyManager.setHideSuspendedApps(true)
+                    true
+                }
+                "DISABLE_HIDE_SUSPENDED_APPS" -> {
+                    policyManager.setHideSuspendedApps(false)
+                    true
+                }
+                "ENABLE_SETTINGS_EVASION" -> policyManager.setSettingsEvasionEnabled(true)
+                "DISABLE_SETTINGS_EVASION" -> policyManager.setSettingsEvasionEnabled(false)
                 "BLOCK_POPULAR_NON_KOSHER" -> {
                     policyManager.setBlockPopularNonKosher(true)
                 }

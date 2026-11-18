@@ -763,13 +763,26 @@
   /* ═════════════════════════════════════════════════════════════════════════
    * POLÍTICAS
    * ═══════════════════════════════════════════════════════════════════════ */
+  function normPol(s) {
+    return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  }
+
+  function valorActualPolitica(f) {
+    if (f === "whitelistEnforce") return campo("whitelistSimulation", true) === false;
+    if (f === "iabFinderEnforce") return campo("iabFinderSimulation", true) === false;
+    const defVal = (f === "googleAccountWebBlocked" || f === "contactPhotoPickerBlocked" ||
+      f === "geminiMessagesBlocked" || f === "santanderBlocked" || f === "whitelistSharedCdn" ||
+      f === "captivePortalGuard" || f === "captivePortalCoverImages");
+    return campo(f, defVal) === true;
+  }
+
   function pintarPoliticas() {
     const defs = LS.politicas().policies || [];
-    const q = ($("c-pol-buscar").value || "").trim().toLowerCase();
+    const q = normPol(($("c-pol-buscar").value || "").trim());
     const soloOn = $("c-pol-solo-on").checked;
 
     const valor = (f) => Object.prototype.hasOwnProperty.call(S.pendPol, f)
-      ? S.pendPol[f] : !!campo(f, false);
+      ? S.pendPol[f] : valorActualPolitica(f);
 
     $("cnt-pol").textContent = defs.filter((p) => valor(p.field)).length + "/" + defs.length;
     // Se compara contra lo DIBUJADO: abrir/cerrar los grupos no tiene que perderse
@@ -777,8 +790,8 @@
     if (!cambio("pol", [q, soloOn, defs.map((p) => valor(p.field)), S.pendPol])) return;
 
     let lista = defs;
-    if (q) lista = lista.filter((p) => p.label.toLowerCase().includes(q) ||
-      p.field.toLowerCase().includes(q) || p.group.toLowerCase().includes(q));
+    if (q) lista = lista.filter((p) => normPol(p.label).includes(q) ||
+      normPol(p.field).includes(q) || normPol(p.group).includes(q));
     if (soloOn) lista = lista.filter((p) => valor(p.field));
 
     const grupos = [];
@@ -818,7 +831,17 @@
     const inp = e.target.closest("input[data-field]");
     if (!inp) return;
     const f = inp.dataset.field;
-    const actual = !!campo(f, false);
+    const actual = valorActualPolitica(f);
+    if (f === "iabFinderEnforce" && inp.checked && !actual) {
+      if (!confirm(
+        "A partir de ahora el detector de navegadores embebidos va a BLOQUEAR de verdad en este celular.\n\n" +
+        "Antes de seguir, mirá la auditoría más arriba: un falso positivo puede dejar una " +
+        "app sin funcionar sin mensaje que lo explique.\n\n¿Seguimos?"
+      )) {
+        inp.checked = false;
+        return;
+      }
+    }
     if (inp.checked === actual) delete S.pendPol[f];
     else S.pendPol[f] = inp.checked;
     pintarPoliticas();
@@ -1135,22 +1158,24 @@
    * ═══════════════════════════════════════════════════════════════════════ */
   const NIVELES = [
     { id: "kosher_estricto", nombre: "Nivel 1 — Kosher estricto",
-      desc: "Todo cerrado. Bloquea el cambio de cuentas y de idioma.",
-      aviso: "⚠️ Aplicalo DESPUÉS de agregar la cuenta de Google y fijar el idioma: bloquea las dos cosas. Si lo aplicás antes, el equipo no se puede terminar de dar de alta." },
+      desc: "Mismas protecciones unificadas (sin launcher kosher; permite zona WiFi, fondo, idioma y desinstalar apps). La Tienda Play queda en modo Kosher (nivel 1).",
+      aviso: "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo." },
     { id: "trabajo", nombre: "Nivel 2 — Trabajo",
-      desc: "Restricciones fuertes, pero deja trabajar.", aviso: "" },
+      desc: "Mismas protecciones unificadas (sin launcher kosher; permite zona WiFi, fondo, idioma y desinstalar apps). La Tienda Play pasa a modo Trabajo (niveles 1 y 2).",
+      aviso: "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo." },
     { id: "base_minima", nombre: "Nivel 3 — Base mínima",
-      desc: "Solo el piso anti-manipulación.", aviso: "" },
+      desc: "Solo el piso anti-manipulación (no se puede formatear, modo seguro ni desinstalar LockSuite). Ningún filtro de contenido.",
+      aviso: "Apaga los filtros de contenido. Usalo solo para diagnosticar, no para entregar un equipo." },
     { id: "gracia", nombre: "Nivel 4 — Período de gracia",
-      desc: "Cierra lo claramente no kosher y deja lo dudoso abierto por un plazo. Mientras tanto, anota qué usa esta persona para completar el catálogo.",
-      aviso: "Al vencer, se cierra solo (aplica el Nivel 1) y la Tienda Play queda en modo Kosher. El plazo lo aguantan dos relojes, así que atrasar la hora del equipo no lo estira." },
+      desc: "Mismas protecciones unificadas con la Tienda Play abierta completa por el plazo elegido. Al vencer se cierra aplicando el Nivel 1 (Tienda Play en modo Kosher).",
+      aviso: "Mientras dure, la Tienda Play queda abierta completa y al vencer pasa a modo Kosher. El plazo lo aguantan dos relojes, así que atrasar la hora no lo estira." },
     // 29/10/2026 (B.101). Los números 5 y 6 NO siguen el orden: se agregaron después y los viejos no se renumeran.
     { id: "solo_llamadas", nombre: "Nivel 5 — Solo llamadas",
-      desc: "Las protecciones del Nivel 1, con la Tienda Play CERRADA: no se puede instalar nada desde la tienda.",
-      aviso: "⚠️ Como el Nivel 1, bloquea el cambio de cuentas y de idioma: aplicalo DESPUÉS de agregar la cuenta de Google y fijar el idioma." },
+      desc: "Mismas protecciones unificadas (sin launcher kosher; permite zona WiFi, fondo, idioma y desinstalar apps), con la Tienda Play CERRADA.",
+      aviso: "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo." },
     { id: "lite", nombre: "Nivel 6 — Lite",
-      desc: "Las protecciones del Nivel 2 (Trabajo), con la Tienda Play abierta COMPLETA (niveles 1, 2 y 3).",
-      aviso: "Bloquea el cambio de idioma del sistema: dejá el equipo en el idioma definitivo antes de aplicarlo." }
+      desc: "Mismas protecciones unificadas (sin launcher kosher; permite zona WiFi, fondo, idioma y desinstalar apps), con la Tienda Play abierta COMPLETA (niveles 1, 2 y 3).",
+      aviso: "Activa la suspensión de apps si la Accesibilidad se apaga y la espera de Accesibilidad en el arranque protegido: dejá el servicio de Accesibilidad activo." }
   ];
 
   function pintarPerfiles() {
