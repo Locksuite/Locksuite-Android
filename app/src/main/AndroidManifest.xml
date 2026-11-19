@@ -94,6 +94,13 @@
             </intent-filter>
         </receiver>
 
+        <!-- 19/11/2026 (B.125, T3.2): ALARMA DE RESCATE + sentinela de detención forzada.
+             Solo la dispara el propio paquete (PendingIntent propio), por eso exported=false.
+             Ver util/ProcessHealth.kt. -->
+        <receiver
+            android:name=".receiver.ReviveReceiver"
+            android:exported="false" />
+
         <!-- SECRET CODE RECEIVER (Marcador telefónico) -->
         <receiver
             android:name=".receiver.SecretCodeReceiver"

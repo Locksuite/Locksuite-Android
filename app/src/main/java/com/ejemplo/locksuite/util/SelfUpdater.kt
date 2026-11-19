@@ -176,6 +176,16 @@ object SelfUpdater {
 
                 tempFile.delete()
                 return@withContext null
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 19/11/2026 (B.125, T4): una CANCELACIÓN no es un error de instalación. Antes
+                // la tragaba el `catch (e: Exception)` de abajo y se mostraba como «Error de
+                // actualización: rememberCoroutineScope left the composition» (así se perdió la
+                // instalación de «Fondos» el 16/11). Se hace la misma limpieza y se vuelve a lanzar.
+                try { File(context.cacheDir, "locksuite_update.apk").delete() } catch (_: Exception) {}
+                if (temporaryInstallAccessPrepared && !installCommitSubmitted) {
+                    com.ejemplo.locksuite.mdm.PolicyManager(context).restoreInstallRestrictions()
+                }
+                throw e
             } catch (e: Exception) {
                 try { File(context.cacheDir, "locksuite_update.apk").delete() } catch (_: Exception) {}
                 if (temporaryInstallAccessPrepared && !installCommitSubmitted) {
@@ -379,6 +389,15 @@ object SelfUpdater {
                 }
 
                 return@withContext null
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 19/11/2026 (B.125, T4): una CANCELACIÓN no es un «Error al instalar». Antes
+                // este mismo `catch (e: Exception)` se la tragaba y la informaba como error
+                // (`rememberCoroutineScope left the composition`, «Fondos», 16/11). Misma limpieza
+                // y se vuelve a lanzar; el `finally` de abajo borra el temporal.
+                if (temporaryInstallAccessPrepared && !installCommitSubmitted) {
+                    com.ejemplo.locksuite.mdm.PolicyManager(context).restoreInstallRestrictions()
+                }
+                throw e
             } catch (e: Exception) {
                 if (temporaryInstallAccessPrepared && !installCommitSubmitted) {
                     com.ejemplo.locksuite.mdm.PolicyManager(context).restoreInstallRestrictions()

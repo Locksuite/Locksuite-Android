@@ -104,7 +104,12 @@ object FirebaseDeviceSync {
     }
 
     fun syncToken(context: Context, token: String) {
+        // 19/11/2026 (B.125, T5): el cambio de estado «mal → bien» también se anota, una vez.
+        val estabaMal = fcmAvailable(context) == false
         markFcmState(context, true, null)
+        if (estabaMal) {
+            com.ejemplo.locksuite.diag.DiagLog.i("fcm", "El token FCM volvió a obtenerse")
+        }
         withAuth {
             val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
             val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
@@ -794,9 +799,21 @@ object FirebaseDeviceSync {
                     } else {
                         // FIX #1: ver nota al principio del archivo.
                         val reason = task.exception?.message ?: "FCM no devolvió ningún token"
+                        // 19/11/2026 (B.125, T5): antes esto hacía `printStackTrace()` en CADA
+                        // intento (cada hora): ~60 de los 400 renglones del registro en 29 h, que
+                        // por eso no llegaba más atrás del 11/11. Ahora se anota UNA vez por
+                        // cambio de estado (bien → mal); el motivo queda en `fcmTokenError` del
+                        // panel y los comandos siguen llegando por el buzón en vivo (B.95).
+                        val estabaMal = fcmAvailable(context) == false
                         // 26/10/2026 (B.95): sin FCM, el buzón pasa a escucharse en vivo.
                         markFcmState(context, false, reason)
-                        task.exception?.printStackTrace()
+                        if (!estabaMal) {
+                            com.ejemplo.locksuite.diag.DiagLog.w(
+                                "fcm",
+                                "No se pudo obtener el token FCM: ${reason.take(160)} " +
+                                    "(los comandos siguen llegando por el buzón en vivo)"
+                            )
+                        }
                         withAuth {
                             val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
                             ref.updateChildren(
@@ -1192,8 +1209,17 @@ object FirebaseDeviceSync {
         }
 
         var traceSnippet = ""
+        val esAnr = exit.reason == android.app.ApplicationExitInfo.REASON_ANR
         try {
             exit.traceInputStream?.use { stream ->
+                // 19/11/2026 (B.125, T2.1): en un ANR se guarda el MOTIVO (`Subject:`), el hilo
+                // principal y los hilos de LockSuite, no solo las primeras 35 líneas. Ver
+                // diag/AnrTraceHead.kt. El resto de los cierres (crash) sigue como antes.
+                if (esAnr) {
+                    val lines = stream.bufferedReader(Charsets.UTF_8).useLines { it.take(3000).toList() }
+                    traceSnippet = com.ejemplo.locksuite.diag.AnrTraceHead.extract(lines)
+                    return@use
+                }
                 val reader = java.io.BufferedReader(java.io.InputStreamReader(stream))
                 val sb = StringBuilder()
                 var lines = 0
@@ -1225,6 +1251,11 @@ object FirebaseDeviceSync {
             val firstLine = traceSnippet.lines().firstOrNull { it.isNotBlank() } ?: ""
             detail = firstLine.take(250)
         }
+        // 19/11/2026 (B.125, T2.1): en un ANR el detalle que ve el panel incluye el motivo.
+        if (esAnr && traceSnippet.startsWith("Subject:")) {
+            val subject = traceSnippet.lineSequence().first().removePrefix("Subject:").trim()
+            detail = (if (detail.isBlank()) subject else "$detail — $subject").take(250)
+        }
 
         val res = mutableMapOf<String, Any>(
             "lastExitReason" to reasonStr,
@@ -1233,7 +1264,9 @@ object FirebaseDeviceSync {
             "lastExitDetail" to detail
         )
         if (traceSnippet.isNotBlank()) {
-            res["lastExitTrace"] = traceSnippet.take(1500)
+            res["lastExitTrace"] = traceSnippet.take(
+                if (esAnr) com.ejemplo.locksuite.diag.AnrTraceHead.MAX_CHARS else 1500
+            )
         }
         return res
     }

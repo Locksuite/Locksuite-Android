@@ -76,7 +76,9 @@ class DashboardActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+        // 19/11/2026 (B.125, T2.2): quién arrancó este proceso (pantalla DashboardActivity).
+        com.ejemplo.locksuite.diag.DiagLog.firstEntry("pantalla DashboardActivity")
+
         // Proteger actividad contra capturas de pantalla/grabaciones (H12)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
         
@@ -1454,15 +1456,12 @@ fun PoliciesTabContent(context: Context) {
                         color = Color.White.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )
-                    val coroutineScope = rememberCoroutineScope()
                     Button(
                         onClick = {
-                            coroutineScope.launch {
-                                val error = com.ejemplo.locksuite.util.SelfUpdater.checkAndPerformUpdate(context, true)
-                                if (error != null) {
-                                    Toast.makeText(context, error, Toast.LENGTH_LONG).show()
-                                }
-                            }
+                            // 19/11/2026 (B.125, T4): en el scope de PROCESO. Antes corría en
+                            // `rememberCoroutineScope()` y salir de esta pantalla cancelaba la
+                            // actualización a mitad de camino.
+                            com.ejemplo.locksuite.util.StoreInstallManager.selfUpdate(context, true)
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C438), contentColor = Color(0xFF0E141B)),
                         modifier = Modifier.fillMaxWidth()

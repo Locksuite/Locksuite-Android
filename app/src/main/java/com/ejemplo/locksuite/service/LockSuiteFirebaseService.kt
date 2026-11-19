@@ -11,6 +11,26 @@ import com.google.firebase.messaging.RemoteMessage
 class LockSuiteFirebaseService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
+        // 19/11/2026 (B.125, T3.1) — LATIDO INVERSO. Una función programada del panel le manda
+        // `wake=1` (FCM de prioridad alta) a los equipos que llevan un rato sin latir. Despierta
+        // el proceso, vuelve a levantar el Watchdog y la VPN, y avisa que está vivo. NO es un
+        // comando: sin firma, sin PIN, sin ACK y no ejecuta ninguna acción del panel.
+        if (message.data["wake"] == "1") {
+            com.ejemplo.locksuite.diag.DiagLog.firstEntry("FCM WAKE del servidor")
+            com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(this, "FCM WAKE")
+            com.ejemplo.locksuite.util.Safe.guard("FCM.wake") {
+                val watchdog = android.content.Intent(this, WatchdogForegroundService::class.java)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    startForegroundService(watchdog)
+                } else {
+                    startService(watchdog)
+                }
+                com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(this)
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(this)
+            }
+            return
+        }
+        com.ejemplo.locksuite.diag.DiagLog.firstEntry("FCM")
         // 7/11/2026 (B.112): un comando puede llegar justo al desbloquear, antes de que corra la
         // inicialización completa (Firebase incluido) en un proceso nacido con el equipo bloqueado.
         com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(this, "FCM")

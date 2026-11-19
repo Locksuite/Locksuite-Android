@@ -13,9 +13,6 @@ import com.google.firebase.FirebaseApp
 import com.ejemplo.locksuite.dns.DomainRuleEngine
 import com.ejemplo.locksuite.dns.DnsActivityBuffer
 import com.ejemplo.locksuite.dns.DomainRuleManager
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import androidx.work.Configuration
 
 /**
@@ -370,13 +367,14 @@ class LockSuiteApplication : Application(), Configuration.Provider {
         // proceso (hasta 20s en equipos de gama de entrada como Qin F21 Pro o CAT S22 Flip),
         // manteniendo visible la ventana de splash nativa (#0B192C azul) y provocando que
         // el sistema operativo disparara un ANR antes de mostrar la UI de bienvenida o PIN.
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                PolicyManager(this@LockSuiteApplication).reapplyAllRestrictions()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
+        //
+        // 19/11/2026 (B.125, T1): por ReconcileScheduler, no por una corrutina propia. Así la
+        // pasada del arranque y la que pide BootReceiver (broadcast de arranque o de
+        // actualización) son UNA sola: antes eran dos pasadas enteras en fila (por reapplyLock)
+        // y la segunda corría con el broadcast retenido → ANR. Ver util/ReconcileScheduler.kt.
+        com.ejemplo.locksuite.util.ReconcileScheduler.request(
+            this, "arranque del proceso", startup = true
+        )
 
         // 2b. Activar la licencia Knox (Samsung) — no hace nada en otras marcas ni
         // mientras el SDK de Knox no este integrado (ver KnoxHardening.kt).
@@ -438,6 +436,11 @@ class LockSuiteApplication : Application(), Configuration.Provider {
         // 8. (7/11/2026, B.112) Autorreparación de la accesibilidad «zombi»: si el proceso
         //    anterior murió en medio de un ciclo del ajuste, reponer el servicio YA.
         com.ejemplo.locksuite.util.AccessibilityZombieHealer.onProcessStart(this)
+
+        // 9. (19/11/2026, B.125, T2.3 y T3.2) ¿Este arranque viene de una detención forzada?
+        //    (queda anotado) y se arma la alarma de rescate. Nunca lanza.
+        com.ejemplo.locksuite.util.ProcessHealth.onProcessStart(this)
+        com.ejemplo.locksuite.util.ProcessHealth.scheduleRescueIfDue(this)
     }
 
     /**

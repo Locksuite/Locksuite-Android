@@ -45,6 +45,26 @@ object DiagLogcatParser {
         return out
     }
 
+    /**
+     * 19/11/2026 (B.125, T6) — RUIDO DEL SISTEMA DEL FABRICANTE. Mensajes `E/` que Android o el
+     * vendor escriben en CADA arranque en frío del proceso y que no dicen nada de LockSuite.
+     * En el informe del Qin F21 de Iejiel eran 8 de los 19 «errores». Lista CERRADA de patrones:
+     * no es un filtro general, y un error propio (`SelfUpdater`, `LockSuiteFCM`, …) nunca entra.
+     */
+    private val VENDOR_NOISE = listOf(
+        Regex("""Not starting debugger since process cannot load the jdwp agent"""),
+        Regex("""Access denied finding property "ro\.vendor\."""),
+        Regex("""No package ID [0-9a-fA-F]+ found for ID""")
+    )
+
+    /** `ion: ioctl c0044901 failed with code -1: Invalid argument`: solo con la etiqueta `ion`. */
+    private val ION_NOISE = Regex("""^ioctl [0-9a-fA-F]+ failed with code -?\d+""")
+
+    fun isVendorNoise(tag: String, msg: String): Boolean {
+        if (tag == "ion") return ION_NOISE.containsMatchIn(msg.trimStart())
+        return VENDOR_NOISE.any { it.containsMatchIn(msg) }
+    }
+
     /** Orden de gravedad de un nivel de logcat (V < D < I < W < E < F < A). */
     fun rank(level: Char): Int = LEVELS.indexOf(level).let { if (it < 0) 0 else it }
 
@@ -75,7 +95,7 @@ object DiagLogcatParser {
             }
         }
         for (e in entries) {
-            if (rank(e.level) < min) { close(); continue }
+            if (rank(e.level) < min || isVendorNoise(e.tag, e.msg)) { close(); continue }
             val sameBurst = lines.isNotEmpty() && e.tag == curTag && e.level == curLevel &&
                 e.stamp.take(SECOND_LEN) == curStamp.take(SECOND_LEN) && lines.size < MAX_BURST_LINES
             if (!sameBurst) {

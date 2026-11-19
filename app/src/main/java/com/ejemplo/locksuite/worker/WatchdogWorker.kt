@@ -12,6 +12,10 @@ import com.ejemplo.locksuite.util.PrefsHelper
 class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
 
     override fun doWork(): Result {
+        // 19/11/2026 (B.125, T2.2): quién arrancó este proceso, si fue el Worker (JobScheduler).
+        com.ejemplo.locksuite.diag.DiagLog.firstEntry("WatchdogWorker (JobScheduler)")
+        // Y la alarma de rescate: otro mecanismo distinto de WorkManager (ver util/ProcessHealth).
+        com.ejemplo.locksuite.util.ProcessHealth.scheduleRescueIfDue(applicationContext)
         if (!com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(applicationContext)) {
             return Result.retry()
         }

@@ -2570,6 +2570,11 @@ class PolicyManager(private val context: Context) {
             return
         }
 
+        // 19/11/2026 (B.125, T2.5): cronómetro por bloques. En un equipo lento esta función
+        // tarda 15–20 s por pasada y nunca se supo QUÉ bloque es el pesado. Solo se escribe en el
+        // registro si la pasada pasa de 30 s; con eso la próxima optimización se hace con datos.
+        val timer = com.ejemplo.locksuite.util.StepTimer { android.os.SystemClock.elapsedRealtime() }
+
         // 9/9/2026 (B.55) — asegurar los permisos peligrosos propios (hoy
         // POST_NOTIFICATIONS) para que el usuario no pueda dejar mudo el aviso de
         // accesibilidad caída. Guarda interna de una vez por proceso: barato.
@@ -2577,6 +2582,7 @@ class PolicyManager(private val context: Context) {
 
         // Auto-curación de apps esenciales/libres (Archivos, Grabadora, Google Chat, Video)
         healRestrictedEssentialApps()
+        timer.mark("permisos y auto-curación")
 
         val restrictions = listOf(
             UserManager.DISALLOW_FACTORY_RESET,
@@ -2705,6 +2711,8 @@ class PolicyManager(private val context: Context) {
             }
         }
 
+        timer.mark("restricciones")
+
         // Hardware settings.
         // 27/9: cámara y captura de pantalla tienen lectura pública: se escriben solo si el
         // sistema no las tiene. Barra de estado y bloqueo de pantalla no tienen forma pública
@@ -2751,6 +2759,8 @@ class PolicyManager(private val context: Context) {
 
 
 
+        timer.mark("hardware y kiosco")
+
         // Reforzar la designacion de Always-on VPN si la restriccion de VPN esta
         // activa. La restriccion DISALLOW_CONFIG_VPN ya se reaplica arriba en el forEach
         // generico, pero eso no reconfigura el Always-on de DevicePolicyManager en si (es
@@ -2778,6 +2788,8 @@ class PolicyManager(private val context: Context) {
             com.ejemplo.locksuite.util.BootGate.healStuckProxy(context, "reapplyAllRestrictions")
         }
 
+        timer.mark("vpn y proxy")
+
         // Suspender Google Play Store si el bloqueo de instalación está activado o si fue suspendida individualmente
         val prefs = PrefsHelper.getMdmPrefs(context)
         val appController = AppController(context)
@@ -2796,6 +2808,8 @@ class PolicyManager(private val context: Context) {
                 e.printStackTrace()
             }
         }
+
+        timer.mark("suspender Play Store")
 
         // ── Lista blanca: reconciliar las apps prohibidas (8/9/2026) ──
         //
@@ -2819,6 +2833,8 @@ class PolicyManager(private val context: Context) {
             e.printStackTrace()
         }
 
+        timer.mark("lista blanca")
+
         // ── Tienda Play (B.101): pausar lo que la tienda instaló y ya no ofrece ──
         //
         // Mismo motivo que la lista blanca de arriba: una pausa (suspensión) que algo
@@ -2834,6 +2850,8 @@ class PolicyManager(private val context: Context) {
         } catch (e: Exception) {
             android.util.Log.w("PolicyManager", "Tienda clásica: reconcile falló: ${e.message}")
         }
+
+        timer.mark("tiendas")
 
         // Aplicar FRP si está activado.
         // 27/9/2026: solo si no está ya puesta por la misma vía. Cada llamada guardaba la
@@ -2854,6 +2872,8 @@ class PolicyManager(private val context: Context) {
             KnoxHardening.setFactoryResetBlocked(context, true)
         }
 
+        timer.mark("FRP y Knox")
+
         // Suspender todos los navegadores independientes instalados si la política está activa
         if (areBrowsersSuspended()) {
             setBrowsersSuspended(true)
@@ -2863,6 +2883,8 @@ class PolicyManager(private val context: Context) {
         if (isSystemWebViewSuspended()) {
             setSystemWebViewSuspended(true)
         }
+
+        timer.mark("navegadores y WebView")
 
         // Re-aplicar suspensiones individuales de aplicaciones (solo si están suspendidas explícitamente).
         // Igual que arriba: la app que se está actualizando queda exenta mientras
@@ -2931,6 +2953,8 @@ class PolicyManager(private val context: Context) {
             }
         }
 
+        timer.mark("recorrido de apps")
+
         // Stubs de Android Auto (B.88). El bucle de arriba ya no los toca (cuentan como
         // críticos), pero eso solo impide ocultarlos DE ACÁ EN ADELANTE. Si uno quedó oculto
         // o suspendido de antes —por ejemplo, se instaló con una versión de LockSuite que
@@ -2960,6 +2984,13 @@ class PolicyManager(private val context: Context) {
             if (!PolicyReconciler.mismoConjunto(permitidos, listOf(context.packageName))) {
                 applyAccessibilityProtection(true)
             }
+        }
+        timer.mark("instalación y accesibilidad")
+        if (timer.totalMs() > 30_000L) {
+            com.ejemplo.locksuite.diag.DiagLog.w(
+                "reapply",
+                "reapplyAllRestrictions pasó de 30 s (${timer.totalMs() / 1000} s). Por bloque: ${timer.summary()}"
+            )
         }
         }
     }

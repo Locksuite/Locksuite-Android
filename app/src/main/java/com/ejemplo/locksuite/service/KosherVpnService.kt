@@ -475,6 +475,15 @@ class KosherVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
+        // 19/11/2026 (B.125, T2.2): quién arrancó este proceso (el sistema por VPN siempre
+        // activa, un reinicio START_STICKY, o un pedido nuestro).
+        com.ejemplo.locksuite.diag.DiagLog.firstEntry(
+            when {
+                intent == null -> "reinicio START_STICKY de la VPN"
+                action == android.net.VpnService.SERVICE_INTERFACE -> "VPN siempre activa (sistema)"
+                else -> "inicio de la VPN"
+            }
+        )
         if (action == "STOP_VPN") {
             stopVpn()
             stopSelf()

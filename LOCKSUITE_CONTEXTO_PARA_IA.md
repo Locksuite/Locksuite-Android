@@ -2990,24 +2990,55 @@ Cambios aplicados (verificados por compilación, pruebas unitarias y sonda GCS/C
    - Se aplica al instante al instalar desde la tienda clásica y al abrir el diálogo de tienda (`LoginActivity.kt`), en `FirebaseDeviceSync.pullPlayStoreConfig` (`SYNC_PLAY_STORE` + sync horario de `WatchdogWorker`) y en `PolicyManager.reapplyAllRestrictions()`.
    - Pruebas unitarias en `ClassicStorePolicyManagerTest.kt` (4 pruebas OK).
 
+**B.125 — ANR AL ACTUALIZAR O REINICIAR (`BootReceiver` RETIENE EL BROADCAST CON `goAsync()` MIENTRAS CORREN DOS `reapplyAllRestrictions()` EN FILA) Y LOCKSUITE MUERTO HORAS DESPUÉS DE TOCAR «CERRAR APP» EN EL CARTEL DE ANR (19/11/2026). [DIAGNOSTICADO POR OPUS EN SOLO LECTURA (TICKET: `TICKET_B125_ANR_ARRANQUE_Y_PROCESO_CAIDO.md`); IMPLEMENTADO EL 19/11 POR SONNET EN 0.6.90 (153): COMPILA Y 406 PRUEBAS UNITARIAS VERDES; PENDIENTE DE PRUEBA EN EQUIPO REAL, NO SE TACHA]**
+
+- **Equipo:** Iejiel `e1939eb56647c24f` (DuoQin F21, Android 11, 0.6.89).
+  - 4 ANR en 8 días (13, 15, 16 y 18/11), todos ~60 s después de `MY_PACKAGE_REPLACED` o `BOOT_COMPLETED`.
+  - En las 4 trazas el hilo principal está ocioso, y el detalle es «user request after error»: alguien tocó «Cerrar app».
+  - Ningún arranque sin esos broadcasts tuvo ANR.
+  - Mismo caso que el Q-Tel Q1 del 6/11 (nota final de B.112) → **es de todo LockSuite**.
+- **Causa:**
+  - `BootReceiver.kt:106-125` usa `goAsync()` como si alargara el plazo. No lo alarga: siguen siendo 10 s en primer plano y 60 s en segundo plano.
+  - Adentro corre `reapplyAllRestrictions()`, que en `reapplyLock` espera a la pasada que ya lanzó `LockSuiteApplication.initializeUnlocked()` → dos pasadas completas antes de `finish()`.
+  - Mismo patrón en `DeviceAdminReceiver.kt:81` (alta por QR).
+- **Consecuencia:**
+  - Tras «Cerrar app», LockSuite quedó muerto 52 h 25 min (13→15/11) y 4 h 26 min (16/11), sin filtro DNS ni accesibilidad. Las otras dos veces volvió solo, en 1 s y en 42 s.
+  - Por qué no revivió: **NO verificado**. Hipótesis: la ROM detiene el paquete o bloquea los arranques en segundo plano.
+  - El cartel de ANR funciona, en la práctica, como un botón para apagar LockSuite.
+- **De paso:**
+  - «Fondos» no se instaló el 16/11: la descarga de la tienda corre en `rememberCoroutineScope` y se cancela al salir de la pantalla. Lo mismo pasa con la autoactualización desde el celular.
+  - El token FCM falla con `SERVICE_NOT_AVAILABLE` desde el 18/11. Los comandos igual llegan por el buzón. Probablemente es del equipo; el ruido que deja sí es nuestro y se come el registro de 400 renglones.
+- **Arreglo (detalle y criterios de aceptación en el ticket):**
+  - **T1:** `ReconcileScheduler`, una sola pasada fuera del broadcast y sin `goAsync()`.
+  - **T2:** instrumentación: motivo `Subject:` del ANR, quién arrancó el proceso, detección de detención forzada, tiempo caído exacto desde `ApplicationExitInfo` y desglose de la pasada.
+  - **T3:** latido inverso por FCM desde una función programada, más alarma de rescate; opcional, `setUserControlDisabledPackages`.
+  - **T4:** tienda y autoactualización en un scope de proceso.
+  - **T5:** el error de FCM se anota solo al cambiar de estado.
+  - **T6:** filtrar el ruido de logcat del fabricante.
+- **Regla nueva para todo el proyecto:** `goAsync()` solo para trabajo de menos de 5 s, con `finish()` en `finally`. Android no amplía el plazo por usarlo.
+- **Lo implementado (19/11, 0.6.90 / 153), archivo por archivo:**
+  - **T1:** `util/ReconcilePolicy.kt` (lógica pura + `ReconcileGate`) y `util/ReconcileScheduler.kt` (hilo propio `LockSuiteReconcile`, nunca bloquea). `BootReceiver` ya no usa `goAsync()`: pide `request(startup = true, afterBoot = true)`. `LockSuiteApplication` pide `startup = true`, así que arranque + broadcast = UNA pasada. `DeviceAdminReceiver` (alta por QR) tampoco retiene el broadcast: arranca el Watchdog y trabaja en un hilo.
+  - **T2:** `diag/AnrTraceHead.kt` (motivo `Subject:` + hilo principal + hilos de LockSuite; lo usan `DiagCollector` y `FirebaseDeviceSync`, y `lastExitDetail` ahora lleva el motivo). `DiagLog.firstEntry(source)` en los puntos de entrada. `util/ProcessHealth.kt` (sentinela de detención forzada + alarma de rescate) con `diag/ProcessHealthMath.kt` (`ForceStopVerdict`, `OutageMath`). Caída larga → renglón `LockSuite estuvo CAÍDO …` y campos `lastOutageMs/From/To/Reason` en `devices/<id>` (vía `DiagLog.deviceFields()`). `util/StepTimer.kt` mide los bloques de `reapplyAllRestrictions()` y lo registra solo si pasa de 30 s. Android 15+: `diag/StartReasonNames.kt`.
+  - **T3:** `receiver/ReviveReceiver.kt` (declarado en el Manifest, `exported=false`) + `ProcessHealth.scheduleRescueIfDue` desde el ciclo del Watchdog y el Worker. Backend: `admin-backend/functions/wake_policy.js` + función programada `despertarEquiposSilenciosos` (cada 15 min, FCM `{wake:"1"}`), índice `.indexOn: ["lastSeen"]` en `devices`. El celular lo atiende al principio de `LockSuiteFirebaseService.onMessageReceived`. Panel: `celular.js?v=12` muestra «Última caída de LockSuite» y «Despertar por FCM». **No se hizo** `setUserControlDisabledPackages` (opcional del ticket: pide simetría en las cuatro listas y no está justificado todavía).
+  - **T4:** `util/StoreInstallCore.kt` + `util/StoreInstallManager.kt` (scope de proceso, una instalación a la vez). `LoginActivity` y `DashboardActivity` solo piden y miran el estado. `SelfUpdater` ya no traga `CancellationException` como «Error al instalar».
+  - **T5:** `FirebaseDeviceSync` anota el cambio de estado del token FCM una sola vez en vez de `printStackTrace()` cada hora.
+  - **T6:** `DiagLogcatParser.isVendorNoise` filtra los 4 mensajes del fabricante.
+  - **Pruebas nuevas:** `ReconcilePolicyTest`, `StepTimerTest`, `AnrTraceHeadTest`, `ProcessHealthMathTest`, `DiagVendorNoiseTest`, `StoreInstallCoreTest` (Kotlin) y `tools/test_wake_policy.js`.
+- **Qué falta confirmar en equipo real (hasta eso, B.125 no se tacha):** instalar la versión en el Qin F21 y en un Q-Tel Q1 y ver 0 ANR; que el registro diga quién arrancó el proceso; `adb shell am force-stop` → «DETENCIÓN FORZADA»; que el panel muestre «Despertar por FCM» tras 30 min sin señal; que la función programada se haya creado (requiere Cloud Scheduler habilitado en el proyecto: si el deploy de `functions` falló por eso, habilitarlo desde la consola de Google Cloud).
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**18/11 — Antigravity: Tienda clásica de APKs discreta en `tienda.html` con subida directa desde PC a Cloud Storage, eliminación y bloqueo por app de WebView / Internet (B.124).**
+**19/11 — Claude (Opus diagnostica, Sonnet implementa y despliega): ANR del Qin F21 de Iejiel (`e1939eb56647c24f`) → B.125, versión 0.6.90 (153).**
 
-- **Pedidos del dueño:**
-  1. Agregar en la parte de Tienda web (`tienda.html`) una sección discreta para ver las apps de la tienda clásica (`storeApps`), eliminar alguna o subir un `.apk` directo desde la PC.
-  2. Agregar también opción por app para bloquear WebView (`blockWebView`) o bloquear Internet (`blockInternet`).
-- **Acciones y cambios aplicados:**
-  - Bucket GCS `locksuite-nueva-store-apks` creado en `US-CENTRAL1` con lectura pública y CORS, más endpoint autenticado `classicStoreApk` (`https://classicstoreapk-5i52mt6h3q-uc.a.run.app`) en `admin-backend/functions/index.js`.
-  - Web (`admin-backend/public/apk_reader.js`, `comun.js`, `tienda.html`, `tienda_clasica.js`, `index.html`): parser AXML + SHA-256 local en el navegador, sección `<details id="tc-section">` colapsada por defecto al pie de `tienda.html`, subida resumible directa a GCS con barra de progreso, listado/eliminación, toggles `Sin WebView` / `Sin Internet` y empuje a la flota (`SYNC_PLAY_STORE`).
-  - App Android (`ClassicStorePolicyManager.kt`, `LoginActivity.kt`, `FirebaseDeviceSync.kt`, `PolicyManager.kt`, `ClassicStorePolicyManagerTest.kt`): lectura y reconciliación segura de `blockWebView` (`WebViewBlockManager`) y `blockInternet` (`PolicyManager.setPerAppInternetBlocked`) sin pisar bloqueos manuales ni `noweb` de Tienda Play.
-- **Verificación ejecutada:**
-  - `node --check` sobre `functions/index.js`, `comun.js`, `apk_reader.js`, `tienda_clasica.js` y `tienda.js`: OK.
-  - Pruebas JS y Python (`test_functions_index.js` [28], `test_apk_reader.js`, `test_tienda_logic.js` [48], `test_pin_security.js` [14], `test_diag_logic.js` [32], `test_play_lookup.js` [16], `check_store_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `check_diag_sync.py`, `gen_policies_js.py --check`, `gen_catalog_js.py --check`): OK.
-  - `.\gradlew.bat testDebugUnitTest --no-daemon`: 28 suites, 368 pruebas pasadas, 0 fallos (incluye `ClassicStorePolicyManagerTest`).
-  - Sonda directa contra `classicStoreApk` (CORS preflight 204 + 401 sin token) y bucket `locksuite-nueva-store-apks` (initUpload resumible 200, PUT con `Origin` 200, GET público 200, DELETE 204): OK. Pendiente prueba visual en panel real y en equipo físico tras `.\deploy_all.ps1`.
+- **Pedido del dueño:** analizar los errores de ese celular, decir si son de todo LockSuite o solo del equipo, arreglarlos de forma robusta para toda la flota y desplegar con `deploy_all.ps1` (OK explícito del dueño para este despliegue).
+- **Alcance real de los datos:** el registro solo llegaba al 11/11 y los cierres de Android al 8/11; no se pudo mirar «el mes entero».
+- **Diagnóstico (Opus, solo lectura):** los 4 ANR son de LockSuite (`BootReceiver` retenía el broadcast con `goAsync()` mientras corrían dos pasadas de `reapplyAllRestrictions()`), y tras «Cerrar app» el proceso quedó muerto 52 h y 4,5 h. Detalle en B.125 y en `TICKET_B125_ANR_ARRANQUE_Y_PROCESO_CAIDO.md`.
+- **Implementación (Sonnet):** T1–T6 completos salvo la opción `setUserControlDisabledPackages` (ver B.125).
+- **Verificación hecha:** `.\gradlew.bat testDebugUnitTest` → 406 pruebas, 0 fallas; `node --check` de `functions/index.js` y `celular.js`; `test_functions_index.js`, `test_pin_security.js`, `test_diag_logic.js`, `test_tienda_logic.js`, `test_play_lookup.js`, `test_apk_reader.js`, `test_wake_policy.js` y los `check_*.py` / `gen_*.py --check`: OK.
+- **Lo que NO se verificó:** nada se probó en un celular real; la función programada puede no desplegarse si Cloud Scheduler no está habilitado; no se vieron otros equipos en el panel (pide login).
+- **Ojo para la próxima sesión:** el repo real es `E:\Documentos\Lock Suite segunda version`. La copia de OneDrive está vieja (0.6.32) y no hay que usarla.
 

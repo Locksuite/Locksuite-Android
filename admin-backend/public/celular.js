@@ -941,6 +941,12 @@
       cola;
   }
 
+  // 19/11/2026 (B.125, T2.4): «52 h 25 min» / «7 min» para una caída de LockSuite (milisegundos).
+  function durCaida(ms) {
+    const m = Math.max(0, Math.floor(Number(ms) / 60000));
+    return m >= 60 ? Math.floor(m / 60) + " h " + (m % 60) + " min" : m + " min";
+  }
+
   function pintarResumen() {
     const kv = (k, v) => '<div class="ls-kv"><span>' + esc(k) + "</span><span>" + v + "</span></div>";
 
@@ -980,6 +986,17 @@
         : "") +
       kv("Dominios en el filtro", esc(String(campo("whitelistDomainCount", "—")))) +
       kv("Canal de comandos", canalDeComandos()) +
+      // 19/11/2026 (B.125, T2.4 y T3.1): última caída larga del proceso y el último «despertar»
+      // por FCM que mandó el servidor. Los dos los calcula/escribe el celular o la función
+      // `despertarEquiposSilenciosos`; acá solo se muestran.
+      (campo("lastOutageMs", 0) > 0
+        ? kv("Última caída de LockSuite", '<span class="ls-chip ' + (campo("lastOutageMs") > 600000 ? "bad" : "") + '">' +
+            esc(durCaida(campo("lastOutageMs"))) + "</span><br><small>murió " + LS.fecha(campo("lastOutageFrom", 0)) +
+            " (" + esc(String(campo("lastOutageReason", "?"))) + ") · volvió " + LS.fecha(campo("lastOutageTo", 0)) + "</small>")
+        : "") +
+      (campo("wake", null) && campo("wake").lastSentAt && Date.now() - campo("wake").lastSentAt < 24 * 3600000
+        ? kv("Despertar por FCM", "se intentó " + LS.fecha(campo("wake").lastSentAt) + " (" + esc(String(campo("wake").count || 1)) + " hoy)")
+        : "") +
       (exitReason ? kv("Última salida", esc(String(exitReason)) + (campo("lastExitDetail") ? " · " + esc(String(campo("lastExitDetail"))) : "") + (exitTs ? " · " + LS.fecha(exitTs) : "") + (campo("lastExitTrace") ? '<br><details style="font-size:11px;margin-top:4px;"><summary style="cursor:pointer;color:var(--ls-primary,#3498db)">Ver stack trace del crash</summary><pre style="white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;background:rgba(0,0,0,0.15);padding:6px;border-radius:4px;font-family:monospace;">' + esc(String(campo("lastExitTrace"))) + '</pre></details>' : "")) : "");
 
     const m = MODOS.find((x) => x.id === modoActual());
@@ -1022,6 +1039,13 @@
     }
     if (modoActual() === "simulacion") {
       avisos.push(["warn", "La lista blanca está en simulación: registra, pero no bloquea nada todavía."]);
+    }
+    // 19/11/2026 (B.125, T2.4): una caída larga reciente. Durante ese lapso no hubo filtro DNS
+    // ni accesibilidad (las políticas de Device Owner siguen, viven en el sistema).
+    if (campo("lastOutageMs", 0) > 600000 && Date.now() - campo("lastOutageTo", 0) < 7 * 24 * 3600000) {
+      avisos.push(["warn", "LockSuite estuvo caído " + durCaida(campo("lastOutageMs")) + " (murió " +
+        LS.fecha(campo("lastOutageFrom", 0)) + " por " + campo("lastOutageReason", "?") +
+        "). Mientras tanto no hubo filtro DNS ni accesibilidad."]);
     }
     if (exitReason === "ANR" || exitReason === "CRASH" || exitReason === "CRASH_NATIVE") {
       const det = campo("lastExitDetail", "");

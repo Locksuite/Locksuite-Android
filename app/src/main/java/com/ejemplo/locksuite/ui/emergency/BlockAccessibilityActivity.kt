@@ -33,6 +33,7 @@ class BlockAccessibilityActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.ejemplo.locksuite.diag.DiagLog.firstEntry("pantalla BlockAccessibilityActivity")
 
         // Prevenir capturas de pantalla o grabaciones (H12)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)

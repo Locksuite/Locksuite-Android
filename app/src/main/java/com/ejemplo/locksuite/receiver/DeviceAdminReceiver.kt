@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.PersistableBundle
 import android.widget.Toast
-import kotlinx.coroutines.launch
 
 class DeviceAdminReceiver : DeviceAdminReceiver() {
 
@@ -78,9 +77,23 @@ class DeviceAdminReceiver : DeviceAdminReceiver() {
                 return
             }
 
-            val pendingResult = goAsync()
+            // 19/11/2026 (B.125, T1): ya NO se retiene el broadcast con goAsync(). Android no
+            // amplía el plazo por usarlo (10 s en primer plano, 60 s en segundo plano) y
+            // applyMasterProfile() puede tardar bastante más en un equipo lento: ANR en pleno
+            // alta por QR. Lo que mantiene vivo el proceso mientras trabaja el hilo es el
+            // Watchdog (servicio en primer plano), que se arranca antes de soltar el broadcast.
             val appCtx = context.applicationContext
-            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            try {
+                val watchdog = Intent(appCtx, com.ejemplo.locksuite.service.WatchdogForegroundService::class.java)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    appCtx.startForegroundService(watchdog)
+                } else {
+                    appCtx.startService(watchdog)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("DeviceAdminReceiver", "No se pudo arrancar el Watchdog en el alta: ${e.message}")
+            }
+            Thread({
                 try {
                     val pm = com.ejemplo.locksuite.mdm.PolicyManager(appCtx)
                     val ok = pm.applyMasterProfile(nivel, incluirPostAlta = false)
@@ -111,10 +124,8 @@ class DeviceAdminReceiver : DeviceAdminReceiver() {
                         "DeviceAdminReceiver",
                         "Alta por QR: applyMasterProfile falló: ${e.message}", e
                     )
-                } finally {
-                    try { pendingResult.finish() } catch (_: Exception) {}
                 }
-            }
+            }, "LockSuiteProvisioning").apply { isDaemon = false }.start()
         } catch (e: Exception) {
             android.util.Log.e(
                 "DeviceAdminReceiver",

@@ -204,6 +204,11 @@ class WatchdogForegroundService : Service() {
         }
 
         private fun runCycle() {
+            // 19/11/2026 (B.125, T3.2): alarma de rescate, siempre 20 min hacia adelante (como
+            // mucho una vez cada 5 min: casi siempre es una comparación en memoria). Si el
+            // proceso muere y nadie lo revive, suena y lo levanta. Ver util/ProcessHealth.kt.
+            com.ejemplo.locksuite.util.ProcessHealth.scheduleRescueIfDue(applicationContext)
+
             // Arranque protegido: liberar la red si el filtro ya está listo, o si venció
             // la ventana de seguridad. Ver util/BootGate.kt.
             try {
@@ -724,6 +729,10 @@ class WatchdogForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 19/11/2026 (B.125, T2.2): intent == null es el reinicio que hace el sistema por START_STICKY.
+        com.ejemplo.locksuite.diag.DiagLog.firstEntry(
+            if (intent == null) "reinicio START_STICKY del Watchdog" else "inicio del Watchdog"
+        )
         val purgado = try {
             com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)
         } catch (t: Throwable) {

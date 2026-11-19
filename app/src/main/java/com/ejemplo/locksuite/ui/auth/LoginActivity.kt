@@ -65,6 +65,8 @@ class LoginActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 19/11/2026 (B.125, T2.2): quién arrancó este proceso (el usuario abrió la app).
+        com.ejemplo.locksuite.diag.DiagLog.firstEntry("pantalla LoginActivity")
         com.ejemplo.locksuite.util.LocaleManager.init(this)
         
         // Proteger actividad contra capturas de pantalla/grabaciones (H12)
@@ -175,14 +177,22 @@ fun LoginScreen(
     var appUpdateSearch by remember { mutableStateOf("") }
     var accessibilityReady by remember { mutableStateOf(false) }
 
-    var updateProgress by remember { mutableStateOf<Int?>(null) }
-    var storeDownloadingPackage by remember { mutableStateOf<String?>(null) }
+    // 19/11/2026 (B.125, T4): el progreso de la autoactualización y de la tienda se LEE del
+    // StoreInstallManager (scope de proceso). Antes eran estados locales alimentados por una
+    // corrutina de `rememberCoroutineScope()`, que se cancelaba al salir de la pantalla: así se
+    // perdió la instalación de «Fondos» el 16/11 («rememberCoroutineScope left the composition»).
+    val installState by com.ejemplo.locksuite.util.StoreInstallManager.state.collectAsState()
+    val updateProgress: Int? =
+        if (installState.key == com.ejemplo.locksuite.util.StoreInstallManager.SELF_KEY) installState.progress else null
+    val storeDownloadingPackage: String? =
+        installState.key?.takeIf { it != com.ejemplo.locksuite.util.StoreInstallManager.SELF_KEY }
+    val storeProgress: Int = installState.progress
+    val installBusy: Boolean = installState.key != null
     var isDeviceOwner by remember {
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         mutableStateOf(dpm.isDeviceOwnerApp(context.packageName))
     }
     var showMultimediaDialog by remember { mutableStateOf(false) }
-    var storeProgress by remember { mutableStateOf(0) }
 
     fun updateLockoutState() {
         when (val state = PinManager.getLockoutState(context)) {
@@ -468,23 +478,11 @@ fun LoginScreen(
                     // Botón para Actualizar
                     Button(
                         onClick = {
-                            coroutineScope.launch {
-                                val db = FirebaseDatabase.getInstance()
-                                val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(context)
-                                val error = com.ejemplo.locksuite.util.SelfUpdater.checkAndPerformUpdate(context, true) { progress ->
-                                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                                        updateProgress = progress
-                                    }
-                                    db.getReference("devices/$deviceId/updateProgress").setValue(progress)
-                                }
-                                updateProgress = null
-                                db.getReference("devices/$deviceId/updateProgress").removeValue()
-                                if (error != null) {
-                                    Toast.makeText(context, error, Toast.LENGTH_LONG).show()
-                                }
-                            }
+                            // 19/11/2026 (B.125, T4): en el scope de PROCESO, no en el de la
+                            // pantalla: salir de acá ya no cancela la actualización.
+                            com.ejemplo.locksuite.util.StoreInstallManager.selfUpdate(context, true)
                         },
-                        enabled = updateProgress == null,
+                        enabled = !installBusy,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = accentOrange,
                             contentColor = navyDark,
@@ -1012,41 +1010,24 @@ fun LoginScreen(
                                     val isDownloadingThis = storeDownloadingPackage == app.packageName
                                     Button(
                                         onClick = {
-                                            if (isAllowed && hasChecksum && !stubTapadoPorAppReal && storeDownloadingPackage == null) {
-                                                coroutineScope.launch {
-                                                    storeDownloadingPackage = app.packageName
-                                                    val db = FirebaseDatabase.getInstance()
-                                                    val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(context)
-                                                    val err = com.ejemplo.locksuite.util.SelfUpdater.downloadAndInstallApk(
-                                                        context,
-                                                        app.apkUrl,
-                                                        app.packageName,
-                                                        app.label,
-                                                        app.sha256
-                                                    ) { progress ->
-                                                        coroutineScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                                                            storeProgress = progress
-                                                        }
-                                                        db.getReference("devices/$deviceId/updateProgress").setValue(progress)
-                                                    }
-                                                    storeDownloadingPackage = null
-                                                    db.getReference("devices/$deviceId/updateProgress").removeValue()
-                                                    if (err != null) {
-                                                        Toast.makeText(context, err, Toast.LENGTH_LONG).show()
-                                                    } else {
-                                                        com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.applyOnInstall(
-                                                            context,
-                                                            app.packageName,
-                                                            app.blockWebView,
-                                                            app.blockInternet
-                                                        )
-                                                        Toast.makeText(context, "${app.label} instalado correctamente.", Toast.LENGTH_LONG).show()
-                                                    }
-                                                }
+                                            if (isAllowed && hasChecksum && !stubTapadoPorAppReal && !installBusy) {
+                                                // 19/11/2026 (B.125, T4): la instalación es del PROCESO
+                                                // (StoreInstallManager), no de esta pantalla. Antes corría en
+                                                // `rememberCoroutineScope()` y salir de acá la cancelaba
+                                                // («Fondos», 16/11). Esta pantalla solo mira el progreso.
+                                                com.ejemplo.locksuite.util.StoreInstallManager.installStoreApp(
+                                                    context,
+                                                    app.apkUrl,
+                                                    app.packageName,
+                                                    app.label,
+                                                    app.sha256,
+                                                    app.blockWebView,
+                                                    app.blockInternet
+                                                )
                                             }
                                         },
                                         enabled = isAllowed && hasChecksum && !stubTapadoPorAppReal &&
-                                            (storeDownloadingPackage == null || isDownloadingThis),
+                                            (!installBusy || isDownloadingThis),
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = accentOrange,
                                             contentColor = navyDark,

@@ -90,6 +90,25 @@ object DiagLog {
         }
     }
 
+    private val firstEntryDone = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * 19/11/2026 (B.125, T2.2) — QUIÉN ARRANCÓ ESTE PROCESO. Cada punto de entrada que Android
+     * puede ejecutar en un proceso recién nacido lo llama al principio (broadcast, FCM, Worker,
+     * servicios, pantallas). Solo el PRIMERO de cada proceso deja renglón: el resto es no-op.
+     *
+     * Por qué: el Qin F21 de Iejiel quedó 52 h sin proceso y no había forma de saber qué lo
+     * revivió (una persona abriendo la app, un FCM, el Worker…). Con esto el registro lo dice,
+     * junto con cuánto tardó en llegar desde que nació el proceso. Nunca lanza.
+     */
+    fun firstEntry(source: String) {
+        try {
+            if (!firstEntryDone.compareAndSet(false, true)) return
+            val ms = android.os.SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime()
+            i("app", "El proceso lo arrancó: $source (+$ms ms desde el inicio)")
+        } catch (_: Throwable) { }
+    }
+
     fun i(tag: String, msg: String) = log(DiagEvent.LEVEL_INFO, tag, msg, null)
     fun w(tag: String, msg: String, t: Throwable? = null) = log(DiagEvent.LEVEL_WARN, tag, msg, t)
     fun e(tag: String, msg: String, t: Throwable? = null) = log(DiagEvent.LEVEL_ERROR, tag, msg, t)
@@ -139,7 +158,18 @@ object DiagLog {
 
     /** Campos que `syncDeviceInfo` publica en `devices/<id>` para que el panel sepa cómo está esto. */
     fun deviceFields(): Map<String, Any> = try {
-        mapOf("diagVersion" to VERSION, "diagUploadEnabled" to DiagStore.isEnabled())
+        val m = mutableMapOf<String, Any>("diagVersion" to VERSION, "diagUploadEnabled" to DiagStore.isEnabled())
+        // 19/11/2026 (B.125, T2.4): la última caída larga de LockSuite (proceso sin existir).
+        // Se calcula al arrancar (DiagCollector.recordExitsApi30) y se publica con la
+        // sincronización: ahí Firebase ya está inicializado, a diferencia de ese momento.
+        val outMs = DiagStore.getLong("outage_ms", 0L)
+        if (outMs > 0L) {
+            m["lastOutageMs"] = outMs
+            m["lastOutageFrom"] = DiagStore.getLong("outage_from", 0L)
+            m["lastOutageTo"] = DiagStore.getLong("outage_to", 0L)
+            DiagStore.getString("outage_reason")?.let { m["lastOutageReason"] = it }
+        }
+        m
     } catch (_: Throwable) {
         emptyMap()
     }

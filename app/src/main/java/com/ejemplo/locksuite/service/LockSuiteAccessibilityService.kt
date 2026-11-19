@@ -539,6 +539,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     // Configuración del servicio
     // ──────────────────────────────────────────────
     override fun onServiceConnected() {
+        // 19/11/2026 (B.125, T2.2): quién arrancó este proceso, si fue el enlace de accesibilidad.
+        com.ejemplo.locksuite.diag.DiagLog.firstEntry("enlace de accesibilidad")
         // 6/11/2026 (B.110): rastro para el panel de que el servicio se enlazó.
         com.ejemplo.locksuite.diag.DiagLog.i("a11y", "Servicio de accesibilidad conectado")
         // 7/11/2026 (B.112) — LA CARRERA DEL ARRANQUE. Al desbloquear, Android enlaza este

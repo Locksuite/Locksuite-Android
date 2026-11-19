@@ -72,6 +72,10 @@ internal object DiagCollector {
     fun recordPreviousExits(ctx: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         try { recordExitsApi30(ctx) } catch (_: Throwable) { }
+        // 19/11/2026 (B.125, T2.2): lo que Android mismo dice de por qué arrancó este proceso.
+        if (Build.VERSION.SDK_INT >= 35) {
+            try { recordStartReasonApi35(ctx) } catch (_: Throwable) { }
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
@@ -85,6 +89,45 @@ internal object DiagCollector {
             DiagStore.append(r.at, DiagExits.levelFor(r.reason), "exit", DiagExits.describe(r), 1, false)
         }
         DiagStore.putLong("exit_cursor", fresh.maxOf { it.at })
+        // 19/11/2026 (B.125, T2.4): ¿cuánto estuvo LockSuite sin proceso desde esa muerte?
+        try { recordOutage(fresh.maxByOrNull { it.at }) } catch (_: Throwable) { }
+    }
+
+    /**
+     * La muerte más reciente contra el arranque de ESTE proceso. Si pasaron más de 2 minutos
+     * (y el equipo no se había reiniciado en el medio) deja un aviso y guarda los números
+     * para que `DiagLog.deviceFields()` los publique en el panel. Ver [OutageMath].
+     */
+    private fun recordOutage(last: DiagExits.Record?) {
+        if (last == null) return
+        val now = System.currentTimeMillis()
+        val uptime = SystemClock.elapsedRealtime()
+        val age = uptime - android.os.Process.getStartElapsedRealtime()
+        val o = OutageMath.classify(last.at, now, uptime, age) ?: return
+        val fmt = SimpleDateFormat("dd/MM HH:mm", Locale.US)
+        val reason = DiagExits.reasonName(last.reason)
+        DiagStore.append(
+            now, DiagEvent.LEVEL_WARN, "app",
+            DiagSanitizer.sanitize(
+                "LockSuite estuvo CAÍDO ${OutageMath.format(o.gapMs)}: murió el " +
+                    "${fmt.format(Date(o.diedAt))} por $reason y recién volvió ahora"
+            ), 1, false
+        )
+        DiagStore.putLong("outage_ms", o.gapMs)
+        DiagStore.putLong("outage_from", o.diedAt)
+        DiagStore.putLong("outage_to", o.restartedAt)
+        DiagStore.putString("outage_reason", reason)
+    }
+
+    /** Qué dice Android que arrancó este proceso (API 35+). */
+    @RequiresApi(35)
+    private fun recordStartReasonApi35(ctx: Context) {
+        val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return
+        val info = am.getHistoricalProcessStartReasons(1).firstOrNull() ?: return
+        val txt = "Android anota que lo arrancó: ${StartReasonNames.reason(info.reason)} " +
+            "(${StartReasonNames.startType(info.startType)})" +
+            (if (info.wasForceStopped()) ", el paquete venía de una DETENCIÓN FORZADA" else "")
+        DiagStore.append(System.currentTimeMillis(), DiagEvent.LEVEL_INFO, "app", DiagSanitizer.sanitize(txt), 1, false)
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
@@ -100,14 +143,16 @@ internal object DiagCollector {
         }
     }
 
-    /** De la traza de un ANR, el hilo principal: es donde se ve qué lo tenía trabado. */
+    /**
+     * De la traza de un ANR: el MOTIVO (`Subject:`), el hilo principal y los hilos de trabajo
+     * de LockSuite. 19/11/2026 (B.125, T2.1): antes era solo el hilo principal, que en los
+     * cuatro ANR del Qin F21 estaba ocioso y no decía nada. Ver [AnrTraceHead].
+     */
     @RequiresApi(Build.VERSION_CODES.R)
     private fun readAnrHead(info: ApplicationExitInfo): String? = try {
         info.traceInputStream?.use { stream ->
-            val lines = stream.bufferedReader(Charsets.UTF_8).useLines { it.take(600).toList() }
-            val i = lines.indexOfFirst { it.startsWith("\"main\"") }
-            val from = if (i >= 0) i else 0
-            lines.drop(from).take(18).joinToString("\n")
+            val lines = stream.bufferedReader(Charsets.UTF_8).useLines { it.take(3000).toList() }
+            AnrTraceHead.extract(lines)
         }
     } catch (_: Throwable) {
         null

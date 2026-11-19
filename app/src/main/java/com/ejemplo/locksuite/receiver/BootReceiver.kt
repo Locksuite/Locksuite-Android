@@ -9,9 +9,6 @@ import com.ejemplo.locksuite.service.WatchdogForegroundService
 import com.ejemplo.locksuite.ui.auth.LoginActivity
 import com.ejemplo.locksuite.util.Constants
 import com.ejemplo.locksuite.util.PrefsHelper
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 class BootReceiver : BroadcastReceiver() {
 
@@ -19,6 +16,8 @@ class BootReceiver : BroadcastReceiver() {
         // 7/11/2026 (B.112): onReceive corre en el hilo principal; una excepción acá mataba el proceso.
         com.ejemplo.locksuite.util.Safe.guard("BootReceiver.onReceive") {
             val action = intent.action
+            // 19/11/2026 (B.125, T2): quién arrancó este proceso, anotado una sola vez.
+            com.ejemplo.locksuite.diag.DiagLog.firstEntry("broadcast $action")
             // 6/11/2026 (B.110): rastro del arranque / actualización para el panel (anda también en
             // Arranque Directo: el registro vive en el almacenamiento protegido del dispositivo).
             com.ejemplo.locksuite.diag.DiagLog.i("boot", "Broadcast de sistema: $action")
@@ -103,26 +102,27 @@ class BootReceiver : BroadcastReceiver() {
                 android.util.Log.e("BootReceiver", "Error iniciando WatermarkService en boot: ${e.message}")
             }
 
-            // 2. Re-aplicar restricciones MDM y sincronizar FUERA del hilo principal.
-            // reapplyAllRestrictions() realiza decenas de llamadas IPC a DevicePolicyManager
-            // y chequeos en disco. Ejecutarlo síncrono en onReceive() bloqueaba el hilo principal
-            // de la app durante varios segundos en equipos modestos (como Qin F21 Pro), arriesgando
-            // un ANR de broadcast. goAsync() mantiene vivo el receptor hasta completar el trabajo.
-            val pendingResult = goAsync()
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val policyManager = PolicyManager(context)
-                    policyManager.reapplyAllRestrictions()
-                    com.ejemplo.locksuite.mdm.GracePeriodManager.checkAndHarden(context)
-                    com.ejemplo.locksuite.util.FirebaseDeviceSync.requestSync(context)
-                } catch (e: Exception) {
-                    android.util.Log.e("BootReceiver", "Error en tareas asíncronas de boot: ${e.message}")
-                } finally {
-                    try {
-                        pendingResult.finish()
-                    } catch (ignored: Exception) { }
-                }
-            }
+            // 2. Re-aplicar restricciones MDM y sincronizar FUERA del broadcast.
+            //
+            // 19/11/2026 (B.125, T1) — ⚠️ ESTO ERA `goAsync()` Y ERA EL ANR. `goAsync()` NO
+            // alarga el plazo del broadcast: Android sigue exigiendo `finish()` en 10 s
+            // (primer plano) o 60 s (segundo plano) y después muestra «LockSuite no responde →
+            // Cerrar app». Adentro corría una pasada completa de reapplyAllRestrictions()
+            // (15–20 s en un Qin F21) que además esperaba a la que ya había lanzado
+            // LockSuiteApplication en el mismo arranque: dos pasadas enteras antes de soltar el
+            // broadcast. Cuatro ANR en 8 días en un celular, y dos veces LockSuite quedó muerto
+            // 52 h y 4,5 h después de tocar «Cerrar app».
+            //
+            // Ahora el pedido no bloquea nada: ReconcileScheduler decide (una sola pasada por
+            // arranque) y corre en su propio hilo. El proceso sigue vivo porque arriba ya se
+            // arrancó el Watchdog (servicio en primer plano).
+            //
+            // REGLA DEL PROYECTO: goAsync() solo para trabajo acotado (< 5 s) con finish() en
+            // un `finally`. Todo lo que pueda tardar más va a ReconcileScheduler, al Watchdog o
+            // a WorkManager.
+            com.ejemplo.locksuite.util.ReconcileScheduler.request(
+                context, "broadcast $action", startup = true, afterBoot = true
+            )
         }
     }
 

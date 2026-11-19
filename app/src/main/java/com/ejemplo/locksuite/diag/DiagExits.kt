@@ -109,7 +109,11 @@ object DiagExits {
         sb.append(')')
         if (!r.description.isNullOrBlank()) sb.append(". Detalle del sistema: ").append(r.description.trim())
         val line = DiagSanitizer.sanitize(sb.toString(), DiagSanitizer.MAX_MSG)
-        val tr = DiagSanitizer.sanitizeTrace(r.trace)
+        // 19/11/2026 (B.125, T2.1): la traza de un ANR trae el motivo (`Subject:`), el hilo
+        // principal y los hilos de LockSuite (~30 líneas). `sanitizeTrace` corta a 14 y dejaría
+        // afuera justo los hilos de trabajo; el resto de los cierres siguen como antes.
+        val tr = if (r.reason == 6) DiagSanitizer.sanitizeBlock(r.trace, AnrTraceHead.MAX_CHARS, 240)
+        else DiagSanitizer.sanitizeTrace(r.trace)
         return if (tr.isEmpty()) line else line + "\n" + tr
     }
 

@@ -1,8 +1,10 @@
 const { onRequest } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
 const playLookup = require("./play_lookup");
 const pinSecurity = require("./pin_security");
+const wakePolicy = require("./wake_policy");
 
 const FUNCTION_OPTIONS = {
   region: "us-central1",
@@ -1023,3 +1025,46 @@ exports.colectivosApi = onRequest({ region: "us-central1", cors: true, invoker: 
   }
 });
 
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// 19/11/2026 (B.125, T3.1) — LATIDO INVERSO.
+//
+// Cada 15 min busca los equipos que llevan más de 25 min sin latir (y menos de 7 días) y les manda
+// un FCM de prioridad alta `{ wake: "1" }`. Un FCM crea el proceso aunque esté muerto; el celular
+// (LockSuiteFirebaseService) vuelve a levantar el Watchdog y la VPN y avisa que está vivo. Existe
+// porque el Qin F21 de Iejiel estuvo 52 h y 4,5 h SIN proceso después de un ANR y nada lo despertó.
+//
+// NO es un comando: sin firma, sin PIN y sin ACK. La decisión de a quién se le manda (y los topes
+// de 1 cada 15 min y 24 por día) vive en `wake_policy.js`, con prueba (`tools/test_wake_policy.js`).
+// Deja el rastro en `devices/<id>/wake = { lastSentAt, count, day }` para el panel.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+exports.despertarEquiposSilenciosos = onSchedule(
+  { region: "us-central1", schedule: "every 15 minutes", timeoutSeconds: 120 },
+  async () => {
+    const now = Date.now();
+    const snap = await admin.database().ref("devices")
+      .orderByChild("lastSeen")
+      .startAt(now - wakePolicy.WAKE.MAX_AGE_MS)
+      .endAt(now - wakePolicy.WAKE.SILENCE_MS)
+      .once("value");
+    const candidatos = wakePolicy.pickDevicesToWake(snap.val() || {}, now);
+    let enviados = 0;
+    let fallidos = 0;
+    for (const c of candidatos) {
+      try {
+        await admin.messaging().send({
+          token: c.token,
+          data: { wake: "1", t: String(now) },
+          android: { priority: "high", collapseKey: "wake", ttl: wakePolicy.WAKE.MIN_GAP_MS },
+        });
+        await admin.database().ref(`devices/${c.id}/wake`).set(c.wake);
+        enviados++;
+      } catch (e) {
+        fallidos++;
+        const code = (e && (e.code || (e.errorInfo && e.errorInfo.code))) || String(e);
+        console.warn(`despertarEquiposSilenciosos: ${c.id} no se pudo despertar (${code})`);
+      }
+    }
+    console.log(`despertarEquiposSilenciosos: candidatos=${candidatos.length} enviados=${enviados} fallidos=${fallidos}`);
+  }
+);
