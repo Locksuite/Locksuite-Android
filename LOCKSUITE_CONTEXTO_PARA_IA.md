@@ -2972,27 +2972,42 @@ Cambios aplicados (pendiente de prueba visual y operativa en equipo físico):
    - App Android (`DashboardActivity.kt`): buscador de políticas insensible a tildes/mayúsculas + chip `"Solo encendidas"` + contador dentro de `LazyColumn` (cumpliendo B.96), los 83 interruptores organizados en 11 grupos + tarjeta de suspensión (incluyendo las 20 `PolicySpec.EXTRA_RESTRICTIONS`, `frpEnabled`, `kioskLockTaskEnabled`, `nokiaTouchEnabled` siempre visible, portal cautivo/lista blanca/IAB/IA/WhatsApp/MP/`diagUploadEnabled`, diálogos de confirmación propios y `ServicesTabContent` Auto Evasión usando `PolicyManager`).
    - Cache-busters actualizados en `index.html`, `celular.html`, `dominios.html` y `tienda.html`. Playwright (`tools/panel_render/*`) no pudo ejecutarse por ausencia local del módulo `playwright`.
 
+### B.124 — Sección discreta de Tienda clásica de APKs en `tienda.html`: listar, eliminar, subir `.apk` desde PC y bloquear WebView / Internet por app (18/11)
+
+Cambios aplicados (verificados por compilación, pruebas unitarias y sonda GCS/CORS; pendiente prueba visual en navegador/equipo físico):
+1. **Almacenamiento dedicado y Cloud Function `classicStoreApk` (`admin-backend/functions/index.js`):**
+   - Bucket GCS dedicado **`locksuite-nueva-store-apks`** (`US-CENTRAL1`, `uniformBucketLevelAccess`, lectura pública `allUsers: roles/storage.objectViewer` y CORS para `locksuite-nueva.web.app` / `firebaseapp.com` / `localhost:5000`).
+   - Endpoint HTTPS `classicStoreApk` (`https://classicstoreapk-5i52mt6h3q-uc.a.run.app`, con `verifyAdminToken` + `checkRevoked=true`):
+     - `initUpload`: valida paquete (`CLASSIC_PKG_RE`, no en `CLASSIC_NEVER_OFFERED`), archivo `.apk` y tamaño `<= 512 MB`, genera sesión resumible en `apks/<pkg_>/<ts>_<archivo>.apk` y devuelve `{ uploadUrl, objectPath, downloadUrl }`.
+     - `deleteObject`: valida ruta segura bajo `apks/*.apk` (sin `..`) y elimina el objeto al quitar o reemplazar una app subida desde PC.
+   - Pruebas unitarias agregadas en `tools/test_functions_index.js` (`28` pruebas OK).
+2. **Lector local de APK + interfaz discreta en Tienda web (`apk_reader.js`, `comun.js`, `tienda.html`, `tienda_clasica.js`, `index.html`):**
+   - `admin-backend/public/apk_reader.js` (+ `tools/test_apk_reader.js`): calcula SHA-256 en el navegador (`crypto.subtle`) y lee `AndroidManifest.xml` (AXML) dentro del `.apk` para autocompletar `packageName`, versión y sugerir etiqueta antes de subir.
+   - `tienda.html` incluye al pie un `<details class="ls-card tc-discrete" id="tc-section">` colapsado por defecto (o abierto directo con `#tc-section`, enlazado también desde `index.html` `#old-store-card`) con búsqueda, listado de `storeApps`, eliminación (incluyendo borrado en Storage si tiene `storagePath`), subida directa desde PC con barra de progreso (o URL HTTPS manual opcional), botón para habilitar en `globalSettings/allowedPackages`, toggles inline **`Sin WebView`** (`blockWebView`) y **`Sin Internet`** (`blockInternet`), y botón `📤 Aplicar bloqueos a la flota` (`SYNC_PLAY_STORE`).
+   - Cache-busters actualizados (`comun.js?v=8`, `apk_reader.js?v=1`, `tienda_clasica.js?v=1`).
+3. **Aplicación en el celular (`ClassicStorePolicyManager.kt`, `LoginActivity.kt`, `FirebaseDeviceSync.kt`, `PolicyManager.kt`, `ClassicStorePolicyManagerTest.kt`):**
+   - `ClassicStorePolicyManager` reconcilia los conjuntos `blockWebView` y `blockInternet` de `storeApps` separando propiedad (`wv_owned` / `net_owned`) para nunca deshacer bloqueos manuales del dispositivo ni reglas `noweb` de la Tienda Play (`PlayStoreCatalog`).
+   - Se aplica al instante al instalar desde la tienda clásica y al abrir el diálogo de tienda (`LoginActivity.kt`), en `FirebaseDeviceSync.pullPlayStoreConfig` (`SYNC_PLAY_STORE` + sync horario de `WatchdogWorker`) y en `PolicyManager.reapplyAllRestrictions()`.
+   - Pruebas unitarias en `ClassicStorePolicyManagerTest.kt` (4 pruebas OK).
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**18/11 — Antigravity: Arreglo de pestañas en Vista rápida, unificación de perfiles operativos, baja de `flashingBlocked`, buscador de políticas en app/web y paridad total de 83 switches Web ↔ App (B.123).**
+**18/11 — Antigravity: Tienda clásica de APKs discreta en `tienda.html` con subida directa desde PC a Cloud Storage, eliminación y bloqueo por app de WebView / Internet (B.124).**
 
 - **Pedidos del dueño:**
-  1. Investigar y corregir el cambio de pestañas (`Políticas` / `Aplicaciones` / `Acciones`) en Vista rápida de la web.
-  2. Cambiar los perfiles personalizados: quitar el launcher kosher del modo kosher; igualar las restricciones en todos los perfiles operativos dejando como única diferencia cómo queda abierta la Tienda Play, tomando Trabajo como base pero sin bloquear zona WiFi, fondo de pantalla, idioma ni desinstalación de apps, y activando suspender todas las apps sin Accesibilidad y esperar la Accesibilidad en arranque protegido.
-  3. Quitar el switch de bloqueo de flasheo (`flashingBlocked`).
-  4. Lograr paridad completa de switches entre Web y App Android, y agregar búsqueda de políticas en la app igual que en la web.
-  5. Actualizar `LOCKSUITE_CONTEXTO_PARA_IA.md`, commitear y desplegar todo con `deploy_all.ps1`.
+  1. Agregar en la parte de Tienda web (`tienda.html`) una sección discreta para ver las apps de la tienda clásica (`storeApps`), eliminar alguna o subir un `.apk` directo desde la PC.
+  2. Agregar también opción por app para bloquear WebView (`blockWebView`) o bloquear Internet (`blockInternet`).
 - **Acciones y cambios aplicados:**
-  - `admin-backend/public/styles.css`, `index.html`, `app.js`, `celular.js`, `policies.js`, `celular.html`, `dominios.html`, `tienda.html`, `admin-backend/functions/index.js`: arreglo de `.tab-panel` / `#panel-policies.active`, buscador `#quick-policy-search`, baja de `flashingBlocked`, alta de switches faltantes, `normPol`/`valorActualPolitica`, cache-busters y regeneración de `policies.js` (79 en 10 grupos + 3 especiales + `diagUploadEnabled`).
-  - `EnrollmentProfiles.kt` + `EnrollmentProfilesStoreModeTest.kt`: perfiles operativos unificados (`UNIFIED_RESTRICTIONS` / `UNIFIED_SWITCHES`) diferenciados únicamente por `storeMode`, `Nivel 3 Base mínima` actualizado en `DISALLOW_UNINSTALL_APPS` y baja de `flashingBlocked`.
-  - `PolicyManager.kt`, `FirebaseDeviceSync.kt`, `CommandProcessor.kt`, `DashboardActivity.kt`: baja de `flashingBlocked`, soporte remoto para `settingsEvasionEnabled`/`frpEnabled`/`browsersSuspended`/`systemWebViewSuspended`/`hideSuspendedApps`/`iabFinder*`, buscador y paridad de 83/83 switches en `PoliciesTabContent` (dentro de `LazyColumn`, acorde a B.96) + Auto Evasión sincronizada en `ServicesTabContent`.
+  - Bucket GCS `locksuite-nueva-store-apks` creado en `US-CENTRAL1` con lectura pública y CORS, más endpoint autenticado `classicStoreApk` (`https://classicstoreapk-5i52mt6h3q-uc.a.run.app`) en `admin-backend/functions/index.js`.
+  - Web (`admin-backend/public/apk_reader.js`, `comun.js`, `tienda.html`, `tienda_clasica.js`, `index.html`): parser AXML + SHA-256 local en el navegador, sección `<details id="tc-section">` colapsada por defecto al pie de `tienda.html`, subida resumible directa a GCS con barra de progreso, listado/eliminación, toggles `Sin WebView` / `Sin Internet` y empuje a la flota (`SYNC_PLAY_STORE`).
+  - App Android (`ClassicStorePolicyManager.kt`, `LoginActivity.kt`, `FirebaseDeviceSync.kt`, `PolicyManager.kt`, `ClassicStorePolicyManagerTest.kt`): lectura y reconciliación segura de `blockWebView` (`WebViewBlockManager`) y `blockInternet` (`PolicyManager.setPerAppInternetBlocked`) sin pisar bloqueos manuales ni `noweb` de Tienda Play.
 - **Verificación ejecutada:**
-  - Todos los chequeos de sincronía y sintaxis en `tools/` (`gen_policies_js.py --check`, `check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `check_store_sync.py`, `check_diag_sync.py`, `gen_catalog_js.py --check`, `node --check`, `test_functions_index.js`, `test_pin_security.js`, `test_tienda_logic.js`, `test_diag_logic.js`, `test_play_lookup.js`) aprobados.
-  - `.\gradlew.bat testDebugUnitTest --no-daemon`: 27 suites, 397 pruebas pasadas, 0 fallos.
-  - Verificación de paridad Web ↔ App: 83 switches en Web y 83 políticas + tarjetas equivalentes en App, sin faltantes de ningún lado.
-  - Despliegue ejecutado mediante `.\deploy_all.ps1`. Pendiente únicamente prueba en equipo real.
+  - `node --check` sobre `functions/index.js`, `comun.js`, `apk_reader.js`, `tienda_clasica.js` y `tienda.js`: OK.
+  - Pruebas JS y Python (`test_functions_index.js` [28], `test_apk_reader.js`, `test_tienda_logic.js` [48], `test_pin_security.js` [14], `test_diag_logic.js` [32], `test_play_lookup.js` [16], `check_store_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `check_diag_sync.py`, `gen_policies_js.py --check`, `gen_catalog_js.py --check`): OK.
+  - `.\gradlew.bat testDebugUnitTest --no-daemon`: 28 suites, 368 pruebas pasadas, 0 fallos (incluye `ClassicStorePolicyManagerTest`).
+  - Sonda directa contra `classicStoreApk` (CORS preflight 204 + 401 sin token) y bucket `locksuite-nueva-store-apks` (initUpload resumible 200, PUT con `Origin` 200, GET público 200, DELETE 204): OK. Pendiente prueba visual en panel real y en equipo físico tras `.\deploy_all.ps1`.
 

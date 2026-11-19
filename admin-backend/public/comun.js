@@ -314,6 +314,71 @@
   };
 
   /* ─────────────────────────────────────────────────────────────────────────
+   * TIENDA CLÁSICA DE APKs — subida directa desde PC y borrado en Storage.
+   * ───────────────────────────────────────────────────────────────────────── */
+  const URL_CLASSIC_STORE_APK = "https://classicstoreapk-5i52mt6h3q-uc.a.run.app";
+
+  async function callClassicStoreFn(body) {
+    const idToken = await LS.auth.currentUser.getIdToken();
+    let res;
+    try {
+      res = await fetch(URL_CLASSIC_STORE_APK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + idToken },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      throw new Error("no se pudo hablar con el servidor: " + e.message);
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || ("HTTP " + res.status));
+    }
+    return data;
+  }
+
+  LS.classicStoreInitUpload = function (params) {
+    return callClassicStoreFn({
+      action: "initUpload",
+      packageName: params.packageName,
+      fileName: params.fileName,
+      sizeBytes: params.sizeBytes,
+    });
+  };
+
+  LS.classicStoreDeleteObject = function (objectPath) {
+    return callClassicStoreFn({ action: "deleteObject", objectPath });
+  };
+
+  LS.uploadToSignedUrl = function (uploadUrl, file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", uploadUrl, true);
+      xhr.setRequestHeader("Content-Type", "application/vnd.android.package-archive");
+      xhr.upload.onprogress = function (ev) {
+        if (ev.lengthComputable && typeof onProgress === "function") {
+          onProgress(Math.round((ev.loaded * 100) / ev.total));
+        }
+      };
+      xhr.onload = function () {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          if (typeof onProgress === "function") onProgress(100);
+          resolve();
+        } else {
+          reject(new Error("Error al subir archivo a Cloud Storage (HTTP " + xhr.status + ")."));
+        }
+      };
+      xhr.onerror = function () {
+        reject(new Error("Error de red o CORS al subir el APK a Cloud Storage."));
+      };
+      xhr.onabort = function () {
+        reject(new Error("Subida cancelada."));
+      };
+      xhr.send(file);
+    });
+  };
+
+  /* ─────────────────────────────────────────────────────────────────────────
    * ESTADO "EN LÍNEA"
    *
    * Mismos umbrales que el panel viejo, y por el motivo que dejó anotado B.29:

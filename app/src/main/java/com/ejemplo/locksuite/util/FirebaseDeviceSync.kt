@@ -1449,7 +1449,9 @@ object FirebaseDeviceSync {
         return try {
             var globalJson: String? = null
             var extrasJson: String? = null
-            val latch = java.util.concurrent.CountDownLatch(2)
+            var classicWv: Set<String>? = null
+            var classicNet: Set<String>? = null
+            val latch = java.util.concurrent.CountDownLatch(3)
             withAuth {
                 val db = FirebaseDatabase.getInstance()
                 db.getReference("globalSettings/playStore/apps").get()
@@ -1480,11 +1482,42 @@ object FirebaseDeviceSync {
                         android.util.Log.w("FirebaseDeviceSync", "Tienda Play: no se pudieron leer los extras: ${e.message}")
                         latch.countDown()
                     }
+                db.getReference("storeApps").get()
+                    .addOnSuccessListener { snap ->
+                        try {
+                            val wv = LinkedHashSet<String>()
+                            val net = LinkedHashSet<String>()
+                            snap.children.forEach { child ->
+                                val pkg = child.child("packageName").getValue(String::class.java)
+                                    ?: child.key?.replace("_", ".") ?: return@forEach
+                                if (child.child("blockWebView").getValue(Boolean::class.java) == true) {
+                                    wv.add(pkg)
+                                }
+                                if (child.child("blockInternet").getValue(Boolean::class.java) == true) {
+                                    net.add(pkg)
+                                }
+                            }
+                            classicWv = wv
+                            classicNet = net
+                        } catch (e: Exception) {
+                            android.util.Log.w("FirebaseDeviceSync", "Tienda clásica: no se pudo leer bloqueos: ${e.message}")
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        android.util.Log.w("FirebaseDeviceSync", "Tienda clásica: fallo leyendo storeApps: ${e.message}")
+                        latch.countDown()
+                    }
             }
             // Tope alto pero finito: corre en un hilo de IO lanzado por el propio comando
             // FCM, nunca en el hilo principal ni en el lector del túnel.
             latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
-            com.ejemplo.locksuite.mdm.PlayStoreManager.replaceConfig(ctx, globalJson, extrasJson)
+            val changed = com.ejemplo.locksuite.mdm.PlayStoreManager.replaceConfig(ctx, globalJson, extrasJson)
+            if (classicWv != null && classicNet != null) {
+                com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.replaceConfig(ctx, classicWv!!, classicNet!!)
+            }
+            changed
         } catch (e: Exception) {
             android.util.Log.e("FirebaseDeviceSync", "Tienda Play: pullPlayStoreConfig falló: ${e.message}", e)
             false

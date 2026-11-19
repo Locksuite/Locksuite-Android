@@ -31,6 +31,7 @@ const state = {};            // se reinicia en cada prueba (resetWorld)
 function resetWorld() {
   state.db = {};
   state.fcm = [];
+  state.storageOps = [];
   state.tokenChecks = [];
   state.failFcm = null;
   state.dbReadError = null;
@@ -135,6 +136,23 @@ const fakeAdmin = {
       if (state.failFcm) throw state.failFcm;
       state.fcm.push(m);
       return "msg-id";
+    },
+  }),
+  storage: () => ({
+    bucket(bucketName) {
+      return {
+        file(objectPath) {
+          return {
+            async createResumableUpload(opts) {
+              state.storageOps.push({ op: "createResumableUpload", bucketName, objectPath, opts });
+              return ["https://storage.googleapis.com/upload/resumable/" + encodeURIComponent(objectPath)];
+            },
+            async delete(opts) {
+              state.storageOps.push({ op: "delete", bucketName, objectPath, opts });
+            },
+          };
+        },
+      };
     },
   }),
 };
@@ -404,6 +422,65 @@ test("los comandos firmados llevan HMAC con el secreto del equipo", async () => 
   await send({ deviceId: DEV, command: "LOCK_DEVICE", devicePin: PIN });
   const d = state.fcm[0].data;
   assert.strictEqual(d.signature, crypto.createHmac("sha256", SECRET).update(canonical(d), "utf8").digest("base64"));
+});
+
+// ── classicStoreApk ──────────────────────────────────────────
+test("classicStoreApk rechaza sin token (401) y a no-admins (403) con checkRevoked=true", async () => {
+  seedWorld();
+  const rNoTok = await call(fn.classicStoreApk, { body: { action: "initUpload" } });
+  assert.strictEqual(rNoTok.statusCode, 401);
+  const rIntr = await call(fn.classicStoreApk, { headers: { authorization: "Bearer tok-intruso" }, body: { action: "initUpload" } });
+  assert.strictEqual(rIntr.statusCode, 403);
+  assert.strictEqual(state.tokenChecks[0].checkRevoked, true);
+});
+test("classicStoreApk initUpload valida paquete, extension y tamanio", async () => {
+  seedWorld();
+  const cases = [
+    { packageName: "no-punto", fileName: "app.apk", sizeBytes: 1000 },
+    { packageName: "com.ejemplo.locksuite", fileName: "app.apk", sizeBytes: 1000 },
+    { packageName: "com.android.vending", fileName: "app.apk", sizeBytes: 1000 },
+    { packageName: "com.waze", fileName: "app.zip", sizeBytes: 1000 },
+    { packageName: "com.waze", fileName: "app.apk", sizeBytes: 0 },
+    { packageName: "com.waze", fileName: "app.apk", sizeBytes: 600 * 1024 * 1024 },
+  ];
+  for (const c of cases) {
+    const r = await call(fn.classicStoreApk, {
+      headers: { authorization: "Bearer tok-admin" },
+      body: { action: "initUpload", ...c },
+    });
+    assert.strictEqual(r.statusCode, 400, JSON.stringify(c));
+  }
+  assert.strictEqual(state.storageOps.length, 0);
+});
+test("classicStoreApk initUpload devuelve uploadUrl, objectPath y downloadUrl validos", async () => {
+  seedWorld();
+  const r = await call(fn.classicStoreApk, {
+    headers: { authorization: "Bearer tok-admin", origin: "https://locksuite-nueva.web.app" },
+    body: { action: "initUpload", packageName: "org.example.miapp", fileName: "Mi App v2.apk", sizeBytes: 123456 },
+  });
+  assert.strictEqual(r.statusCode, 200, JSON.stringify(r.body));
+  assert.strictEqual(r.body.success, true);
+  assert.ok(r.body.objectPath.startsWith("apks/org_example_miapp/") && r.body.objectPath.endsWith(".apk"));
+  assert.strictEqual(r.body.downloadUrl, "https://storage.googleapis.com/locksuite-nueva-store-apks/" + r.body.objectPath);
+  assert.ok(r.body.uploadUrl.includes("resumable"));
+  assert.strictEqual(state.storageOps[0].opts.origin, "https://locksuite-nueva.web.app");
+});
+test("classicStoreApk deleteObject rechaza traversal y borra rutas validas", async () => {
+  seedWorld();
+  for (const bad of ["", "../etc/passwd.apk", "apks/../secret.apk", "otros/a.apk", "apks/foo.txt", "/apks/a.apk"]) {
+    const r = await call(fn.classicStoreApk, {
+      headers: { authorization: "Bearer tok-admin" },
+      body: { action: "deleteObject", objectPath: bad },
+    });
+    assert.strictEqual(r.statusCode, 400, bad);
+  }
+  const ok = await call(fn.classicStoreApk, {
+    headers: { authorization: "Bearer tok-admin" },
+    body: { action: "deleteObject", objectPath: "apks/org_example_miapp/1700_app.apk" },
+  });
+  assert.strictEqual(ok.statusCode, 200);
+  assert.strictEqual(state.storageOps[0].op, "delete");
+  assert.strictEqual(state.storageOps[0].bucketName, "locksuite-nueva-store-apks");
 });
 
 (async () => {

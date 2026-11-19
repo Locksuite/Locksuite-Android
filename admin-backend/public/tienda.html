@@ -43,6 +43,21 @@
     .tp-skipped { font-size: 12.5px; color: var(--text-gray); margin: 6px 0 0; line-height: 1.6; }
     .tp-skipped code { color: var(--text-light); }
     .ls-approw .tp-toggle { background: none; border: none; color: var(--accent-cyan); cursor: pointer; font-size: 12px; padding: 4px 6px; }
+    .tc-discrete { margin-top: 28px; opacity: .9; border-style: dashed; }
+    .tc-discrete > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-weight: 700; font-size: 14px; color: var(--text-gray); }
+    .tc-discrete > summary::-webkit-details-marker { display: none; }
+    .tc-discrete[open] > summary { margin-bottom: 14px; color: var(--text-light); }
+    .tc-upload-box { background: var(--navy-dark); border: 1px solid var(--navy-border); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+    .tc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 10px 0; }
+    .tc-grid label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin-bottom: 4px; }
+    .tc-grid .ls-input { width: 100%; box-sizing: border-box; }
+    .tc-flags-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin: 10px 0; font-size: 13px; color: var(--text-light); }
+    .tc-flags-row label, .tc-flag { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12.5px; color: var(--text-light); }
+    .tc-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .tc-flag { background: var(--navy-dark); border: 1px solid var(--navy-border); border-radius: 999px; padding: 4px 10px; }
+    .tc-url { font-size: 11px; color: var(--text-muted); font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 52vw; margin-top: 2px; }
+    .tc-progress { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+    .tc-progress progress { width: 100%; height: 8px; }
     @media (max-width: 720px) { .ls-main { padding-left: 12px !important; padding-right: 12px !important; } }
   </style>
 </head>
@@ -145,6 +160,76 @@
         <div class="ls-progress" id="t-envio"></div>
       </div>
 
+      <!-- Tienda clásica de APKs directos (discreta, colapsada por defecto) -->
+      <details class="ls-card tc-discrete" id="tc-section">
+        <summary>
+          <span>📦 Tienda clásica de APKs directos</span>
+          <span class="ls-chip" id="tc-count">cargando…</span>
+          <small style="font-weight:400; color:var(--text-muted); font-size:12px;">ver, eliminar, subir APK desde PC o bloquear WebView / Internet</small>
+        </summary>
+
+        <p class="ls-hint" style="margin-top:0">
+          Esta lista (<code>storeApps</code>) alimenta la tienda de APKs directos en el celular. Acá podés ver cada app,
+          subir un <code>.apk</code> directo desde tu PC, eliminar entradas o activar <b>Sin WebView</b> / <b>Sin Internet</b>.
+        </p>
+
+        <div class="tc-upload-box">
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+            <label for="tc-file" style="font-size:12.5px; font-weight:700;">Subir APK desde tu PC:</label>
+            <input type="file" id="tc-file" accept=".apk,application/vnd.android.package-archive" style="font-size:12.5px; color:var(--text-light);" />
+            <button type="button" class="ls-btn ls-btn-sm" id="tc-clear-file" style="display:none">Quitar archivo</button>
+            <div class="ls-top-spacer"></div>
+            <button type="button" class="ls-btn ls-btn-sm" id="tc-toggle-url" style="font-size:12px;">O pegar URL externa manualmente</button>
+          </div>
+          <div id="tc-file-info" class="ls-hint" style="margin:0 0 8px 0;">
+            Elegí un archivo .apk de tu PC (se lee paquete y huella SHA-256 automáticamente).
+          </div>
+
+          <div class="tc-grid">
+            <div>
+              <label for="tc-label">Nombre visible</label>
+              <input class="ls-input" type="text" id="tc-label" maxlength="60" placeholder="Ej: Mi App" />
+            </div>
+            <div>
+              <label for="tc-pkg">Paquete Android</label>
+              <input class="ls-input" type="text" id="tc-pkg" maxlength="200" placeholder="Ej: com.ejemplo.app" />
+            </div>
+          </div>
+
+          <div id="tc-url-wrap" style="display:none; margin-bottom:10px;">
+            <label for="tc-url" style="display:block; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin-bottom:4px;">URL directa HTTPS del APK</label>
+            <input class="ls-input" type="url" id="tc-url" style="width:100%; box-sizing:border-box;" placeholder="https://github.com/Locksuite/Locksuite-Android/releases/download/…" />
+          </div>
+
+          <div class="tc-flags-row">
+            <label><input type="checkbox" id="tc-block-wv" /> Bloquear WebView</label>
+            <label><input type="checkbox" id="tc-block-net" /> Bloquear Internet</label>
+            <label><input type="checkbox" id="tc-allow-global" checked /> Visible en la tienda clásica (agregar a permitidas globales)</label>
+          </div>
+
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <button type="button" class="ls-btn ls-btn-primary" id="tc-submit">⬆ Subir / guardar en tienda clásica</button>
+          </div>
+
+          <div class="tc-progress" id="tc-progress-wrap" style="display:none">
+            <progress id="tc-progress-bar" max="100" value="0"></progress>
+            <small id="tc-progress-text" style="color:var(--text-gray)"></small>
+          </div>
+        </div>
+
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px;">
+          <input class="ls-input" id="tc-buscar" type="search" placeholder="Buscar en tienda clásica…" style="flex:1; min-width:200px;" />
+          <button type="button" class="ls-btn ls-btn-sm" id="tc-sync-fleet">📤 Aplicar bloqueos a la flota</button>
+        </div>
+
+        <div id="tc-list"><p class="ls-empty">Cargando…</p></div>
+
+        <div class="ls-card" id="tc-envio-card" style="display:none; margin-top:12px;">
+          <h4 style="margin-top:0">Aplicando cambios en la flota</h4>
+          <div class="ls-progress" id="tc-envio"></div>
+        </div>
+      </details>
+
     </main>
   </div>
 
@@ -161,8 +246,10 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
   <script src="catalog.js?v=2"></script>
-  <script src="comun.js?v=7"></script>
+  <script src="comun.js?v=8"></script>
+  <script src="apk_reader.js?v=1"></script>
   <script src="tienda_logic.js?v=3"></script>
   <script src="tienda.js?v=2"></script>
+  <script src="tienda_clasica.js?v=1"></script>
 </body>
 </html>

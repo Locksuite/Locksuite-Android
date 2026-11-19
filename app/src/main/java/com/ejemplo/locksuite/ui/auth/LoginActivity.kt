@@ -131,7 +131,9 @@ data class StoreApp(
      * 10/9/2026 — ver `util/ApkChecksum.kt`). El panel la calcula solo al cargar la app;
      * las entradas viejas se arreglan con el botón "Calcular sha256" de la tienda.
      */
-    val sha256: String = ""
+    val sha256: String = "",
+    val blockWebView: Boolean = false,
+    val blockInternet: Boolean = false
 )
 
 @Composable
@@ -845,19 +847,28 @@ fun LoginScreen(
             
             db.getReference("storeApps").addListenerForSingleValueEvent(object : ValueEventListener {
                 override fun onDataChange(storeSnap: DataSnapshot) {
+                    val wvSet = LinkedHashSet<String>()
+                    val netSet = LinkedHashSet<String>()
                     val apps = storeSnap.children.mapNotNull {
                         val label = it.child("label").getValue(String::class.java) ?: ""
                         val pkg = it.child("packageName").getValue(String::class.java) ?: ""
                         val apk = it.child("apkUrl").getValue(String::class.java) ?: ""
                         val sha = it.child("sha256").getValue(String::class.java) ?: ""
+                        val blockWv = it.child("blockWebView").getValue(Boolean::class.java) == true
+                        val blockNet = it.child("blockInternet").getValue(Boolean::class.java) == true
+                        if (pkg.isNotEmpty()) {
+                            if (blockWv) wvSet.add(pkg)
+                            if (blockNet) netSet.add(pkg)
+                        }
                         if (label.isNotEmpty() && pkg.isNotEmpty() && apk.isNotEmpty()) {
                             // Una entrada sin sha256 SE MUESTRA igual, a propósito: si se
                             // ocultara, el administrador no tendría forma de enterarse de
                             // que le falta el hash — vería una tienda incompleta sin causa.
                             // Se muestra deshabilitada y con el motivo escrito.
-                            StoreApp(label, pkg, apk, sha)
+                            StoreApp(label, pkg, apk, sha, blockWv, blockNet)
                         } else null
                     }
+                    com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.replaceConfig(context, wvSet, netSet)
                     storeAppsList = apps
                     isStoreLoading = false
                 }
@@ -962,6 +973,14 @@ fun LoginScreen(
                                         Text(app.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Text(app.packageName, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+                                        if (app.blockWebView || app.blockInternet) {
+                                            Spacer(modifier = Modifier.height(3.dp))
+                                            val restr = listOfNotNull(
+                                                if (app.blockWebView) "Sin WebView" else null,
+                                                if (app.blockInternet) "Sin Internet" else null
+                                            ).joinToString(" · ")
+                                            Text(restr, color = Color(0xFF93C5FD), fontSize = 10.sp)
+                                        }
                                         if (!hasChecksum) {
                                             Spacer(modifier = Modifier.height(4.dp))
                                             Text(
@@ -1015,6 +1034,12 @@ fun LoginScreen(
                                                     if (err != null) {
                                                         Toast.makeText(context, err, Toast.LENGTH_LONG).show()
                                                     } else {
+                                                        com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.applyOnInstall(
+                                                            context,
+                                                            app.packageName,
+                                                            app.blockWebView,
+                                                            app.blockInternet
+                                                        )
                                                         Toast.makeText(context, "${app.label} instalado correctamente.", Toast.LENGTH_LONG).show()
                                                     }
                                                 }

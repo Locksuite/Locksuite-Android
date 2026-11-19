@@ -809,6 +809,107 @@ exports.checkPlayApps = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 }, a
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TIENDA CLÁSICA DE APKs — Subida directa desde PC a Cloud Storage (sin límite
+// de 32 MB en Cloud Functions; URL pública + borrado autenticado de objetos).
+// ─────────────────────────────────────────────────────────────────────────────
+const STORE_APKS_BUCKET = "locksuite-nueva-store-apks";
+const MAX_STORE_APK_BYTES = 512 * 1024 * 1024;
+const CLASSIC_PKG_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
+const CLASSIC_NEVER_OFFERED = new Set([
+  "com.ejemplo.locksuite",
+  "com.android.vending",
+  "com.google.android.gms",
+  "com.google.android.gsf",
+  "com.android.settings",
+  "com.android.packageinstaller",
+  "com.google.android.packageinstaller",
+  "com.google.android.permissioncontroller",
+  "com.android.providers.downloads",
+  "com.google.android.apps.work.clouddpc",
+]);
+const CLASSIC_UPLOAD_ORIGINS = new Set([
+  "https://locksuite-nueva.web.app",
+  "https://locksuite-nueva.firebaseapp.com",
+  "http://localhost:5000",
+  "http://127.0.0.1:5000",
+]);
+
+exports.classicStoreApk = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 }, async (req, res) => {
+  Object.entries(CORS_HEADERS).forEach(([k, v]) => res.set(k, v));
+  if (req.method === "OPTIONS") {
+    res.status(204).send("");
+    return;
+  }
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Método no permitido" });
+    return;
+  }
+  try {
+    await verifyAdminToken(req);
+
+    const { action, packageName, fileName, sizeBytes, objectPath } = req.body || {};
+    if (action === "initUpload") {
+      const pkg = typeof packageName === "string" ? packageName.trim() : "";
+      if (!pkg || pkg.length > 200 || !CLASSIC_PKG_RE.test(pkg)) {
+        res.status(400).json({ error: "Nombre de paquete inválido." });
+        return;
+      }
+      if (CLASSIC_NEVER_OFFERED.has(pkg)) {
+        res.status(400).json({ error: "No se puede subir ese paquete del sistema o de LockSuite." });
+        return;
+      }
+      const rawName = typeof fileName === "string" ? fileName.trim() : "";
+      const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/^_+|_+$/g, "");
+      if (!safeName || safeName.length > 140 || !/\.apk$/i.test(safeName)) {
+        res.status(400).json({ error: "El archivo debe tener extensión .apk." });
+        return;
+      }
+      const size = Number(sizeBytes);
+      if (!Number.isFinite(size) || size <= 0 || size > MAX_STORE_APK_BYTES) {
+        res.status(400).json({ error: "Tamaño de APK inválido (máximo 512 MB)." });
+        return;
+      }
+
+      const targetPath = `apks/${pkg.replace(/\./g, "_")}/${Date.now()}_${safeName}`;
+      const reqOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
+      const origin = CLASSIC_UPLOAD_ORIGINS.has(reqOrigin) ? reqOrigin : "https://locksuite-nueva.web.app";
+
+      const [uploadUrl] = await admin.storage().bucket(STORE_APKS_BUCKET).file(targetPath).createResumableUpload({
+        origin,
+        metadata: {
+          contentType: "application/vnd.android.package-archive",
+          cacheControl: "public, max-age=3600",
+        },
+      });
+
+      res.json({
+        success: true,
+        uploadUrl,
+        objectPath: targetPath,
+        downloadUrl: `https://storage.googleapis.com/${STORE_APKS_BUCKET}/${targetPath}`,
+      });
+      return;
+    }
+
+    if (action === "deleteObject") {
+      const obj = typeof objectPath === "string" ? objectPath.trim() : "";
+      if (!obj || obj.length > 400 || !obj.startsWith("apks/") || !/\.apk$/i.test(obj) ||
+          obj.includes("..") || obj.startsWith("/") || /[\u0000-\u001f\u007f\\]/.test(obj)) {
+        res.status(400).json({ error: "Ruta de objeto inválida." });
+        return;
+      }
+      await admin.storage().bucket(STORE_APKS_BUCKET).file(obj).delete({ ignoreNotFound: true });
+      res.json({ success: true });
+      return;
+    }
+
+    res.status(400).json({ error: "Acción no reconocida." });
+  } catch (e) {
+    sendError(res, e, "classicStoreApk");
+  }
+});
+
 // API de Colectivos CABA (Cuando SUBO Proxy)
 exports.colectivosApi = onRequest({ region: "us-central1", cors: true, invoker: "public" }, async (req, res) => {
   res.set("Access-Control-Allow-Origin", "*");

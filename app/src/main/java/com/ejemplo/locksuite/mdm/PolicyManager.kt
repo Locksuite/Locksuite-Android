@@ -2829,6 +2829,11 @@ class PolicyManager(private val context: Context) {
         } catch (e: Exception) {
             android.util.Log.w("PolicyManager", "Tienda Play: reconcile falló: ${e.message}")
         }
+        try {
+            ClassicStorePolicyManager.reconcile(context)
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "Tienda clásica: reconcile falló: ${e.message}")
+        }
 
         // Aplicar FRP si está activado.
         // 27/9/2026: solo si no está ya puesta por la misma vía. Cada llamada guardaba la
