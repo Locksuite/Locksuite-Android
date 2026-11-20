@@ -914,8 +914,6 @@ object FirebaseDeviceSync {
                     "systemWebViewSuspended" to policyManager.isSystemWebViewSuspended(),
                     "adBlockingEnabled" to policyManager.isAdBlockingEnabled(),
                     "gifsBlocked" to policyManager.isGifsBlocked(),
-                    "aiModeEnabled" to com.ejemplo.locksuite.mdm.ImageBlockManager.isGlobalAiEnabled(context),
-                    "mapsImageBlockingEnabled" to com.ejemplo.locksuite.mdm.ImageBlockManager.isMapsImageBlockingEnabled(context),
                     "whatsappBlockStatus" to policyManager.isWhatsAppBlockStatusEnabled(),
                     "whatsappBlockChannels" to policyManager.isWhatsAppBlockChannelsEnabled(),
                     "mercadoPagoBlockOffers" to policyManager.isMercadoPagoBlockOffersEnabled(),
@@ -1038,9 +1036,6 @@ object FirebaseDeviceSync {
                     "dnsTunnelPacketsIn" to com.ejemplo.locksuite.service.KosherVpnService.tunnelPacketsIn.get(),
                     "dnsTunnelHeals" to com.ejemplo.locksuite.service.KosherVpnService.tunnelHeals,
 
-                    // Bloqueo de imágenes
-                    "imageStrictScroll" to policyManager.isImageBlockStrictScrollEnabled(),
-
                     // Kiosco real del sistema operativo (Lock Task)
                     "kioskLockTaskEnabled" to policyManager.isKioskLockTaskEnabled(),
                     "hideSuspendedApps" to policyManager.isHideSuspendedApps(),
@@ -1116,7 +1111,6 @@ object FirebaseDeviceSync {
                     "isSuspended" to app.isSuspended,
                     "isWebViewBlocked" to app.isWebViewBlocked,
                     "isInternetBlocked" to app.isInternetBlocked,
-                    "imageBlockingMode" to app.imageBlockingMode,
                     "appType" to app.appType,
                     "isCritical" to app.isCritical
                 )

@@ -1329,13 +1329,6 @@
       ayuda: "La app sigue abriendo, pero sin conexión." }
   ];
 
-  const MODOS_IMAGEN = [
-    ["SET_IMAGE_BLOCK_NONE", "Sin tapar imágenes", "none"],
-    ["SET_IMAGE_BLOCK_LAYER_1", "Capa 1: por la estructura de la pantalla", "layer1"],
-    ["SET_IMAGE_BLOCK_LAYER_2", "Capa 2: IA (siluetas)", "layer2"],
-    ["SET_IMAGE_BLOCK_BOTH", "Las dos capas", "both"]
-  ];
-
   function leerInstaladas() {
     const inv = S.device.apps || (S.device.info && S.device.info.apps) ||
       S.device.installedApps || (S.device.info && S.device.info.installedApps) || [];
@@ -1391,11 +1384,6 @@
     ACCIONES_APP.forEach((d) => {
       if (a[d.campo] === true) chips.push('<span class="ls-chip ' + d.cls + '">' + d.chip + "</span>");
     });
-    const img = a.imageBlockingMode || "none";
-    if (img !== "none") {
-      const m = MODOS_IMAGEN.find((x) => x[2] === img);
-      chips.push('<span class="ls-chip warn">imágenes: ' + esc(m ? m[1].split(":")[0] : img) + "</span>");
-    }
     const st = estadoDe(a.packageName);
     if (st === "block") chips.push('<span class="ls-chip bad">prohibida en el filtro</span>');
     else if (st === "allow") chips.push('<span class="ls-chip ok">permitida en el filtro</span>');
@@ -1430,7 +1418,7 @@
     else if (filtro === "sistema") apps = apps.filter((a) => a.appType === "Sistema");
     else if (filtro === "restringidas") {
       apps = apps.filter((a) => a.isHidden || a.isSuspended || a.isWebViewBlocked ||
-        a.isInternetBlocked || (a.imageBlockingMode && a.imageBlockingMode !== "none"));
+        a.isInternetBlocked);
     }
     apps.sort((a, b) => (a.label || a.packageName).localeCompare(b.label || b.packageName, "es"));
 
@@ -1459,8 +1447,6 @@
         return '<button class="ls-btn ls-btn-sm' + (actual && !e ? " ls-on" : "") + '" data-acc="' + def.id +
           '" data-quiere="' + (quiere ? "1" : "0") + '"' + (e ? " disabled" : "") + ">" + esc(txt) + "</button>";
       };
-      const imgActual = a.imageBlockingMode || "none";
-      const eImg = esperandoDe(pkg, "img", imgActual);
       return '<div class="ls-irow' + (a.isHidden || a.isSuspended ? " restr" : "") + '" data-pkg="' + esc(pkg) + '">' +
         '<div class="ls-ihead">' +
           '<span class="ls-avatar">' + esc(inicial) + "</span>" +
@@ -1478,12 +1464,7 @@
           ? '<div class="ls-ibody">' +
             (a.isCritical ? "" :
               ACCIONES_APP.slice(2).map((d) =>
-                '<div class="ls-kv"><span>' + esc(d.ayuda) + "</span><span>" + botonRapido(d) + "</span></div>").join("") +
-              '<div class="ls-kv"><span>Tapar imágenes en esta app</span><span>' +
-                '<select class="ls-select" data-img="1"' + (eImg ? " disabled" : "") + ">" +
-                MODOS_IMAGEN.map((m) => '<option value="' + m[2] + '"' +
-                  ((eImg ? eImg.quiere : imgActual) === m[2] ? " selected" : "") + ">" + esc(m[1]) + "</option>").join("") +
-                "</select>" + (eImg ? " ⏳" : "") + "</span></div>") +
+                '<div class="ls-kv"><span>' + esc(d.ayuda) + "</span><span>" + botonRapido(d) + "</span></div>").join("")) +
             '<div class="ls-kv"><span>Actualizar esta app' +
               '<br><small>Camino: ' + esc(nombreRuta(S.ui.rutaUpd)) + ' · <a href="#" data-ir="actualizaciones">cambiar</a></small></span>' +
               '<span><button class="ls-btn ls-btn-sm" data-upd="1">⬆️ Actualizar</button></span></div>' +
@@ -1541,22 +1522,6 @@
       irA("apps");
       pintarApps();
     }
-  });
-
-  $("c-inst").addEventListener("change", async (e) => {
-    const sel = e.target.closest("select[data-img]");
-    if (!sel) return;
-    const pkg = sel.closest(".ls-irow").dataset.pkg;
-    const m = MODOS_IMAGEN.find((x) => x[2] === sel.value);
-    if (!m) return;
-    const k = pkg + "|img";
-    S.ui.esperando[k] = { quiere: m[2], hasta: Date.now() + 30000, buzon: false };
-    pintarInstaladas(true);
-    const r = await LS.sendCommand(deviceId, m[0], [pkg], null, opc());
-    if (r.ok && r.pendiente) S.ui.esperando[k] = { quiere: m[2], hasta: Date.now() + 15 * 60000, buzon: true };
-    else if (!r.ok) delete S.ui.esperando[k];
-    LS.toast(...LS.resultado(r, "Imágenes: " + m[1] + "."));
-    pintarInstaladas(true);
   });
 
   /* ── Play Store: lo que en la vista rápida es la tarjeta "Control principal" ── */

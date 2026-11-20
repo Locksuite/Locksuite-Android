@@ -37,12 +37,11 @@ javac -nowarn -source 17 -target 17 -cp "$ANDROID_JAR" -d "$STUBS_OUT" @"$TC_WOR
 if [ -n "${FILES_LIST:-}" ]; then
   cp "$FILES_LIST" "$TC_WORK/files.list"
 else
-  # Todo lo que no es Compose: se saltea /ui/ (menos ui/playstore) y los detectores de IA
-  # (dependen de ML Kit / TFLite; los reemplaza stubs/svc/AIDetectors.kt).
+  # Todo lo que no es Compose: se saltea /ui/ (menos ui/playstore) y QrLuminanceDecoder.
   find "$SRC" -name '*.kt' | grep -v '/ui/' | sort > "$TC_WORK/files.list"
   find "$SRC/com/ejemplo/locksuite/ui/playstore" -name '*.kt' 2>/dev/null | sort >> "$TC_WORK/files.list"
   find "$TC_HERE/stubs" -name '*.kt' >> "$TC_WORK/files.list"
-  grep -v 'QrLuminanceDecoder.kt\|AIFaceDetector.kt\|AIPersonDetector.kt' "$TC_WORK/files.list" > "$TC_WORK/files.tmp" \
+  grep -v 'QrLuminanceDecoder.kt' "$TC_WORK/files.list" > "$TC_WORK/files.tmp" \
     && mv "$TC_WORK/files.tmp" "$TC_WORK/files.list"
 fi
 echo "Chequeando $(wc -l < "$TC_WORK/files.list") archivos Kotlin…" >&2

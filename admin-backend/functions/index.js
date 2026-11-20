@@ -81,9 +81,7 @@ const ALLOWED_COMMANDS = new Set([
   "DISABLE_KEYGUARD", "ENABLE_KEYGUARD", "BLOCK_INTERNET", "UNBLOCK_INTERNET",
   "ENABLE_ADBLOCK", "DISABLE_ADBLOCK", "HIDE_APP", "UNHIDE_APP",
   "SUSPEND_APP", "UNSUSPEND_APP", "BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW",
-  "UPDATE_ALLOWLIST", "SET_IMAGE_BLOCK_NONE", "SET_IMAGE_BLOCK_LAYER_1",
-  "SET_IMAGE_BLOCK_LAYER_2", "SET_IMAGE_BLOCK_BOTH", "ENABLE_AI_MODE",
-  "DISABLE_AI_MODE", "ENABLE_MAPS_IMAGE_BLOCKING", "DISABLE_MAPS_IMAGE_BLOCKING",
+  "UPDATE_ALLOWLIST",
   "BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS", "BLOCK_WHATSAPP_CHANNELS",
   "UNBLOCK_WHATSAPP_CHANNELS", "CHANGE_PIN", "ENABLE_STEALTH", "DISABLE_STEALTH",
   "BLOCK_GIFS", "UNBLOCK_GIFS", "UPDATE_APP", "UPDATE_LOCKSUITE", "VERIFY_PIN",
@@ -218,8 +216,6 @@ const ALLOWED_COMMANDS = new Set([
   // Arranque protegido: cierra la red al bootear hasta que el filtro DNS esta
   // realmente funcionando (ver app/util/BootGate.kt).
   "ENABLE_BOOT_GATE", "DISABLE_BOOT_GATE",
-  // Bloqueo de imagenes: tapado estricto del contenedor mientras se desplaza.
-  "ENABLE_IMAGE_STRICT_SCROLL", "DISABLE_IMAGE_STRICT_SCROLL",
   // Kiosco real del sistema operativo (Lock Task). El equipo SOLO puede abrir los
   // paquetes de la lista blanca del launcher, y lo hace cumplir Android, no LockSuite.
   // OJO: si el marcador telefonico no esta en esa lista, el codigo de recuperacion
@@ -292,7 +288,6 @@ function commandFamily(command, packages) {
     [/^(ENABLE|DISABLE)_/, "TOGGLE_"],
     [/^RESUME_LOCKSUITE$/, "SUSPEND_LOCKSUITE"],
     [/^CANCEL_UPDATE_APP$/, "UPDATE_APP"],
-    [/^SET_IMAGE_BLOCK_.*$/, "SET_IMAGE_BLOCK"],
     [/^SET_GOOGLE_ACCOUNT_MODE_.*$/, "SET_GOOGLE_ACCOUNT_MODE"],
     [/^SET_WHITELIST_(SIMULATION|ENFORCE)$/, "SET_WHITELIST_SIM"],
     [/^(SET_DOMAIN_RULE_.*|REMOVE_DOMAIN_RULE)$/, "DOMAIN_RULE"],

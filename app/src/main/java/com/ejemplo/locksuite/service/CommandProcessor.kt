@@ -203,8 +203,7 @@ class CommandProcessor(private val context: Context) {
 
         val requiresPackages = setOf(
             "HIDE_APP", "UNHIDE_APP", "SUSPEND_APP", "UNSUSPEND_APP", 
-            "BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW", "SET_IMAGE_BLOCK_NONE", 
-            "SET_IMAGE_BLOCK_LAYER_1", "SET_IMAGE_BLOCK_LAYER_2", "SET_IMAGE_BLOCK_BOTH",
+            "BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW",
             "BLOCK_APP_INTERNET", "UNBLOCK_APP_INTERNET",
             // Las reglas DNS mandan el DOMINIO por este mismo parámetro. Van acá para
             // que un comando sin dominio se rechace con un motivo en vez de aplicarse
@@ -530,39 +529,6 @@ class CommandProcessor(private val context: Context) {
                         }
                         true
                     }
-                }
-                "SET_IMAGE_BLOCK_NONE" -> {
-                    packagesList.forEach { com.ejemplo.locksuite.mdm.ImageBlockManager.setMode(context, it, "none") }
-                    true
-                }
-                "SET_IMAGE_BLOCK_LAYER_1" -> {
-                    packagesList.forEach { com.ejemplo.locksuite.mdm.ImageBlockManager.setMode(context, it, "layer1") }
-                    true
-                }
-                "SET_IMAGE_BLOCK_LAYER_2" -> {
-                    packagesList.forEach { com.ejemplo.locksuite.mdm.ImageBlockManager.setMode(context, it, "layer2") }
-                    true
-                }
-                "SET_IMAGE_BLOCK_BOTH" -> {
-                    packagesList.forEach { com.ejemplo.locksuite.mdm.ImageBlockManager.setMode(context, it, "both") }
-                    true
-                }
-                "ENABLE_AI_MODE" -> {
-                    com.ejemplo.locksuite.mdm.ImageBlockManager.setGlobalAiEnabled(context, true)
-                    true
-                }
-                "DISABLE_AI_MODE" -> {
-                    com.ejemplo.locksuite.mdm.ImageBlockManager.setGlobalAiEnabled(context, false)
-                    com.ejemplo.locksuite.service.AIContentGate.releaseAll()
-                    true
-                }
-                "ENABLE_MAPS_IMAGE_BLOCKING" -> {
-                    com.ejemplo.locksuite.mdm.ImageBlockManager.setMapsImageBlockingEnabled(context, true)
-                    true
-                }
-                "DISABLE_MAPS_IMAGE_BLOCKING" -> {
-                    com.ejemplo.locksuite.mdm.ImageBlockManager.setMapsImageBlockingEnabled(context, false)
-                    true
                 }
                 "UPDATE_ALLOWLIST" -> {
                     val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
@@ -897,9 +863,6 @@ class CommandProcessor(private val context: Context) {
                 "ENABLE_BOOT_GATE" -> policyManager.setBootGateEnabled(true)
                 "DISABLE_BOOT_GATE" -> policyManager.setBootGateEnabled(false)
 
-                // ── Bloqueo de imágenes: tapado estricto al desplazar ──
-                "ENABLE_IMAGE_STRICT_SCROLL" -> policyManager.setImageBlockStrictScroll(true)
-                "DISABLE_IMAGE_STRICT_SCROLL" -> policyManager.setImageBlockStrictScroll(false)
                 "UPDATE_LOCKSUITE" -> {
                     val idToAck = commandId
                     commandId = null

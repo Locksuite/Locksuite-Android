@@ -940,19 +940,13 @@ fun PoliciesTabContent(context: Context) {
                 )
             ),
             PolicySection(
-                title = "Arranque protegido y filtro visual",
+                title = "Arranque protegido",
                 items = listOf(
                     PolicySwitchItem(
                         key = "bootGateEnabled",
                         label = "Arranque protegido (cerrar la red hasta que el filtro esté listo)",
                         isChecked = policyManager.isBootGateEnabled(),
                         onCheckedChange = { policyManager.setBootGateEnabled(it).also { refreshKey++ } }
-                    ),
-                    PolicySwitchItem(
-                        key = "imageStrictScroll",
-                        label = "Imágenes: tapado estricto al desplazar",
-                        isChecked = policyManager.isImageBlockStrictScrollEnabled(),
-                        onCheckedChange = { policyManager.setImageBlockStrictScroll(it).also { refreshKey++ } }
                     )
                 )
             ),
@@ -1075,32 +1069,6 @@ fun PoliciesTabContent(context: Context) {
                         label = "Modo Oculto (Stealth Mode)",
                         isChecked = isStealthModeEnabled(context),
                         onCheckedChange = { setStealthModeEnabled(context, it).also { refreshKey++ } }
-                    )
-                )
-            ),
-            PolicySection(
-                title = "Inteligencia Artificial",
-                items = listOf(
-                    PolicySwitchItem(
-                        key = "aiModeEnabled",
-                        label = "Activar Modo IA (Filtro de Siluetas)",
-                        isChecked = com.ejemplo.locksuite.mdm.ImageBlockManager.isGlobalAiEnabled(context),
-                        onCheckedChange = {
-                            com.ejemplo.locksuite.mdm.ImageBlockManager.setGlobalAiEnabled(context, it)
-                            if (!it) com.ejemplo.locksuite.service.AIContentGate.releaseAll()
-                            refreshKey++
-                            true
-                        }
-                    ),
-                    PolicySwitchItem(
-                        key = "mapsImageBlockingEnabled",
-                        label = "Bloqueo de Imágenes en Maps",
-                        isChecked = com.ejemplo.locksuite.mdm.ImageBlockManager.isMapsImageBlockingEnabled(context),
-                        onCheckedChange = {
-                            com.ejemplo.locksuite.mdm.ImageBlockManager.setMapsImageBlockingEnabled(context, it)
-                            refreshKey++
-                            true
-                        }
                     )
                 )
             ),
@@ -1898,7 +1866,7 @@ fun AppManagerTabContent(context: Context) {
                     app.packageName.lowercase().contains(searchQuery.lowercase())
             val matchesFilter = when (selectedFilter) {
                 "Todas" -> true
-                "Bloqueadas" -> app.isHidden || app.isSuspended || app.isWebViewBlocked || app.imageBlockingMode != "none"
+                "Bloqueadas" -> app.isHidden || app.isSuspended || app.isWebViewBlocked || app.isInternetBlocked
                 "Usuario" -> app.appType == "Usuario"
                 "Sistema" -> app.appType == "Sistema"
                 "Preinstaladas" -> app.appType == "Preinstalada"
@@ -2073,7 +2041,7 @@ fun AppManagerTabContent(context: Context) {
             // Fila de chips de filtro (Scrolleable horizontalmente)
             item(key = "cab_filtros") {
                 val blockedCount = remember(appsList) {
-                    appsList.count { it.isHidden || it.isSuspended || it.isWebViewBlocked || it.imageBlockingMode != "none" }
+                    appsList.count { it.isHidden || it.isSuspended || it.isWebViewBlocked || it.isInternetBlocked }
                 }
                 val filterOptions = remember(blockedCount) {
                     listOf(
@@ -2293,8 +2261,6 @@ fun AppRowItem(
     var webviewState by remember { mutableStateOf(app.isWebViewBlocked) }
     var perAppNetState by remember { mutableStateOf(app.isInternetBlocked) }
     var expanded by remember { mutableStateOf(false) }
-    var imageBlockingMode by remember { mutableStateOf(app.imageBlockingMode) }
-    val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
     LaunchedEffect(app) {
@@ -2302,7 +2268,6 @@ fun AppRowItem(
         suspendState = app.isSuspended
         webviewState = app.isWebViewBlocked
         perAppNetState = app.isInternetBlocked
-        imageBlockingMode = app.imageBlockingMode
     }
 
     Card(
@@ -2376,7 +2341,7 @@ fun AppRowItem(
                     Icon(
                         imageVector = Icons.Default.Settings,
                         contentDescription = "Configuración Avanzada",
-                        tint = if (imageBlockingMode != "none") Color(0xFFF5C438) else Color.White
+                        tint = if (perAppNetState) Color(0xFFF5C438) else Color.White
                     )
                 }
 
@@ -2505,51 +2470,6 @@ fun AppRowItem(
                         .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = "Bloqueo de imágenes:",
-                        color = Color.LightGray,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        val modes = listOf(
-                            "none" to "Desactivado",
-                            "layer1" to "Capa 1",
-                            "layer2" to "Capa 2",
-                            "both" to "Ambas"
-                        )
-                        modes.forEach { (valStr, label) ->
-                            val isSelected = imageBlockingMode == valStr
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) Color(0xFFF5C438) else Color(0xFF0E141B))
-                                    .clickable {
-                                        imageBlockingMode = valStr
-                                        scope.launch(Dispatchers.IO) {
-                                            com.ejemplo.locksuite.mdm.ImageBlockManager.setMode(context, app.packageName, valStr)
-                                            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
-                                        }
-                                    }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = label,
-                                    color = if (isSelected) Color(0xFF0E141B) else Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -3364,81 +3284,6 @@ fun ServicesTabContent(
                                     evasionEnabledState = enabled
                                     Toast.makeText(context, if (enabled) "Auto Evasión Activada." else "Auto Evasión Desactivada.", Toast.LENGTH_SHORT).show()
                                 }
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0E141B),
-                                checkedTrackColor = accentOrange
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Activar Modo IA (Filtro de Siluetas)", color = Color.White, fontSize = 14.sp)
-                            Text(
-                                "Detecta y difumina siluetas humanas en pantalla en tiempo real (Capa 2).",
-                                color = Color.LightGray,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                        var globalAiState by remember {
-                            mutableStateOf(com.ejemplo.locksuite.mdm.ImageBlockManager.isGlobalAiEnabled(context))
-                        }
-                        Switch(
-                            checked = globalAiState,
-                            onCheckedChange = { enabled ->
-                                com.ejemplo.locksuite.mdm.ImageBlockManager.setGlobalAiEnabled(context, enabled)
-                                if (!enabled) {
-                                    com.ejemplo.locksuite.service.AIContentGate.releaseAll()
-                                }
-                                globalAiState = enabled
-                                scope.launch(Dispatchers.IO) {
-                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
-                                }
-                                Toast.makeText(context, if (enabled) "Modo IA Activado." else "Modo IA Desactivado.", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0E141B),
-                                checkedTrackColor = accentOrange
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Bloqueo de Imágenes en Maps", color = Color.White, fontSize = 14.sp)
-                            Text(
-                                "Activa un bloqueo ultra estricto de fotos y personas específico para Google Maps.",
-                                color = Color.LightGray,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                        var mapsAiState by remember {
-                            mutableStateOf(com.ejemplo.locksuite.mdm.ImageBlockManager.isMapsImageBlockingEnabled(context))
-                        }
-                        Switch(
-                            checked = mapsAiState,
-                            onCheckedChange = { enabled ->
-                                com.ejemplo.locksuite.mdm.ImageBlockManager.setMapsImageBlockingEnabled(context, enabled)
-                                mapsAiState = enabled
-                                scope.launch(Dispatchers.IO) {
-                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
-                                }
-                                Toast.makeText(context, if (enabled) "Bloqueo Maps Activado." else "Bloqueo Maps Desactivado.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color(0xFF0E141B),

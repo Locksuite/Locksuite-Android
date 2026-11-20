@@ -386,16 +386,9 @@ window.LOCKSUITE_POLICIES = {
     {
       "field": "bootGateEnabled",
       "label": "Arranque protegido (cerrar la red hasta que el filtro esté listo)",
-      "group": "Arranque protegido y filtro visual",
+      "group": "Arranque protegido",
       "on": "ENABLE_BOOT_GATE",
       "off": "DISABLE_BOOT_GATE"
-    },
-    {
-      "field": "imageStrictScroll",
-      "label": "Imágenes: tapado estricto al desplazar",
-      "group": "Arranque protegido y filtro visual",
-      "on": "ENABLE_IMAGE_STRICT_SCROLL",
-      "off": "DISABLE_IMAGE_STRICT_SCROLL"
     },
     {
       "field": "cameraDisabled",
@@ -501,20 +494,6 @@ window.LOCKSUITE_POLICIES = {
       "group": "Conectividad y Filtros",
       "on": "ENABLE_STEALTH",
       "off": "DISABLE_STEALTH"
-    },
-    {
-      "field": "aiModeEnabled",
-      "label": "Activar Modo IA (Filtro de Siluetas)",
-      "group": "Inteligencia Artificial",
-      "on": "ENABLE_AI_MODE",
-      "off": "DISABLE_AI_MODE"
-    },
-    {
-      "field": "mapsImageBlockingEnabled",
-      "label": "Bloqueo de Imágenes en Maps",
-      "group": "Inteligencia Artificial",
-      "on": "ENABLE_MAPS_IMAGE_BLOCKING",
-      "off": "DISABLE_MAPS_IMAGE_BLOCKING"
     },
     {
       "field": "whatsappBlockStatus",

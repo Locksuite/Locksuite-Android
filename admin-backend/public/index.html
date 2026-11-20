@@ -685,10 +685,9 @@
               filtrar. Ver app/util/BootGate.kt para el alcance real y sus límites.
             -->
             <div class="sidebar-card">
-              <h3>Arranque protegido y filtro visual</h3>
+              <h3>Arranque protegido</h3>
               <div class="toggle-list">
                 <label class="toggle-row"><span>Arranque protegido (cerrar la red hasta que el filtro esté listo)</span><input type="checkbox" class="policy-switch" data-policy="bootGateEnabled" /></label>
-                <label class="toggle-row"><span>Imágenes: tapado estricto al desplazar</span><input type="checkbox" class="policy-switch" data-policy="imageStrictScroll" /></label>
               </div>
               <p class="muted" id="boot-gate-status" style="font-size: 11px; margin: 10px 0 0;"></p>
             </div>
@@ -722,14 +721,6 @@
               </div>
             </div>
 
-            <!-- Inteligencia Artificial -->
-            <div class="sidebar-card">
-              <h3>Inteligencia Artificial</h3>
-              <div class="toggle-list">
-                <label class="toggle-row"><span>Activar Modo IA (Filtro de Siluetas)</span><input type="checkbox" class="policy-switch" data-policy="aiModeEnabled" /></label>
-                <label class="toggle-row"><span>Bloqueo de Imágenes en Maps</span><input type="checkbox" class="policy-switch" data-policy="mapsImageBlockingEnabled" /></label>
-              </div>
-            </div>
             <!-- Filtros de Servicios -->
             <div class="sidebar-card">
               <h3>Filtros de Servicios</h3>
@@ -932,12 +923,11 @@
               </div>
             </div>
 
-            <!-- Arranque protegido y filtro visual — versión por GRUPO (17/8/2026) -->
+            <!-- Arranque protegido — versión por GRUPO -->
             <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
-              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Arranque protegido y filtro visual</h3>
+              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Arranque protegido</h3>
               <div class="toggle-list">
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Arranque protegido (cerrar la red hasta que el filtro esté listo)</span><input type="checkbox" class="group-policy-switch" data-policy="bootGateEnabled" /></label>
-                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Imágenes: tapado estricto al desplazar</span><input type="checkbox" class="group-policy-switch" data-policy="imageStrictScroll" /></label>
               </div>
             </div>
 
@@ -968,15 +958,6 @@
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear GIFs y Stickers (Tenor)</span><input type="checkbox" class="group-policy-switch" data-policy="gifsBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Modo Oculto (Stealth Mode)</span><input type="checkbox" class="group-policy-switch" data-policy="stealthModeEnabled" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear WebView (Navegadores)</span><input type="checkbox" class="group-policy-switch" data-policy="webviewBlocked" /></label>
-              </div>
-            </div>
-
-            <!-- Inteligencia Artificial -->
-            <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
-              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Inteligencia Artificial</h3>
-              <div class="toggle-grid" style="display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--navy-dark); border-radius: 10px;">
-                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Activar Modo IA (Filtro de Siluetas)</span><input type="checkbox" class="group-policy-switch" data-policy="aiModeEnabled" /></label>
-                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloqueo de Imágenes en Maps</span><input type="checkbox" class="group-policy-switch" data-policy="mapsImageBlockingEnabled" /></label>
               </div>
             </div>
 
@@ -1181,11 +1162,11 @@
   <!-- 26/10/2026 (B.95): app.js usa policies.js para saber qué interruptor toca cada
        comando pendiente (marca «⏳ pendiente»). Es el mismo archivo generado que ya usa
        la ficha nueva; si faltara, la barra funciona igual, solo sin esa marca. -->
-  <script src="policies.js?v=3"></script>
+  <script src="policies.js?v=4"></script>
   <!-- 29/10/2026 (B.101): aprobar un pedido de la Tienda Play usa la lógica pura de la pantalla
        tienda.html (TiendaLogic.approveRequest). Si faltara, el resto del panel sigue igual y solo
        esos pedidos avisan que no se pueden aprobar desde acá. -->
   <script src="tienda_logic.js?v=2"></script>
-  <script src="app.js?v=50"></script>
+  <script src="app.js?v=51"></script>
 </body>
 </html>

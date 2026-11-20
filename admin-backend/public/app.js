@@ -835,14 +835,14 @@ function renderAppsList(e) {
     // Update blocked count display
     const blockedCountEl = document.getElementById("blocked-apps-count");
     if (blockedCountEl) {
-        const totalBlocked = t.filter(app => app.isHidden || app.isSuspended || app.isWebViewBlocked || (app.imageBlockingMode && app.imageBlockingMode !== "none")).length;
+        const totalBlocked = t.filter(app => app.isHidden || app.isSuspended || app.isWebViewBlocked || app.isInternetBlocked).length;
         blockedCountEl.textContent = totalBlocked;
     }
 
     // Filter by type
     let filtered = t;
     if (currentAppFilter === "blocked") {
-        filtered = t.filter(app => app.isHidden || app.isSuspended || app.isWebViewBlocked || (app.imageBlockingMode && app.imageBlockingMode !== "none"));
+        filtered = t.filter(app => app.isHidden || app.isSuspended || app.isWebViewBlocked || app.isInternetBlocked);
     } else if (currentAppFilter === "user") {
         filtered = t.filter(app => app.appType === "Usuario");
     } else if (currentAppFilter === "system") {
@@ -925,7 +925,7 @@ function renderAppsList(e) {
             gearBtn.textContent = "⚙️";
             gearBtn.style.padding = "4px 6px";
             gearBtn.style.fontSize = "12px";
-            if (e.imageBlockingMode && e.imageBlockingMode !== "none") {
+            if (e.isInternetBlocked) {
                 gearBtn.style.borderColor = "var(--accent-orange)";
                 gearBtn.style.color = "var(--accent-orange)";
                 gearBtn.style.boxShadow = "0 0 5px rgba(241, 196, 15, 0.4)";
@@ -946,59 +946,7 @@ function renderAppsList(e) {
             advancedPanel.style.flexDirection = "column";
             advancedPanel.style.gap = "8px";
 
-            // Fila 1: Bloqueo de Imagen
-            const imgRow = document.createElement("div");
-            imgRow.style.display = "flex";
-            imgRow.style.alignItems = "center";
-            imgRow.style.justifyContent = "space-between";
-            imgRow.style.width = "100%";
-
-            const label = document.createElement("span");
-            label.textContent = "Bloqueo de imágenes:";
-            label.style.fontSize = "11px";
-            label.style.color = "var(--text-gray)";
-
-            const select = document.createElement("select");
-            select.style.padding = "3px 6px";
-            select.style.borderRadius = "6px";
-            select.style.backgroundColor = "var(--navy-dark)";
-            select.style.color = "var(--text-light)";
-            select.style.border = "1px solid var(--navy-light)";
-            select.style.fontSize = "11px";
-            select.style.cursor = "pointer";
-
-            const optionsList = [
-                { value: "none", text: "Desactivado" },
-                { value: "layer1", text: "Capa 1: Nodos" },
-                { value: "layer2", text: "Capa 2: IA (Siluetas)" },
-                { value: "both", text: "Ambas Capas (Nodos + IA)" }
-            ];
-
-            optionsList.forEach(opt => {
-                const o = document.createElement("option");
-                o.value = opt.value;
-                o.textContent = opt.text;
-                if ((e.imageBlockingMode || "none") === opt.value) {
-                    o.selected = true;
-                }
-                select.appendChild(o);
-            });
-
-            select.addEventListener("change", () => {
-                let cmd = "SET_IMAGE_BLOCK_NONE";
-                if (select.value === "layer1") cmd = "SET_IMAGE_BLOCK_LAYER_1";
-                else if (select.value === "layer2") cmd = "SET_IMAGE_BLOCK_LAYER_2";
-                else if (select.value === "both") cmd = "SET_IMAGE_BLOCK_BOTH";
-                
-                select.disabled = true;
-                runCommandOnDevice(selectedDeviceId, cmd, [e.packageName], select);
-            });
-
-            imgRow.appendChild(label);
-            imgRow.appendChild(select);
-            advancedPanel.appendChild(imgRow);
-
-            // Fila 2: Bloqueo Total de Internet por App
+            // Bloqueo Total de Internet por App
             const netRow = document.createElement("div");
             netRow.style.display = "flex";
             netRow.style.alignItems = "center";
@@ -1845,8 +1793,6 @@ saveNameBtn.addEventListener("click", async () => {
             tetheringBlocked: ["BLOCK_TETHERING", "UNBLOCK_TETHERING"],
             adBlockingEnabled: ["ENABLE_ADBLOCK", "DISABLE_ADBLOCK"],
             gifsBlocked: ["BLOCK_GIFS", "UNBLOCK_GIFS"],
-            aiModeEnabled: ["ENABLE_AI_MODE", "DISABLE_AI_MODE"],
-            mapsImageBlockingEnabled: ["ENABLE_MAPS_IMAGE_BLOCKING", "DISABLE_MAPS_IMAGE_BLOCKING"],
             whatsappBlockStatus: ["BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS"],
             whatsappBlockChannels: ["BLOCK_WHATSAPP_CHANNELS", "UNBLOCK_WHATSAPP_CHANNELS"],
             mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
@@ -1887,9 +1833,8 @@ saveNameBtn.addEventListener("click", async () => {
             bootGateWaitAccessibility: ["ENABLE_BOOT_GATE_ACCESSIBILITY", "DISABLE_BOOT_GATE_ACCESSIBILITY"],
             iabFinderEnabled: ["ENABLE_IAB_FINDER", "DISABLE_IAB_FINDER"],
             iabFinderEnforce: ["DISABLE_IAB_SIMULATION", "ENABLE_IAB_SIMULATION"],
-            // Arranque protegido y filtro visual
+            // Arranque protegido
             bootGateEnabled: ["ENABLE_BOOT_GATE", "DISABLE_BOOT_GATE"],
-            imageStrictScroll: ["ENABLE_IMAGE_STRICT_SCROLL", "DISABLE_IMAGE_STRICT_SCROLL"],
             // Kiosco real del SO (2/9/2026, copiado de A Bloq)
             kioskLockTaskEnabled: ["ENABLE_KIOSK_LOCK_TASK", "DISABLE_KIOSK_LOCK_TASK"],
             nokiaKeypadMode: ["ENABLE_NOKIA_MODE", "DISABLE_NOKIA_MODE"],
@@ -3102,7 +3047,6 @@ if (savePresetBtn) {
             accSuspendAll: !!dev.accSuspendAll,
             bootGateEnabled: !!dev.bootGateEnabled,
             bootGateWaitAccessibility: !!dev.bootGateWaitAccessibility,
-            imageBlockStrictScroll: !!dev.imageStrictScroll,
             kioskLockTask: !!(dev.kioskLockTask || dev.kioskLockTaskEnabled),
             nokiaKeypadMode: !!dev.nokiaKeypadMode,
             nokiaTouchEnabled: dev.nokiaTouchEnabled !== false,
@@ -3650,8 +3594,6 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
             tetheringBlocked: ["BLOCK_TETHERING", "UNBLOCK_TETHERING"],
             adBlockingEnabled: ["ENABLE_ADBLOCK", "DISABLE_ADBLOCK"],
             gifsBlocked: ["BLOCK_GIFS", "UNBLOCK_GIFS"],
-            aiModeEnabled: ["ENABLE_AI_MODE", "DISABLE_AI_MODE"],
-            mapsImageBlockingEnabled: ["ENABLE_MAPS_IMAGE_BLOCKING", "DISABLE_MAPS_IMAGE_BLOCKING"],
             whatsappBlockStatus: ["BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS"],
             whatsappBlockChannels: ["BLOCK_WHATSAPP_CHANNELS", "UNBLOCK_WHATSAPP_CHANNELS"],
             mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
@@ -3714,8 +3656,6 @@ if (groupSidebar) {
             tetheringBlocked: ["BLOCK_TETHERING", "UNBLOCK_TETHERING"],
             adBlockingEnabled: ["ENABLE_ADBLOCK", "DISABLE_ADBLOCK"],
             gifsBlocked: ["BLOCK_GIFS", "UNBLOCK_GIFS"],
-            aiModeEnabled: ["ENABLE_AI_MODE", "DISABLE_AI_MODE"],
-            mapsImageBlockingEnabled: ["ENABLE_MAPS_IMAGE_BLOCKING", "DISABLE_MAPS_IMAGE_BLOCKING"],
             whatsappBlockStatus: ["BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS"],
             whatsappBlockChannels: ["BLOCK_WHATSAPP_CHANNELS", "UNBLOCK_WHATSAPP_CHANNELS"],
             mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
@@ -3743,7 +3683,6 @@ if (groupSidebar) {
             accSuspendAll: ["ENABLE_ACC_SUSPEND_ALL", "DISABLE_ACC_SUSPEND_ALL"],
             bootGateWaitAccessibility: ["ENABLE_BOOT_GATE_ACCESSIBILITY", "DISABLE_BOOT_GATE_ACCESSIBILITY"],
             bootGateEnabled: ["ENABLE_BOOT_GATE", "DISABLE_BOOT_GATE"],
-            imageStrictScroll: ["ENABLE_IMAGE_STRICT_SCROLL", "DISABLE_IMAGE_STRICT_SCROLL"],
             webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
         } [policyKey];
         

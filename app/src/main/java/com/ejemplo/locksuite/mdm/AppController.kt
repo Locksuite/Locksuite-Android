@@ -525,8 +525,7 @@ class AppController(private val context: Context) {
                         appType = appType,
                         isWebViewBlocked = WebViewBlockManager.isBlocked(context, app.packageName),
                         isInternetBlocked = policyManager.isPerAppInternetBlocked(app.packageName),
-                        isCritical = isCritical(app.packageName),
-                        imageBlockingMode = ImageBlockManager.getMode(context, app.packageName)
+                        isCritical = isCritical(app.packageName)
                     )
                 } catch (e: Exception) {
                     null
@@ -556,6 +555,5 @@ data class AppInfoData(
     val appType: String,
     var isWebViewBlocked: Boolean = false,
     var isInternetBlocked: Boolean = false,
-    val isCritical: Boolean = false,
-    val imageBlockingMode: String = "none"
+    val isCritical: Boolean = false
 )

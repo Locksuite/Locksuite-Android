@@ -140,6 +140,7 @@ class EnrollmentProfilesStoreModeTest {
     fun ningunPerfilTieneFlashingBlocked_yPostAltaQuedaVacioSiEstanEnFalse() {
         for (p in EnrollmentProfiles.ALL) {
             assertTrue("flashingBlocked sigue presente en ${p.id}", !p.switches.containsKey("flashingBlocked"))
+            assertTrue("imageBlockStrictScroll sigue presente en ${p.id}", !p.switches.containsKey("imageBlockStrictScroll"))
             assertEquals(false, p.restrictions[android.os.UserManager.DISALLOW_UNINSTALL_APPS])
         }
         for (id in listOf(

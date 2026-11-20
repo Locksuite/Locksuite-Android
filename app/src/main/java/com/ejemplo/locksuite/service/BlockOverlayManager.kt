@@ -15,49 +15,28 @@ import android.view.View
 import android.view.WindowManager
 
 /**
- * Tapado visual de regiones de pantalla (imágenes, video, WebViews).
+ * Tapado visual de regiones de pantalla y overlay opaco de actualizaciones.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * REESCRITO EL 17/8/2026 — de N ventanas a UNA capa de canvas
+ * ACTUALIZADO EL 19/11/2026 (B.126, Opción B) — solo portales cautivos Wi-Fi
  * ────────────────────────────────────────────────────────────────────────────
  *
- * Cómo era antes y por qué se sentía mal:
+ * Desde B.126 se retiraron el bloqueo general de imágenes por app, el Modo IA y
+ * el tapado estricto al desplazar (`setStrictCover`). La capa de canvas de regiones
+ * queda reservada exclusivamente para tapar imágenes (`<img>` no clicables) dentro
+ * de portales cautivos Wi-Fi (`captive_portal_cover_images`).
  *
- *   Cada imagen tapada era su PROPIA ventana del sistema (`WindowManager.addView`
- *   con un `View` negro). Para diez imágenes en pantalla, diez ventanas. Mover un
- *   recuadro un píxel significaba `updateViewLayout()`, que es una llamada IPC al
- *   WindowManagerService: el proceso de la app le pide al sistema que reubique una
- *   superficie, el sistema recalcula el orden de composición y el compositor rehace
- *   la capa. Multiplicado por diez recuadros y por cada frame de scroll, eso es
- *   cientos de IPC por segundo. Ese era el "queda en su lugar cuando bajás y se
- *   mueve a los saltos": los recuadros iban literalmente por un camino más lento
- *   que el contenido que tenían que tapar, y además cada uno llegaba por separado
- *   (se veían desincronizados entre sí).
- *
- * Cómo es ahora:
+ * Cómo funciona la capa de regiones:
  *
  *   Hay UNA sola ventana transparente a pantalla completa. Los recuadros son
  *   rectángulos dibujados en su canvas. Mover todos los recuadros = cambiar unos
  *   números en memoria y llamar a `invalidate()`: cero IPC, un solo frame, todos
- *   los recuadros se mueven juntos y en el mismo instante. Es la misma técnica que
- *   usa cualquier app para animar contenido propio, y por eso se siente fluido.
+ *   los recuadros se mueven juntos y en el mismo instante.
  *
- *   Aclaración honesta, porque fue el pedido textual del dueño: Android NO permite
- *   dibujar dentro de la imagen de otra app. La superficie de WhatsApp (o de la que
- *   sea) es de ese proceso y es intocable — por diseño del sistema, no por una
- *   limitación de esta app. Lo más cerca que se puede estar es una capa propia
- *   encima que se mueva EXACTAMENTE con el contenido, que es lo que hace esto.
- *
- * Dos cosas más que hacen que se sienta "pegado":
- *
- *   1. `translateRegions(dx, dy)` — cuando llega un evento de scroll, los recuadros
- *      se corren por el delta que informa el propio evento, SIN volver a recorrer el
- *      árbol de nodos (que es lo caro). El recorrido real se hace después, con calma,
- *      para corregir. O sea: se adelanta y después se ajusta.
- *   2. `setStrictCover()` — modo opcional (interruptor "Tapado estricto al desplazar"):
- *      mientras dura un desplazamiento rápido se tapa el contenedor entero, y al
- *      frenar vuelven los recuadros exactos. Cero fugas a cambio de tapar de más
- *      durante el movimiento. Apagado por defecto.
+ *   `translateRegions(dx, dy)` — cuando llega un evento de scroll en el portal,
+ *   los recuadros se corren por el delta que informa el propio evento sin recorrer
+ *   el árbol de nodos; el recorrido real ajusta un instante después.
  *
  * Costo de batería: la ventana solo existe si hay al menos una región que tapar; si
  * no hay ninguna, se quita y el compositor deja de tener una capa extra. `invalidate()`
@@ -88,11 +67,10 @@ class BlockOverlayManager(private val service: AccessibilityService) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // ──────────────────────────────────────────────────────────────
-    // Estado de las regiones
+    // Estado de las regiones (tapado de imágenes en portales cautivos)
     //
-    // `regions` y `staged` se tocan desde el hilo principal (Capa 1, nodos) y desde
-    // el executor de fondo (Capa 2, IA), así que van bajo lock. `drawList` es la
-    // foto inmutable que lee onDraw() en el hilo de UI sin tomar ningún lock.
+    // `drawList` es la foto inmutable que lee onDraw() en el hilo de UI sin
+    // tomar ningún lock.
     // ──────────────────────────────────────────────────────────────
     private val lock = Any()
     private val regions = LinkedHashMap<String, Rect>(32)
@@ -100,7 +78,6 @@ class BlockOverlayManager(private val service: AccessibilityService) {
     private val pendingRemoval = HashMap<String, Long>(8)
 
     @Volatile private var drawList: Array<Rect> = EMPTY_RECTS
-    @Volatile private var strictCover: Rect? = null
 
     private var overlayView: RegionOverlayView? = null
     private var sweepScheduled = false
@@ -208,21 +185,6 @@ class BlockOverlayManager(private val service: AccessibilityService) {
         if (any) rebuildAndInvalidate()
     }
 
-    /**
-     * Modo estricto: tapa [rect] entero (el contenedor que se está desplazando) hasta
-     * que se lo limpie con `setStrictCover(null)`. Se usa mientras dura un
-     * desplazamiento rápido, cuando el administrador prefiere no arriesgar ni un frame.
-     */
-    fun setStrictCover(rect: Rect?) {
-        val current = strictCover
-        if (rect == null && current == null) return
-        if (rect != null && current == rect) return
-        strictCover = if (rect == null) null else Rect(rect)
-        rebuildAndInvalidate()
-    }
-
-    fun hasStrictCover(): Boolean = strictCover != null
-
     /** Destruye las regiones cuyo período de gracia venció. Devuelve true si algo cambió. */
     private fun sweepExpired(): Boolean {
         var changed = false
@@ -253,9 +215,7 @@ class BlockOverlayManager(private val service: AccessibilityService) {
     // ──────────────────────────────────────────────────────────────
 
     private fun rebuildAndInvalidate() {
-        // Foto inmutable de las regiones. onDraw() la lee sin tomar ningún lock: dibujar
-        // corre en el hilo de UI y no puede quedarse esperando a un escaneo de la IA que
-        // está trabajando en otro hilo.
+        // Foto inmutable de las regiones para que onDraw() la lea sin tomar locks.
         val snapshot: Array<Rect> = synchronized(lock) {
             if (regions.isEmpty()) {
                 EMPTY_RECTS
@@ -269,7 +229,7 @@ class BlockOverlayManager(private val service: AccessibilityService) {
         drawList = snapshot
 
         onMain {
-            val needed = snapshot.isNotEmpty() || strictCover != null
+            val needed = snapshot.isNotEmpty()
             if (needed) {
                 ensureOverlayAttached()
                 overlayView?.invalidate()
@@ -354,16 +314,13 @@ class BlockOverlayManager(private val service: AccessibilityService) {
             // parpadeo alimentado por el propio filtro.
             //
             // Con esto la ventana existe para el compositor pero es invisible para el
-            // sistema de accesibilidad. (Hay una segunda red: `runLayer1NodeBlocking()`
+            // sistema de accesibilidad. (Hay una segunda red: `runCaptivePortalImageCover()`
             // corta si el paquete de la ventana raíz es el nuestro. Las dos, porque el
             // costo de equivocarse acá es un parpadeo permanente en pantalla.)
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         }
 
         override fun onDraw(canvas: Canvas) {
-            strictCover?.let { cover ->
-                canvas.drawRect(cover, fill)
-            }
             val list = drawList
             for (r in list) {
                 canvas.drawRect(r, fill)
@@ -637,7 +594,7 @@ class BlockOverlayManager(private val service: AccessibilityService) {
         }
     }
 
-    /** Saca todo de pantalla: regiones, tapado estricto y la pantalla de actualización. */
+    /** Saca todo de pantalla: regiones de portal cautivo y la pantalla de actualización. */
     fun clearAll() {
         synchronized(lock) {
             regions.clear()
@@ -645,7 +602,6 @@ class BlockOverlayManager(private val service: AccessibilityService) {
             pendingRemoval.clear()
         }
         drawList = EMPTY_RECTS
-        strictCover = null
         onMain {
             mainHandler.removeCallbacks(sweepRunnable)
             sweepScheduled = false

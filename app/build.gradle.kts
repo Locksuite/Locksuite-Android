@@ -22,11 +22,6 @@ android {
             // bits (armeabi-v7a), que sigue siendo común en celulares Android más
             // viejos/económicos — justo el perfil que muchas veces se reutiliza como
             // "celular kosher". Restaurado armeabi-v7a.
-            // 🛑 Requiere una compilación de prueba: si la versión de MediaPipe
-            // Tasks-Vision usada no publica binarios de 32 bits, el build puede fallar
-            // o la Capa 2 (IA) puede fallar solo en esos equipos — en ese caso, la
-            // alternativa es mantener solo arm64-v8a pero documentarlo como requisito
-            // mínimo del producto en vez de que sea una limitación accidental.
             abiFilters.addAll(setOf("arm64-v8a", "armeabi-v7a"))
         }
     }
@@ -76,10 +71,6 @@ android {
         aidl = false
         buildConfig = false
         shaders = false
-    }
-
-    androidResources {
-        noCompress += "tflite"
     }
 
     packaging {
@@ -151,9 +142,6 @@ dependencies {
 
     // WorkManager (Watchdog)
     implementation(libs.androidx.work.runtime.ktx)
-
-    // MediaPipe Tasks-Vision (AI Image Blocker)
-    implementation(libs.mediapipe.tasks.vision)
 
     // Escáner de QR del microvisor de verificaciones de Google (B.92, 22/10/2026).
     // CameraX para la vista previa y los cuadros; ZXing (solo Java, sin servicios de

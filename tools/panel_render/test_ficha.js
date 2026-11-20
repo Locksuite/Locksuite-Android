@@ -13,13 +13,13 @@ const now = Date.now();
 
 const APPS_DEV1 = {
   com_whatsapp: { packageName: "com.whatsapp", label: "WhatsApp", appType: "Usuario", isHidden: false, isSuspended: false,
-    isWebViewBlocked: false, isInternetBlocked: false, imageBlockingMode: "none", isCritical: false, versionName: "2.24.1", versionCode: 241 },
+    isWebViewBlocked: false, isInternetBlocked: false, isCritical: false, versionName: "2.24.1", versionCode: 241 },
   com_waze: { packageName: "com.waze", label: "Waze", appType: "Usuario", isHidden: false, isSuspended: true,
-    isWebViewBlocked: true, isInternetBlocked: false, imageBlockingMode: "layer1", isCritical: false, versionName: "4.9", versionCode: 1049 },
+    isWebViewBlocked: true, isInternetBlocked: false, isCritical: false, versionName: "4.9", versionCode: 1049 },
   com_android_vending: { packageName: "com.android.vending", label: "Play Store", appType: "Sistema", isHidden: false, isSuspended: true,
-    isWebViewBlocked: false, isInternetBlocked: false, imageBlockingMode: "none", isCritical: false, versionName: "40.1", versionCode: 84 },
+    isWebViewBlocked: false, isInternetBlocked: false, isCritical: false, versionName: "40.1", versionCode: 84 },
   com_android_phone: { packageName: "com.android.phone", label: "Teléfono", appType: "Sistema", isHidden: false, isSuspended: false,
-    isWebViewBlocked: false, isInternetBlocked: false, imageBlockingMode: "none", isCritical: true, versionName: "14", versionCode: 34 }
+    isWebViewBlocked: false, isInternetBlocked: false, isCritical: true, versionName: "14", versionCode: 34 }
 };
 
 const SEED = {
@@ -115,7 +115,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok(lista.includes('com.whatsapp') && lista.includes('com.waze') && !lista.includes('com.android.vending') && !lista.includes('com.android.phone'),
     'Apps del celular: por omisión las del usuario, sin Play Store ni las del sistema: ' + JSON.stringify(lista));
   const chipsWaze = await p.evaluate(() => document.querySelector('#c-inst .ls-irow[data-pkg="com.waze"]').textContent);
-  ok(/suspendida/.test(chipsWaze) && /sin web/.test(chipsWaze) && /imágenes/.test(chipsWaze) && /v4\.9/.test(chipsWaze),
+  ok(/suspendida/.test(chipsWaze) && /sin web/.test(chipsWaze) && /v4\.9/.test(chipsWaze),
     'Apps del celular: chips de estado y versión de Waze → ' + chipsWaze.replace(/\s+/g, ' ').slice(0, 160));
 
   // Ocultar WhatsApp → HIDE_APP con el paquete; ⏳ hasta que el celular reporta.
@@ -131,19 +131,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const tras = await p.evaluate(() => document.querySelector('#c-inst .ls-irow[data-pkg="com.whatsapp"] button[data-acc="oculta"]').textContent);
   ok(/Mostrar/.test(tras), 'cuando el celular reporta la app oculta, el botón ofrece «Mostrar»: ' + tras);
 
-  // «Más»: navegador interno, internet, imágenes, actualizar.
+  // «Más»: navegador interno, internet, actualizar.
   await p.click('#c-inst .ls-irow[data-pkg="com.waze"] button[data-mas]');
   await sleep(100);
   n = await p.evaluate(() => __calls.length);
   await p.click('#c-inst .ls-irow[data-pkg="com.waze"] button[data-acc="internet"]');
   await sleep(250);
   await p.evaluate(() => __deviceApplies('dev1', __lastCid, null));
-  await p.selectOption('#c-inst .ls-irow[data-pkg="com.waze"] select[data-img]', 'both');
-  await sleep(250);
-  await p.evaluate(() => __deviceApplies('dev1', __lastCid, 'apps/com_waze/imageBlockingMode', 'both'));
   const masCmds = await p.evaluate((n) => __calls.slice(n).map(c => c.command + ':' + c.packages), n);
-  ok(masCmds.includes('BLOCK_APP_INTERNET:com.waze') && masCmds.includes('SET_IMAGE_BLOCK_BOTH:com.waze'),
-    '«Más»: cortar internet e imágenes mandan su comando con el paquete ' + JSON.stringify(masCmds));
+  ok(masCmds.includes('BLOCK_APP_INTERNET:com.waze'),
+    '«Más»: cortar internet manda su comando con el paquete ' + JSON.stringify(masCmds));
 
   // Filtros de la lista.
   await p.click('#c-inst-filtro button[data-f="sistema"]');

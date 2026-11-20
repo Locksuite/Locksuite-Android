@@ -227,7 +227,6 @@ object EnrollmentProfiles {
         "kioskLockTask" to false,
         "nokiaKeypadMode" to false,
         "nokiaTouchEnabled" to true,
-        "imageBlockStrictScroll" to false,
         "internetBlocked" to false,
         "cameraDisabled" to false,
         "screenCaptureBlocked" to false,

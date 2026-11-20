@@ -45,8 +45,7 @@ todas las ramas, `val` que se reasigna, nulos sin chequear, etc.
   `ui/update/`, `ui/verification/`): Compose no se puede
   bajar sin red, y sus funciones `@Composable` necesitan el plugin del compilador de Compose. Esos
   archivos los compila solo Gradle en la PC. (A mano se les pasó un chequeo de **sintaxis**, no de tipos.)
-* `QrLuminanceDecoder.kt`, `AIFaceDetector.kt`, `AIPersonDetector.kt` (dependen de ML Kit/TFLite; los
-  reemplaza `stubs/svc/AIDetectors.kt`).
+* `QrLuminanceDecoder.kt` (depende de ZXing).
 * **El comportamiento en un equipo real** (Accesibilidad, DPM, VPN, Play Store). Un «0 errores» acá solo
   dice que *compila*, nunca que *funciona*.
 * Los tests `CommandMailboxTest`, `DnsPacketParserTest`, `NetworkForwarderTest` y `QrLuminanceDecoderTest`

@@ -1802,7 +1802,6 @@ class PolicyManager(private val context: Context) {
         dataObj.put("accSuspendAll", isAccSuspendAllEnabled())
         dataObj.put("bootGateEnabled", isBootGateEnabled())
         dataObj.put("bootGateWaitAccessibility", isBootGateWaitAccessibilityEnabled())
-        dataObj.put("imageBlockStrictScroll", isImageBlockStrictScrollEnabled())
         dataObj.put("kioskLockTask", isKioskLockTaskEnabled())
         dataObj.put("nokiaKeypadMode", isNokiaKeypadMode())
         dataObj.put("nokiaTouchEnabled", isNokiaTouchEnabled())
@@ -1999,7 +1998,6 @@ class PolicyManager(private val context: Context) {
             setAccSuspendAll(dataObj.optBoolean("accSuspendAll", isAccSuspendAllEnabled()))
             setBootGateEnabled(dataObj.optBoolean("bootGateEnabled", isBootGateEnabled()))
             setBootGateWaitAccessibility(dataObj.optBoolean("bootGateWaitAccessibility", isBootGateWaitAccessibilityEnabled()))
-            setImageBlockStrictScroll(dataObj.optBoolean("imageBlockStrictScroll", isImageBlockStrictScrollEnabled()))
             setKioskLockTaskEnabled(dataObj.optBoolean("kioskLockTask", isKioskLockTaskEnabled()))
             setNokiaKeypadMode(dataObj.optBoolean("nokiaKeypadMode", isNokiaKeypadMode()))
             setNokiaTouchEnabled(dataObj.optBoolean("nokiaTouchEnabled", isNokiaTouchEnabled()))
@@ -2437,24 +2435,6 @@ class PolicyManager(private val context: Context) {
     }
 
     // ──────────────────────────────────────────────
-    // Bloqueo de imágenes: tapado estricto al desplazar
-    // ──────────────────────────────────────────────
-
-    /**
-     * Con esto encendido, mientras el usuario desplaza rápido se tapa el contenedor
-     * ENTERO y al frenar vuelven los recuadros exactos: cero riesgo de que se vea una
-     * imagen un par de frames, a cambio de tapar de más durante el movimiento.
-     * Apagado = solo seguimiento rápido, nunca tapa de más.
-     */
-    fun isImageBlockStrictScrollEnabled(): Boolean =
-        PrefsHelper.getMdmPrefs(context).getBoolean("image_block_strict_scroll", false)
-
-    fun setImageBlockStrictScroll(enable: Boolean): Boolean {
-        if (deferIfSuspended("image_block_strict_scroll", enable)) return true
-        PrefsHelper.getMdmPrefs(context).edit().putBoolean("image_block_strict_scroll", enable).apply()
-        return true
-    }
-
     /**
      * Aplica la protección al sistema vía DevicePolicyManager.
      * Si enable=true, solo LockSuite puede tener un servicio de accesibilidad activo.
@@ -3408,9 +3388,11 @@ class PolicyManager(private val context: Context) {
         // Reactivar Android System WebView
         setSystemWebViewSuspended(false)
 
-        // Limpiar todas las restricciones de WebView e Imagen guardadas
+        // Limpiar todas las restricciones de WebView y preferencias heredadas de bloqueo de imágenes
         WebViewBlockManager.clearAll(context)
-        ImageBlockManager.clearAll(context)
+        try {
+            context.deleteSharedPreferences("image_block_prefs")
+        } catch (_: Exception) {}
 
         // Detener servicio VPN
         try {

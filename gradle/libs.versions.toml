@@ -17,7 +17,6 @@ googleServices = "4.4.1"
 firebaseBom = "32.8.0"
 androidxSecurity = "1.1.0-alpha06"
 androidxWork = "2.9.0"
-mediapipeTasksVision = "0.10.14"
 # Escáner de QR del microvisor de verificaciones de Google (B.92, 22/10/2026)
 camerax = "1.4.2"
 zxingCore = "3.5.3"
@@ -51,7 +50,6 @@ firebase-database = { module = "com.google.firebase:firebase-database-ktx" }
 firebase-messaging = { module = "com.google.firebase:firebase-messaging-ktx" }
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidxSecurity" }
 androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "androidxWork" }
-mediapipe-tasks-vision = { module = "com.google.mediapipe:tasks-vision", version.ref = "mediapipeTasksVision" }
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "camerax" }
 androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }

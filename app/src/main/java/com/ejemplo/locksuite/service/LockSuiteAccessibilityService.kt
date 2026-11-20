@@ -2,13 +2,10 @@ package com.ejemplo.locksuite.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
-import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
-import android.accessibilityservice.AccessibilityService.ScreenshotResult
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
@@ -17,7 +14,6 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
-import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
@@ -29,13 +25,11 @@ import com.ejemplo.locksuite.mdm.MercadoPagoOffersPolicy
 import com.ejemplo.locksuite.mdm.PhotoPickerPolicy
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.mdm.WebViewBlockManager
-import com.ejemplo.locksuite.mdm.ImageBlockManager
 import com.ejemplo.locksuite.mdm.UpdateStepLog
 import com.ejemplo.locksuite.util.PrefsHelper
 import com.ejemplo.locksuite.util.UpdateFlowManager
 import com.ejemplo.locksuite.util.PlayButtonFinder
 import com.ejemplo.locksuite.util.PlayUpdateSessionWatcher
-import java.util.concurrent.Executors
 
 /**
  * Capa 3 — Servicio de Accesibilidad.
@@ -74,26 +68,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         private const val LOCKSUITE_PKG = "com.ejemplo.locksuite"
         private const val DEBOUNCE_MS = 300L
         /**
-         * Debounce del RE-ESCANEO del árbol durante el scroll.
-         *
-         * Ojo con este número: desde el 17/8 los recuadros ya no dependen de él para
-         * seguir al contenido. El evento de scroll trae su propio delta en píxeles
-         * (`getScrollDeltaX/Y`), así que los recuadros se corren ese delta al instante,
-         * en cada evento, gratis — sin tocar el árbol de nodos. Este debounce solo
-         * gobierna cada cuánto se hace el recorrido REAL que corrige la posición.
-         *
-         * Antes era 50 ms (20 recorridos por segundo) porque el recorrido era la única
-         * forma de mover un recuadro. Ahora 90 ms alcanza y sobra: se ve igual de pegado
-         * y se recorre el árbol la mitad de veces. Subilo si el scroll se siente pesado
-         * en algún equipo; no hace falta bajarlo para ganar fluidez.
+         * Debounce del RE-ESCANEO del árbol durante el scroll en portales cautivos.
+         * Con `translateRegions()` los recuadros se corren con el delta del propio evento;
+         * este debounce gobierna cada cuánto se recorre el árbol para ajustar.
          */
         private const val IMAGE_SCROLL_DEBOUNCE_MS = 90L
-
-        /**
-         * Cuánto silencio de eventos de scroll se espera para dar el desplazamiento por
-         * terminado y quitar el tapado estricto del contenedor (modo estricto opcional).
-         */
-        private const val STRICT_SCROLL_SETTLE_MS = 220L
         private const val PKG_WHATSAPP = "com.whatsapp"
         private const val PKG_WHATSAPP_BUSINESS = "com.whatsapp.w4b"
         private const val PKG_PLAY_STORE = "com.android.vending"
@@ -306,17 +285,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     @Volatile private var waBlockInProgress = false
     @Volatile private var mpBlockInProgress = false
 
-    // Componentes del Bloqueador de Imágenes
+    // Overlay de actualización de apps y tapado de imágenes en portales cautivos
     lateinit var overlayManager: BlockOverlayManager
-    private lateinit var aiGate: AIContentGate
-    private val bgExecutor = Executors.newSingleThreadExecutor()
-
-    private var lastAiScanAt = 0L
-    private val aiScanIntervalMs = 900L
-
-    private val gridCols = 4
-    private val gridRows = 6
-    private val skinRatioThreshold = 0.06f
 
     // ──────────────────────────────────────────────
     // Servicios del sistema cacheados
@@ -368,8 +338,6 @@ class LockSuiteAccessibilityService : AccessibilityService() {
          * el usuario sigue con el teléfono y los filtros tienen que seguir andando.
          */
         val updateRoute: String,
-        /** "Tapado estricto al desplazar": tapa el contenedor entero mientras dura el fling. */
-        val strictScroll: Boolean,
         /** Rebotar al usuario si entra al menú de Accesibilidad de Ajustes. */
         val accSettingsBounce: Boolean,
         /** Rebotar las pantallas web de la cuenta de Google (historial, actividad). */
@@ -427,7 +395,6 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             // Ausente = Google Play: es lo que deja un flujo de una versión anterior.
             updateRoute = p.getString(UpdateFlowManager.KEY_ROUTE, UpdateFlowManager.ROUTE_PLAY_STORE)
                 ?: UpdateFlowManager.ROUTE_PLAY_STORE,
-            strictScroll = p.getBoolean("image_block_strict_scroll", false),
             accSettingsBounce = p.getBoolean("acc_protect_bounce_settings", false),
             // Encendido por defecto: ver el comentario de PolicyManager sobre por qué
             // este interruptor es la excepción a "todo apagado de fábrica".
@@ -576,13 +543,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             try { disableSelf() } catch (_: Exception) {}
             return
         }
-        // Modificar el serviceInfo existente para preservar capacidades cargadas del XML (canTakeScreenshot)
+        // Configurar capacidades del servicio de accesibilidad
         val info = serviceInfo ?: AccessibilityServiceInfo()
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                           AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                           AccessibilityEvent.TYPE_VIEW_SELECTED or
-                          // Necesario para que los recuadros de imágenes sigan al
-                          // contenido durante el scroll en vez de quedarse en el lugar.
+                          // Necesario para actividad de scroll y seguimiento de imágenes en portales cautivos.
                           AccessibilityEvent.TYPE_VIEW_SCROLLED
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.flags = info.flags or
@@ -597,7 +563,6 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // publicado primero había una ventana real en la que ese acceso reventaba con
         // UninitializedPropertyAccessException.
         overlayManager = BlockOverlayManager(this)
-        aiGate = AIContentGate(applicationContext)
 
         mdmPrefs.registerOnSharedPreferenceChangeListener(prefsListener)
         cachedFlags = null
@@ -999,48 +964,17 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             handleDialerIntercept()
         }
 
-        // ── Bloqueo de Imágenes por App (Capa 1 y Capa 2) ──
-        handleImageBlocking(packageName)
+        // ── Tapado de imágenes en portales cautivos Wi-Fi (Opción B, B.126) ──
+        handleCaptivePortalImageCover(packageName)
     }
 
     // ──────────────────────────────────────────────
-    // Camino rápido de scroll
-    //
-    // El problema que resuelve (reportado por el dueño con captura): el recuadro negro
-    // "tarda en enganchar y queda en su lugar cuando bajás". Antes la ÚNICA forma de
-    // mover un recuadro era volver a recorrer el árbol de nodos y volver a pedirle al
-    // sistema que reubicara la ventana. Recorrer el árbol cuesta milisegundos, así que
-    // solo se podía hacer unas pocas veces por segundo — y mientras tanto el contenido
-    // ya se había movido. Por definición el recuadro llegaba tarde.
-    //
-    // Ahora hay dos velocidades:
-    //
-    //   RÁPIDA (cada evento, microsegundos): el propio evento de scroll trae cuántos
-    //   píxeles se desplazó el contenido (`getScrollDeltaX/Y`, API 28+). Con ese número
-    //   se corren TODOS los recuadros de una, en memoria, y se repinta la capa. No hay
-    //   recorrido de árbol ni llamada al WindowManager.
-    //
-    //   LENTA (cada IMAGE_SCROLL_DEBOUNCE_MS): el recorrido real, que corrige la
-    //   posición y descubre imágenes nuevas que entraron a pantalla.
-    //
-    // En equipos con Android 8 (sin `getScrollDelta*`) no hay camino rápido y queda solo
-    // el recorrido con debounce, que es exactamente el comportamiento anterior.
+    // Camino rápido de scroll (portales cautivos Wi-Fi)
     // ──────────────────────────────────────────────
-    private var lastScrollPkg: String? = null
-
-    private val strictScrollSettleRunnable = Runnable {
-        // 7/11/2026 (B.112): hilo principal; una excepción acá mataba el proceso con el servicio enlazado.
-        com.ejemplo.locksuite.util.Safe.guard("a11y.strictScrollSettle") {
-            overlayManager.setStrictCover(null)
-            lastScrollPkg?.let { handleImageBlocking(it) }
-        }
-    }
-
     private fun handleScrollEvent(ev: AccessibilityEvent, packageName: String, f: Flags) {
         if (f.playUpdateActive) return
         // Chequeo O(1): si no hay nada tapado, este evento no nos interesa.
-        if (overlayManager.regionCount() == 0 && !overlayManager.hasStrictCover()) return
-        lastScrollPkg = packageName
+        if (overlayManager.regionCount() == 0) return
 
         // 1. Adelanto por delta del propio evento.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -1055,160 +989,62 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 2. Tapado estricto opcional mientras dura el desplazamiento.
-        if (f.strictScroll) {
-            val src = ev.source
-            if (src != null) {
-                try {
-                    val bounds = Rect()
-                    src.getBoundsInScreen(bounds)
-                    if (!bounds.isEmpty) overlayManager.setStrictCover(bounds)
-                } finally {
-                    src.recycle()
-                }
-            }
-            mainHandler.removeCallbacks(strictScrollSettleRunnable)
-            mainHandler.postDelayed(strictScrollSettleRunnable, STRICT_SCROLL_SETTLE_MS)
-        }
-
-        // 3. Corrección real, con debounce.
+        // 2. Corrección real, con debounce.
         val nowScroll = SystemClock.elapsedRealtime()
         if (nowScroll - lastImageScrollAt < IMAGE_SCROLL_DEBOUNCE_MS) return
         lastImageScrollAt = nowScroll
-        handleImageBlocking(packageName)
+        handleCaptivePortalImageCover(packageName)
     }
 
     // ──────────────────────────────────────────────
-    // Lógica de Bloqueo de Imágenes por App
+    // Tapado de imágenes en portales cautivos Wi-Fi (B.50 / B.126 Opción B)
     // ──────────────────────────────────────────────
-    private fun handleImageBlocking(packageName: String) {
+    private fun handleCaptivePortalImageCover(packageName: String) {
+        if (captiveOpenedAt == 0L) {
+            if (overlayManager.hasRegions("captive:")) {
+                overlayManager.clearStaleRegions("captive:", emptySet())
+            }
+            return
+        }
+
         val isProvider = packageName == "com.google.android.webview" || packageName == "com.android.webview"
         val activePkg = if (isProvider) (getOriginApp() ?: packageName) else packageName
-        val isMaps = activePkg == "com.google.android.apps.maps"
-        val mapsBlocking = isMaps && ImageBlockManager.isMapsImageBlockingEnabled(applicationContext)
 
-        // Portal cautivo: mientras esa ventana está al frente se tapan sus imágenes.
-        // Queda el texto y los formularios —o sea que iniciar sesión sigue andando—
-        // pero deja de ser un visor de contenido. Es lo único que la Capa 1 puede
-        // aportar ahí, porque la Capa 2 no ve esa ventana (ver CaptivePortalPolicy).
-        // El chequeo es una comparación de strings contra un campo ya cacheado.
-        //
-        // ⚠️ 8/9/2026 — ACÁ ESTABA EL BUG QUE DEJÓ A UN USUARIO SIN PODER CONECTARSE
-        // A UN WI-FI DE AEROPUERTO. El modo "layer1" recorre el árbol y tapa entero el
-        // primer nodo cuya clase esté en `visualNodeClassNames` — y esa lista incluye
-        // `android.webkit.WebView`, que es EL CONTENIDO ENTERO de esta ventana. O sea
-        // que "tapar las imágenes del portal" pintaba de negro la página de inicio de
-        // sesión completa. Ver la nota larga en `mdm/CaptivePortalPolicy.kt`.
-        // El arreglo está en `scanNode()`, gobernado por `captivePortalScan`.
-        val portalCautivo = captiveOpenedAt != 0L &&
-            flags().captivePortalCoverImages &&
+        // Mientras la ventana de portal cautivo está al frente se tapan sus <img> no clicables;
+        // los controles clicables/editables (Conectar, captcha, planes) quedan visibles.
+        val portalCautivo = flags().captivePortalCoverImages &&
             (CaptivePortalPolicy.isCaptivePortalWindow(activePkg, null) || isSystemOrInputPackage(activePkg))
 
-        val mode = when {
-            mapsBlocking -> "both"
-            portalCautivo -> "layer1"
-            else -> ImageBlockManager.getMode(applicationContext, activePkg)
-        }
-
-        // 1. Capa 1: Bloqueo por Nodos
-        if (mode == "layer1" || mode == "both") {
-            captivePortalScan = portalCautivo
-            try {
-                runLayer1NodeBlocking(activePkg)
-            } finally {
-                captivePortalScan = false
-            }
-        } else if (overlayManager.hasRegions("layer1:")) {
-            // Solo se llama si hay algo que limpiar. Antes se llamaba siempre, lo que
-            // encolaba un Runnable en el hilo principal diez veces por segundo aunque
-            // el bloqueo de imágenes estuviera apagado en todas las apps.
-            overlayManager.clearStaleRegions("layer1:", emptySet())
-        }
-
-        // 2. Capa 2: Bloqueo por IA
-        //
-        // 27/9/2026 (batería): la elegibilidad del equipo se consulta SOLO si la IA haría
-        // falta. Antes se calculaba en cada evento aunque el bloqueo de imágenes estuviera
-        // apagado en todas las apps, y adentro hacía `ActivityManager.getMemoryInfo()`: una
-        // llamada al sistema (que además relee /proc/meminfo) varias veces por segundo con
-        // la pantalla encendida. Ahora además se cachea (ver DeviceCapability). Misma
-        // condición que antes: ((layer2|both) || maps) && IA global && equipo elegible.
-        val isGlobalAi = ImageBlockManager.isGlobalAiEnabled(applicationContext)
-        val quiereAi = (mode == "layer2" || mode == "both" || mapsBlocking) && isGlobalAi
-        val runAi = quiereAi && DeviceCapability.isEligibleForAIBlocking(applicationContext)
-
-        if (runAi) {
-            scheduleAiScanIfDue(activePkg, mapsBlocking)
-        } else if (overlayManager.hasRegions("layer2:")) {
-            overlayManager.clearStaleRegions("layer2:", emptySet())
+        if (portalCautivo) {
+            runCaptivePortalImageCover(activePkg)
+        } else if (overlayManager.hasRegions("captive:")) {
+            overlayManager.clearStaleRegions("captive:", emptySet())
         }
     }
 
-    // ──────────────────────────────────────────────
-    // Capa 1: Escaneo de Nodos
-    // ──────────────────────────────────────────────
-    private val visualNodeClassNames = setOf(
-        "android.widget.ImageView", "android.widget.VideoView",
-        "android.view.SurfaceView", "android.view.TextureView", "android.webkit.WebView"
-    )
-
-    /**
-     * Solo true MIENTRAS se escanea la ventana del portal cautivo (8/9/2026).
-     *
-     * Cambia dos cosas de `scanNode()`, y únicamente ahí:
-     *
-     *  1. **El `WebView` deja de ser un nodo tapable y pasa a ser un nodo por el que se
-     *     baja.** Sin esto, "tapar las imágenes del portal" tapa la página entera: el
-     *     contenido de esa ventana ES un WebView, `visualNodeClassNames` lo incluye, y
-     *     `scanNode` tapa el primer nodo que matchea y ni siquiera desciende. Un
-     *     rectángulo negro donde va el formulario de inicio de sesión.
-     *  2. **Dentro del WebView se tapan las imágenes de HTML** (`android.widget.Image`,
-     *     que es como WebView las expone) **salvo las que además son un control**
-     *     (`isClickable` / `isEditable`). El botón de "Conectar"/"Aceptar", el captcha
-     *     y las tarjetas de plan de los portales de avión son imágenes clicables: si se
-     *     tapan, no hay forma de completar el login, que es justo la condición que puso
-     *     el dueño ("sin bloquear al usuario a que se conecte a la red"). Una foto de
-     *     contenido no es clicable y se sigue tapando.
-     *
-     * Se restaura en el `finally` de quien lo prende, así que no puede quedar pegado y
-     * afectar el escaneo de otra app.
-     */
-    private var captivePortalScan = false
-
-    /**
-     * Ruta del nodo dentro del árbol (índice de hijo en cada nivel). Se usa para armar
-     * una clave ESTABLE por cada región tapada.
-     *
-     * Antes la clave era "layer1:<clase>:<x>,<y>", o sea que incluía la posición. Al
-     * hacer scroll, cada imagen cambiaba de posición → cambiaba de clave → el sistema
-     * DESTRUÍA la ventana negra y creaba otra, en cada escaneo. addView/removeView son
-     * las operaciones más caras del WindowManager, y ese ciclo es exactamente lo que se
-     * veía como parpadeo y se sentía "pesado" al desplazarse. Con la ruta como identidad,
-     * la misma ventana se limita a moverse (updateViewLayout), o ni eso si no se movió.
-     */
     private val pathStack = IntArray(MAX_TREE_DEPTH + 2)
     private var nodeBudget = 0
 
-    private fun runLayer1NodeBlocking(activePkg: String) {
+    private fun runCaptivePortalImageCover(activePkg: String) {
         val root = rootInActiveWindow ?: return
         try {
             val rootPkg = root.packageName?.toString() ?: ""
-            if (rootPkg != activePkg && isSystemOrInputPackage(rootPkg)) {
-                // Ignorar escaneo si la ventana activa es del sistema o teclado, para no borrar overlays
+            if (rootPkg == LOCKSUITE_PKG || (rootPkg != activePkg && isSystemOrInputPackage(rootPkg))) {
+                // Ignorar escaneo si la ventana activa es nuestra, del sistema o teclado, para no borrar overlays
                 return
             }
             val foundKeys = mutableSetOf<String>()
             nodeBudget = MAX_NODES_PER_SCAN
-            scanNode(root, 0, foundKeys)
-            overlayManager.clearStaleRegions("layer1:", foundKeys)
+            scanCaptivePortalNode(root, 0, foundKeys)
+            overlayManager.clearStaleRegions("captive:", foundKeys)
         } finally {
             root.recycle()
         }
     }
 
-    private fun buildLayer1Key(depth: Int): String {
+    private fun buildCaptivePortalKey(depth: Int): String {
         val sb = StringBuilder(16)
-        sb.append("layer1:")
+        sb.append("captive:")
         for (i in 0 until depth) {
             sb.append(pathStack[i])
             sb.append('.')
@@ -1216,46 +1052,26 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         return sb.toString()
     }
 
-    private fun scanNode(node: AccessibilityNodeInfo, depth: Int, foundKeys: MutableSet<String>) {
+    private fun scanCaptivePortalNode(node: AccessibilityNodeInfo, depth: Int, foundKeys: MutableSet<String>) {
         if (depth > MAX_TREE_DEPTH) return
         if (nodeBudget-- <= 0) return
 
         val className = node.className?.toString()
-
-        // Ventana del portal cautivo: reglas distintas, y solo acá. Ver el comentario
-        // de `captivePortalScan` — sin esta rama, el guard tapa la página de inicio de
-        // sesión entera y el usuario se queda sin Wi-Fi.
-        if (captivePortalScan) {
-            if (className == CaptivePortalPolicy.WEB_CONTAINER_CLASS) {
-                // El contenedor NO se tapa: se baja por sus hijos (sigue de largo).
-            } else if (className != null && className in CaptivePortalPolicy.WEB_IMAGE_CLASS_NAMES) {
-                // Una imagen que además es un control es el botón de "Conectar", el
-                // captcha o la tarjeta del plan. Taparla es impedir el login.
-                if (!node.isClickable && !node.isEditable) {
-                    val rectPortal = Rect()
-                    node.getBoundsInScreen(rectPortal)
-                    if (!rectPortal.isEmpty && node.isVisibleToUser) {
-                        val keyPortal = buildLayer1Key(depth)
-                        foundKeys.add(keyPortal)
-                        overlayManager.blockRegion(keyPortal, rectPortal)
-                    }
-                    return
+        if (className == CaptivePortalPolicy.WEB_CONTAINER_CLASS) {
+            // El WebView NO se tapa: se baja por sus hijos.
+        } else if (className != null && className in CaptivePortalPolicy.WEB_IMAGE_CLASS_NAMES) {
+            // Una imagen que además es un control es el botón de "Conectar", el
+            // captcha o la tarjeta del plan. Taparla es impedir el login.
+            if (!node.isClickable && !node.isEditable) {
+                val rectPortal = Rect()
+                node.getBoundsInScreen(rectPortal)
+                if (!rectPortal.isEmpty && node.isVisibleToUser) {
+                    val keyPortal = buildCaptivePortalKey(depth)
+                    foundKeys.add(keyPortal)
+                    overlayManager.blockRegion(keyPortal, rectPortal)
                 }
+                return
             }
-        } else if (className != null && className in visualNodeClassNames) {
-            val rect = Rect()
-            node.getBoundsInScreen(rect)
-            // Solo tapar lo que realmente se ve: un nodo con área nula o fuera de la
-            // pantalla no necesita ventana negra, y crear una era trabajo puro perdido.
-            if (!rect.isEmpty && node.isVisibleToUser) {
-                val key = buildLayer1Key(depth)
-                foundKeys.add(key)
-                overlayManager.blockRegion(key, rect)
-            }
-            // No hace falta descender: el nodo ya quedó tapado entero, y sus hijos
-            // (por ejemplo las imágenes dentro de un WebView) están debajo del mismo
-            // recuadro negro. Esto recorta buena parte del árbol en pantallas con web.
-            return
         }
 
         val childCount = node.childCount
@@ -1263,107 +1079,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             val child = node.getChild(i) ?: continue
             try {
                 pathStack[depth] = i
-                scanNode(child, depth + 1, foundKeys)
+                scanCaptivePortalNode(child, depth + 1, foundKeys)
             } finally {
                 child.recycle()
             }
         }
     }
-
-    // ──────────────────────────────────────────────
-    // Capa 2: Escaneo de Pantalla con IA
-    // ──────────────────────────────────────────────
-    private fun scheduleAiScanIfDue(targetPackageName: String, isMapsStrict: Boolean) {
-        val now = SystemClock.elapsedRealtime()
-        val interval = if (isMapsStrict) 400L else aiScanIntervalMs
-        if (now - lastAiScanAt < interval) return
-        lastAiScanAt = now
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
-
-        takeScreenshot(
-            Display.DEFAULT_DISPLAY,
-            bgExecutor,
-            object : TakeScreenshotCallback {
-                override fun onSuccess(result: ScreenshotResult) {
-                    val hwBitmap = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
-                    result.hardwareBuffer.close()
-                    val bitmap = hwBitmap?.copy(Bitmap.Config.ARGB_8888, false)
-                    hwBitmap?.recycle()
-                    if (bitmap != null) {
-                        // Volver a verificar que seguimos en la misma app para evitar falsos positivos
-                        val currentRoot = rootInActiveWindow
-                        val currentPkg = currentRoot?.packageName?.toString() ?: ""
-                        currentRoot?.recycle()
-                        if (currentPkg == targetPackageName || isSystemOrInputPackage(currentPkg)) {
-                            processScreenshotByGrid(bitmap, isMapsStrict)
-                        } else {
-                            bitmap.recycle()
-                            if (overlayManager.hasRegions("layer2:")) {
-                                overlayManager.clearStaleRegions("layer2:", emptySet())
-                            }
-                        }
-                    }
-                }
-                override fun onFailure(errorCode: Int) {
-                    // ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT es normal
-                }
-            }
-        )
-    }
-
-    private fun processScreenshotByGrid(fullScreenBitmap: Bitmap, isMapsStrict: Boolean) {
-        bgExecutor.execute {
-            val skinMap = TileSkinMap.computeSkinRatioPerTile(fullScreenBitmap, gridCols, gridRows)
-            val tileW = fullScreenBitmap.width / gridCols
-            val tileH = fullScreenBitmap.height / gridRows
-            val currentAiKeys = mutableSetOf<String>()
-            val threshold = if (isMapsStrict) 0.02f else skinRatioThreshold
-
-            for (row in 0 until gridRows) {
-                for (col in 0 until gridCols) {
-                    if (skinMap[row][col] < threshold) continue
-
-                    val tileRect = Rect(
-                        col * tileW, row * tileH,
-                        if (col == gridCols - 1) fullScreenBitmap.width else (col + 1) * tileW,
-                        if (row == gridRows - 1) fullScreenBitmap.height else (row + 1) * tileH
-                    )
-                    val crop = safeCrop(fullScreenBitmap, tileRect) ?: continue
-                    // Usar strictMode = true en AIPersonDetector para que busque siluetas corporales completas
-                    val localRegions = aiGate.detectRegions(crop, strictMode = true)
-                    crop.recycle()
-
-                    localRegions.forEach { detected ->
-                        // 1. Trasladar coordenadas de celda a pantalla completa
-                        val screenRect = Rect(
-                            tileRect.left + detected.rect.left, tileRect.top + detected.rect.top,
-                            tileRect.left + detected.rect.right, tileRect.top + detected.rect.bottom
-                        )
-                        val screenRegion = DetectedRegion(screenRect, detected.source)
-
-                        // 2. Expandir el área (para ocultar figura/cuerpo)
-                        val expandedRect = RegionExpander.expand(
-                            screenRegion, fullScreenBitmap.width, fullScreenBitmap.height
-                        )
-
-                        val key = "layer2:${expandedRect.left},${expandedRect.top},${expandedRect.right},${expandedRect.bottom}"
-                        currentAiKeys.add(key)
-                        overlayManager.blockRegion(key, expandedRect)
-                    }
-                }
-            }
-            overlayManager.clearStaleRegions("layer2:", currentAiKeys)
-            fullScreenBitmap.recycle()
-        }
-    }
-
-    private fun safeCrop(bitmap: Bitmap, rect: Rect): Bitmap? = try {
-        val left = rect.left.coerceIn(0, bitmap.width - 1)
-        val top = rect.top.coerceIn(0, bitmap.height - 1)
-        val width = rect.width().coerceAtMost(bitmap.width - left)
-        val height = rect.height().coerceAtMost(bitmap.height - top)
-        if (width <= 0 || height <= 0) null else Bitmap.createBitmap(bitmap, left, top, width, height)
-    } catch (e: Exception) { null }
 
     // ──────────────────────────────────────────────
     // Rastreo de paquetes
@@ -1524,8 +1245,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             // El guard de portal cautivo ya sabe reconocer esa ventana; se reusa su
             // señal en vez de estrenar una segunda forma de detectarla, que es como
             // se termina con dos detecciones que no coinciden.
-            esPortalCautivo = captivePortalScan ||
-                CaptivePortalPolicy.isCaptivePortalWindow(packageName, root.className?.toString()),
+            esPortalCautivo = CaptivePortalPolicy.isCaptivePortalWindow(packageName, root.className?.toString()),
             tieneWebView = hayWebView,
             fraccionWebView = (mayorWebView[0].toDouble() / areaPantalla.toDouble()).toFloat(),
             idsDeVista = ids,
@@ -2415,6 +2135,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         captiveValidatedAt = 0L
         captiveBounceInProgress = false
         mainHandler.removeCallbacks(captiveTickRunnable)
+        if (::overlayManager.isInitialized && overlayManager.hasRegions("captive:")) {
+            overlayManager.clearStaleRegions("captive:", emptySet())
+        }
         if (abierta <= 0L) return
         try {
             val p = mdmPrefs
@@ -4692,14 +4415,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         mainHandler.removeCallbacks(whatsappScanRunnable)
         mainHandler.removeCallbacks(mercadoPagoScanRunnable)
         mainHandler.removeCallbacks(updateTickRunnable)
-        mainHandler.removeCallbacks(strictScrollSettleRunnable)
         webViewRetryRunnables.forEach { mainHandler.removeCallbacks(it) }
         webViewRetryRunnables.clear()
         releaseUpdateWakeLock()
         if (::overlayManager.isInitialized) {
             overlayManager.clearAll()
         }
-        AIContentGate.releaseAll()
-        bgExecutor.shutdown()
     }
 }
