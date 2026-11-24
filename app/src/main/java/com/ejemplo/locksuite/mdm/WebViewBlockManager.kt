@@ -7,6 +7,9 @@ object WebViewBlockManager {
     private const val PREFS_NAME = "webview_block_prefs"
     private const val KEY_PREFIX = "wv_block_"
 
+    val DEFAULT_PROFILE_BLOCKED_PACKAGES: Set<String>
+        get() = WebViewPolicy.DEFAULT_PROFILE_BLOCKED_PACKAGES
+
     @Volatile private var cachedBlockedSet: Set<String>? = null
 
     fun setBlocked(context: Context, packageName: String, blocked: Boolean): Boolean {

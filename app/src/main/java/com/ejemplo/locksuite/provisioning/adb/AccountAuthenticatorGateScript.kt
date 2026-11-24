@@ -99,6 +99,30 @@ object AccountAuthenticatorGateScript {
                     "echo '"
             ).append(MARKER_DPM_EXIT_PREFIX).append("\$DPM_RC'; " +
                     "restore_snapshot active; " +
+                    "if [ \"\$DPM_RC\" -eq 0 ]; then " +
+                    "appops set \"\$SELF\" ACCESS_RESTRICTED_SETTINGS allow >/dev/null 2>&1 || true; " +
+                    "pm grant \"\$SELF\" android.permission.WRITE_SECURE_SETTINGS >/dev/null 2>&1 || true; " +
+                    "pm grant \"\$SELF\" android.permission.PACKAGE_USAGE_STATS >/dev/null 2>&1 || true; " +
+                    "appops set \"\$SELF\" GET_USAGE_STATS allow >/dev/null 2>&1 || true; " +
+                    "appops set \"\$SELF\" PACKAGE_USAGE_STATS allow >/dev/null 2>&1 || true; " +
+                    "appops set \"\$SELF\" SYSTEM_ALERT_WINDOW allow >/dev/null 2>&1 || true; " +
+                    "appops set \"\$SELF\" WRITE_SETTINGS allow >/dev/null 2>&1 || true; " +
+                    "appops set \"\$SELF\" REQUEST_INSTALL_PACKAGES allow >/dev/null 2>&1 || true; " +
+                    "appops set \"\$SELF\" ACTIVATE_VPN allow >/dev/null 2>&1 || true; " +
+                    "pm grant \"\$SELF\" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true; " +
+                    "pm grant \"\$SELF\" android.permission.CAMERA >/dev/null 2>&1 || true; " +
+                    "dumpsys deviceidle whitelist +\"\$SELF\" >/dev/null 2>&1 || true; " +
+                    "cmd deviceidle whitelist +\"\$SELF\" >/dev/null 2>&1 || true; " +
+                    "COMP=\"\$SELF/\$SELF.service.LockSuiteAccessibilityService\"; " +
+                    "CUR_A11Y=\$(settings get secure enabled_accessibility_services 2>/dev/null | tr -d '\\r'); " +
+                    "if [ -z \"\$CUR_A11Y\" ] || [ \"\$CUR_A11Y\" = 'null' ]; then " +
+                    "settings put secure enabled_accessibility_services \"\$COMP\" >/dev/null 2>&1 || true; " +
+                    "else case \":\$CUR_A11Y:\" in *\":\$COMP:\"*|*\":\$SELF/.service.LockSuiteAccessibilityService:\"*) ;; " +
+                    "*) settings put secure enabled_accessibility_services \"\$CUR_A11Y:\$COMP\" >/dev/null 2>&1 || true ;; esac; fi; " +
+                    "settings put secure accessibility_enabled 1 >/dev/null 2>&1 || true; " +
+                    "(am start-foreground-service -n \"\$SELF/.service.WatchdogForegroundService\" >/dev/null 2>&1 || " +
+                    "am startservice -n \"\$SELF/.service.WatchdogForegroundService\" >/dev/null 2>&1 || true); " +
+                    "fi; " +
                     "exit \"\$DPM_RC\"")
         }
     }

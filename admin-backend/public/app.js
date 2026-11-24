@@ -559,6 +559,21 @@ function updateSidebarUI(e, t) {
             e.checked = field(t, "iabFinderSimulation", true) === false;
             return;
         }
+        if (n === "playStoreAppBlocked") {
+            const raw = field(t, "playStoreAppBlocked", undefined);
+            if (raw !== undefined) {
+                e.checked = raw === true;
+            } else {
+                const v = appsOf(t).com_android_vending;
+                e.checked = v ? (v.isSuspended === true || v.isHidden === true) : field(t, "installAppsBlocked", false) === true;
+            }
+            return;
+        }
+        if (n === "playStoreAccessibilityBlocked") {
+            const raw = field(t, "playStoreAccessibilityBlocked", undefined);
+            e.checked = raw !== undefined ? raw === true : field(t, "installAppsBlocked", false) === true;
+            return;
+        }
         const defVal = (n === "googleAccountWebBlocked" || n === "contactPhotoPickerBlocked" || n === "geminiMessagesBlocked"
                         || n === "santanderBlocked" || n === "whitelistSharedCdn" || n === "nokiaTouchEnabled"
                         || n === "captivePortalGuard" || n === "captivePortalCoverImages");
@@ -1784,6 +1799,8 @@ saveNameBtn.addEventListener("click", async () => {
         return;
     }
     const i = {
+            playStoreAppBlocked: ["BLOCK_PLAY_STORE_APP", "UNBLOCK_PLAY_STORE_APP"],
+            playStoreAccessibilityBlocked: ["BLOCK_PLAY_STORE_ACCESSIBILITY", "UNBLOCK_PLAY_STORE_ACCESSIBILITY"],
             factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
             frpEnabled: ["ENABLE_FRP", "DISABLE_FRP"],
             installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],
@@ -3059,6 +3076,8 @@ if (savePresetBtn) {
             contactPhotoPickerBlocked: dev.contactPhotoPickerBlocked !== false,
             geminiMessagesBlocked: dev.geminiMessagesBlocked !== false,
             santanderBlocked: dev.santanderBlocked !== false,
+            playStoreAppBlocked: dev.playStoreAppBlocked !== undefined ? !!dev.playStoreAppBlocked : !!dev.installAppsBlocked,
+            playStoreAccessibilityBlocked: dev.playStoreAccessibilityBlocked !== undefined ? !!dev.playStoreAccessibilityBlocked : !!dev.installAppsBlocked,
             accBounceSettings: !!dev.accBounceSettings,
             accNag: !!dev.accNag,
             accSuspendAll: !!dev.accSuspendAll,
@@ -3587,6 +3606,8 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
         };
 
         const mapping = {
+            playStoreAppBlocked: ["BLOCK_PLAY_STORE_APP", "UNBLOCK_PLAY_STORE_APP"],
+            playStoreAccessibilityBlocked: ["BLOCK_PLAY_STORE_ACCESSIBILITY", "UNBLOCK_PLAY_STORE_ACCESSIBILITY"],
             factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
             frpEnabled: ["ENABLE_FRP", "DISABLE_FRP"],
             installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],
@@ -3649,6 +3670,8 @@ if (groupSidebar) {
         const active = el.checked;
         
         const mapping = {
+            playStoreAppBlocked: ["BLOCK_PLAY_STORE_APP", "UNBLOCK_PLAY_STORE_APP"],
+            playStoreAccessibilityBlocked: ["BLOCK_PLAY_STORE_ACCESSIBILITY", "UNBLOCK_PLAY_STORE_ACCESSIBILITY"],
             factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
             frpEnabled: ["ENABLE_FRP", "DISABLE_FRP"],
             installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],

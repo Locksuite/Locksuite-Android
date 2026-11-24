@@ -55,11 +55,13 @@ object AccessibilityZombieHealer {
     /** Cuánto se espera, con una reinstalación anotada, antes de declarar que no alcanzó. */
     private const val PENDING_VERDICT_MS = 10 * 60_000L
     private const val TOGGLE_OFF_MS = 2_000L
+    private const val REENABLE_COOLDOWN_MS = 2_500L
 
     @Volatile private var zombieSinceElapsed: Long? = null
     @Volatile private var lastToggleElapsed: Long? = null
     @Volatile private var reinstallStartedElapsed = 0L
     @Volatile private var toggleRestoreScheduled = false
+    @Volatile private var lastReEnableElapsed = 0L
 
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
@@ -304,32 +306,62 @@ object AccessibilityZombieHealer {
     }
 
     /**
-     * Si la app cuenta con WRITE_SECURE_SETTINGS y la accesibilidad fue apagada en Ajustes,
-     * la reenciende inmediatamente por código sin molestar al usuario.
-     * Devuelve true si la reencendió.
+     * Si la app cuenta con WRITE_SECURE_SETTINGS y la accesibilidad fue apagada (o nunca quedó
+     * activada en Ajustes tras la instalación), la enciende automáticamente por código sin
+     * molestar al usuario. Devuelve true si modificó ajustes seguros.
      */
-    fun reEnableIfPermitted(context: Context): Boolean {
+    @JvmOverloads
+    fun reEnableIfPermitted(context: Context, allowBeforePin: Boolean = false): Boolean {
         try {
             val ctx = context.applicationContext
             if (!canWriteSecureSettings(ctx)) return false
+            val prefs = PrefsHelper.getMdmPrefs(ctx)
+            // No interferir mientras el reparador de zombis apaga el servicio 2 s a propósito,
+            // ni en un equipo ya purgado para desinstalar.
+            if (toggleRestoreScheduled || prefs.contains(KEY_TOGGLE_RESTORE)) return false
+            if (prefs.getBoolean("locksuite_purged", false)) return false
+
             val policy = try { com.ejemplo.locksuite.mdm.PolicyManager(ctx) } catch (_: Throwable) { return false }
-            if (policy.isLockSuiteSuspended() || !policy.isAccessibilityProtectionEnabled() ||
-                !com.ejemplo.locksuite.security.PinManager.isPinConfigured(ctx)) {
+            if (policy.isLockSuiteSuspended() || !policy.isAccessibilityProtectionEnabled()) {
                 return false
             }
+
+            val isDeviceOwner = try {
+                val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
+                dpm?.isDeviceOwnerApp(ctx.packageName) == true
+            } catch (_: Throwable) {
+                false
+            }
+            if (!allowBeforePin && !isDeviceOwner && !com.ejemplo.locksuite.security.PinManager.isPinConfigured(ctx)) {
+                return false
+            }
+
+            val now = SystemClock.elapsedRealtime()
+            if (lastReEnableElapsed != 0L && now - lastReEnableElapsed < REENABLE_COOLDOWN_MS) {
+                return false
+            }
+
             val cr = ctx.contentResolver
             val key = Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             val comp = ourComponent(ctx)
-            val original = Settings.Secure.getString(cr, key) ?: ""
-            val conNuestro = ZombieHealPolicy.withComponent(original, comp.packageName, comp.className)
-            if (original != conNuestro) {
-                DiagLog.w(DIAG, "Accesibilidad desactivada en Ajustes: reencendiendo automáticamente por ajuste seguro (WRITE_SECURE_SETTINGS)")
-                Settings.Secure.putString(cr, key, conNuestro)
-                Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-                report(ctx, "ajuste: reencendida automáticamente tras desactivación", sumar = true)
-                return true
+            val original = Settings.Secure.getString(cr, key)
+            val masterEnabled = Settings.Secure.getInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
+            if (!ZombieHealPolicy.needsReEnable(original, masterEnabled, comp.packageName, comp.className)) {
+                return false
             }
-            return false
+
+            lastReEnableElapsed = now
+            val conNuestro = ZombieHealPolicy.withComponent(original, comp.packageName, comp.className)
+            DiagLog.w(DIAG, "Accesibilidad desactivada o apagada en Ajustes: activando automáticamente por ajuste seguro (WRITE_SECURE_SETTINGS)")
+            if ((original ?: "") != conNuestro) {
+                Settings.Secure.putString(cr, key, conNuestro)
+            }
+            if (masterEnabled != 1) {
+                Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+            }
+            AccessibilityEnforcer.resetDebounce()
+            report(ctx, "ajuste: activada/reencendida automáticamente por ajuste seguro", sumar = true)
+            return true
         } catch (t: Throwable) {
             Safe.report("ZombieHealer.reEnableIfPermitted", t)
             return false

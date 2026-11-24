@@ -30,6 +30,10 @@ class MultimediaProvisioningTest {
         assertTrue(script.contains("pm disable-user --user 0"))
         assertTrue(script.contains("dpm set-device-owner \"\$ADMIN\""))
         assertTrue(script.contains("restore_snapshot active"))
+        assertTrue(script.contains("ACCESS_RESTRICTED_SETTINGS"))
+        assertTrue(script.contains("enabled_accessibility_services"))
+        assertTrue(script.contains("accessibility_enabled 1"))
+        assertTrue(script.contains("WatchdogForegroundService"))
     }
 
     @Test(expected = IllegalArgumentException::class)

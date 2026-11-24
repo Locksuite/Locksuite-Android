@@ -2,6 +2,16 @@ package com.ejemplo.locksuite.mdm
 
 object WebViewPolicy {
 
+    /**
+     * Paquetes cuyo WebView queda bloqueado automáticamente al activar cualquier perfil
+     * (personalizado o maestro operativo). Se persiste por packageName aunque aún no estén
+     * instalados, de modo que rige tanto si ya están presentes como si se instalan después.
+     */
+    val DEFAULT_PROFILE_BLOCKED_PACKAGES: Set<String> = setOf(
+        "com.waze",
+        "com.didiglobal.passenger"
+    )
+
     // Whitelist estricta: Dominios esenciales ("core") de apps conocidas.
     // Si la app está en esta lista, se bloquea TODO excepto lo que declare aquí.
     private val CORE_DOMAINS: Map<String, Set<String>> = mapOf(

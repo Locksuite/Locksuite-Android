@@ -984,6 +984,8 @@ object FirebaseDeviceSync {
                     "contactPhotoPickerBlocked" to policyManager.isContactPhotoPickerBlocked(),
                     "geminiMessagesBlocked" to policyManager.isGeminiMessagesBlocked(),
                     "santanderBlocked" to policyManager.isSantanderBlocked(),
+                    "playStoreAppBlocked" to policyManager.isPlayStoreAppBlocked(),
+                    "playStoreAccessibilityBlocked" to policyManager.isPlayStoreAccessibilityBlocked(),
                     "kosherLauncherEnabled" to policyManager.isKosherLauncherEnabled(),
                     "stealthModeEnabled" to isStealth,
 

@@ -483,6 +483,15 @@
               <p id="device-master-profile" class="hint-text" style="font-size:11px; color: var(--text-gray); margin-top:8px;"></p>
             </div>
 
+            <!-- Bloqueo de Play Store (primeros interruptores en Políticas) -->
+            <div class="sidebar-card">
+              <h3>Bloqueo de Play Store</h3>
+              <div class="toggle-list">
+                <label class="toggle-row"><span>Bloqueo de Play Store (Bloquear app)</span><input type="checkbox" class="policy-switch" data-policy="playStoreAppBlocked" /></label>
+                <label class="toggle-row"><span>Bloqueo de Play Store (Por accesibilidad)</span><input type="checkbox" class="policy-switch" data-policy="playStoreAccessibilityBlocked" /></label>
+              </div>
+            </div>
+
             <!-- Políticas de Sistema -->
             <div class="sidebar-card">
               <h3>Políticas de Sistema (Device Owner)</h3>
@@ -882,6 +891,15 @@
           <div id="group-panel-policies" class="group-tab-panel" style="display: none; flex-direction: column; gap: 16px;">
             <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-bottom: 4px; text-align: center;">Al cambiar una política, se aplicará a todos los celulares del grupo.</p>
 
+            <!-- Bloqueo de Play Store (primeros interruptores en Políticas) -->
+            <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
+              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Bloqueo de Play Store</h3>
+              <div class="toggle-grid" style="display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--navy-dark); border-radius: 10px;">
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloqueo de Play Store (Bloquear app)</span><input type="checkbox" class="group-policy-switch" data-policy="playStoreAppBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloqueo de Play Store (Por accesibilidad)</span><input type="checkbox" class="group-policy-switch" data-policy="playStoreAccessibilityBlocked" /></label>
+              </div>
+            </div>
+
             <!-- Políticas de Sistema -->
             <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
               <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Políticas de Sistema (Device Owner)</h3>
@@ -1162,11 +1180,11 @@
   <!-- 26/10/2026 (B.95): app.js usa policies.js para saber qué interruptor toca cada
        comando pendiente (marca «⏳ pendiente»). Es el mismo archivo generado que ya usa
        la ficha nueva; si faltara, la barra funciona igual, solo sin esa marca. -->
-  <script src="policies.js?v=4"></script>
+  <script src="policies.js?v=5"></script>
   <!-- 29/10/2026 (B.101): aprobar un pedido de la Tienda Play usa la lógica pura de la pantalla
        tienda.html (TiendaLogic.approveRequest). Si faltara, el resto del panel sigue igual y solo
        esos pedidos avisan que no se pueden aprobar desde acá. -->
   <script src="tienda_logic.js?v=2"></script>
-  <script src="app.js?v=53"></script>
+  <script src="app.js?v=54"></script>
 </body>
 </html>

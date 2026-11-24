@@ -191,13 +191,23 @@ object AccessibilityEnforcer {
      */
     fun isZombie(context: Context): Boolean {
         return try {
+            val cr = context.contentResolver
             val secureServices = Settings.Secure.getString(
-                context.contentResolver,
+                cr,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            ) ?: ""
-            val inSecure = secureServices.contains("com.ejemplo.locksuite/.service.LockSuiteAccessibilityService") ||
-                secureServices.contains("com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService")
-            inSecure && !isServiceRunning(context)
+            )
+            val masterEnabled = Settings.Secure.getInt(
+                cr,
+                Settings.Secure.ACCESSIBILITY_ENABLED,
+                0
+            )
+            ZombieHealPolicy.isZombieState(
+                enabledServices = secureServices,
+                masterEnabled = masterEnabled,
+                serviceRunning = isServiceRunning(context),
+                pkg = context.packageName,
+                cls = com.ejemplo.locksuite.service.LockSuiteAccessibilityService::class.java.name
+            )
         } catch (_: Exception) {
             false
         }

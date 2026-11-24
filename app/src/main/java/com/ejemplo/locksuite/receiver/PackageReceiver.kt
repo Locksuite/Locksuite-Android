@@ -262,6 +262,21 @@ class PackageReceiver : BroadcastReceiver() {
                         if (prefs.getBoolean("hide_$packageName", false)) {
                             appController.hideApp(packageName, true)
                         }
+
+                        // 6. Auto-bloqueo de WebView en Waze y DiDi fijado por cualquier perfil
+                        //    (aplica también cuando la app se instala después de activar el perfil).
+                        if (prefs.getBoolean(com.ejemplo.locksuite.mdm.PolicyManager.KEY_PROFILE_AUTO_BLOCK_WAZE_DIDI, false) &&
+                            packageName in com.ejemplo.locksuite.mdm.WebViewBlockManager.DEFAULT_PROFILE_BLOCKED_PACKAGES &&
+                            !prefs.getBoolean(com.ejemplo.locksuite.mdm.PolicyManager.KEY_WEBVIEW_MANUAL_UNBLOCK_PREFIX + packageName, false)
+                        ) {
+                            com.ejemplo.locksuite.mdm.WebViewBlockManager.setBlocked(context, packageName, true)
+                            com.ejemplo.locksuite.mdm.PlayStoreManager.releaseWebViewOwnership(context, setOf(packageName))
+                            com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.releaseWebViewOwnership(context, setOf(packageName))
+                        }
+
+                        if (com.ejemplo.locksuite.mdm.WebViewBlockManager.isBlocked(context, packageName)) {
+                            BootReceiver.ensureVpnRunning(context)
+                        }
                     } catch (e: Exception) {
                         Log.e("PackageReceiver", "Error al re-suspender paquete tras actualización: $packageName", e)
                     }

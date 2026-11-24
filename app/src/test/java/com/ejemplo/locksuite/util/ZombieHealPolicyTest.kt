@@ -143,4 +143,26 @@ class ZombieHealPolicyTest {
         val prendido = ZombieHealPolicy.withComponent(apagado, pkg, cls)
         assertEquals(original, prendido)
     }
+
+    @Test fun detectaCuandoHaceFaltaReencender() {
+        assertTrue(ZombieHealPolicy.needsReEnable(null, 1, pkg, cls))
+        assertTrue(ZombieHealPolicy.needsReEnable("", 1, pkg, cls))
+        assertTrue(ZombieHealPolicy.needsReEnable("com.otro/.Svc", 1, pkg, cls))
+        // Interruptor maestro apagado (0) aunque el componente siga en la cadena: también necesita reencendido.
+        assertTrue(ZombieHealPolicy.needsReEnable("$pkg/$cls", 0, pkg, cls))
+        assertTrue(ZombieHealPolicy.needsReEnable("$pkg/.service.LockSuiteAccessibilityService", 0, pkg, cls))
+        // Presente (forma larga o corta) y maestro en 1: ya está habilitada.
+        assertFalse(ZombieHealPolicy.needsReEnable("$pkg/$cls", 1, pkg, cls))
+        assertFalse(ZombieHealPolicy.needsReEnable("com.a/.X:$pkg/.service.LockSuiteAccessibilityService", 1, pkg, cls))
+    }
+
+    @Test fun zombiSoloCuandoMaestroEstaEncendido() {
+        // Si el interruptor maestro está en 0 no es zombi: está apagada y se corrige por ajuste seguro.
+        assertFalse(ZombieHealPolicy.isZombieState("$pkg/$cls", 0, false, pkg, cls))
+        assertFalse(ZombieHealPolicy.isZombieState("com.otro/.Svc", 1, false, pkg, cls))
+        assertFalse(ZombieHealPolicy.isZombieState("$pkg/$cls", 1, true, pkg, cls))
+        // Maestro en 1 + nuestro componente habilitado + servicio sin enlazar = zombi real.
+        assertTrue(ZombieHealPolicy.isZombieState("$pkg/$cls", 1, false, pkg, cls))
+        assertTrue(ZombieHealPolicy.isZombieState("$pkg/.service.LockSuiteAccessibilityService", 1, false, pkg, cls))
+    }
 }

@@ -520,18 +520,30 @@ class LockSuiteInstallerApp(ctk.CTk):
 
             # ── PASO 5: Permisos de Sistema y Batería ─────────
             self.set_progress("Paso 5/6: Otorgando permisos de sistema...", 0.80)
-            self.log("[5/6] Concediendo permisos avanzados (AppOps, Overlay, Batería)...", "white")
+            self.log("[5/6] Concediendo permisos avanzados (AppOps, Secure Settings, VPN, Overlay, Batería)...", "white")
 
             # AppOps: Restricted Settings (Android 13+)
             run_adb_cmd(["shell", "appops", "set", PACKAGE_NAME, "ACCESS_RESTRICTED_SETTINGS", "allow"])
-            # AppOps: Usage Stats
+            # Ajustes seguros (necesario para auto-reencendido de Accesibilidad)
+            run_adb_cmd(["shell", "pm", "grant", PACKAGE_NAME, "android.permission.WRITE_SECURE_SETTINGS"])
+            # Usage Stats
+            run_adb_cmd(["shell", "pm", "grant", PACKAGE_NAME, "android.permission.PACKAGE_USAGE_STATS"])
             run_adb_cmd(["shell", "appops", "set", PACKAGE_NAME, "GET_USAGE_STATS", "allow"])
+            run_adb_cmd(["shell", "appops", "set", PACKAGE_NAME, "PACKAGE_USAGE_STATS", "allow"])
+            # Write Settings & Unknown Sources & VPN AppOp
+            run_adb_cmd(["shell", "appops", "set", PACKAGE_NAME, "WRITE_SETTINGS", "allow"])
+            run_adb_cmd(["shell", "appops", "set", PACKAGE_NAME, "REQUEST_INSTALL_PACKAGES", "allow"])
+            run_adb_cmd(["shell", "appops", "set", PACKAGE_NAME, "ACTIVATE_VPN", "allow"])
+            # Runtime (Android 13+ notificaciones, cámara QR)
+            run_adb_cmd(["shell", "pm", "grant", PACKAGE_NAME, "android.permission.POST_NOTIFICATIONS"])
+            run_adb_cmd(["shell", "pm", "grant", PACKAGE_NAME, "android.permission.CAMERA"])
             # AppOps: System Alert Window
             run_adb_cmd(["shell", "appops", "set", PACKAGE_NAME, "SYSTEM_ALERT_WINDOW", "allow"])
             # Batería Whitelist
             run_adb_cmd(["shell", "dumpsys", "deviceidle", "whitelist", f"+{PACKAGE_NAME}"])
+            run_adb_cmd(["shell", "cmd", "deviceidle", "whitelist", f"+{PACKAGE_NAME}"])
 
-            self.log("   ✓ Permisos de sistema concedidos (AppOps + Batería Doze Whitelist).", "green")
+            self.log("   ✓ Permisos de sistema concedidos (WRITE_SECURE_SETTINGS + AppOps + Batería Doze Whitelist).", "green")
 
             # ── PASO 6: Activar Servicio de Accesibilidad ──────
             self.set_progress("Paso 6/6: Habilitando Accesibilidad...", 0.90)
@@ -548,8 +560,10 @@ class LockSuiteInstallerApp(ctk.CTk):
             else:
                 self.log("   ✓ Comando de Accesibilidad enviado.", "green")
 
-            # ── PASO FINAL: Abrir Aplicación ──────────────────
-            self.log("Iniciando pantalla principal de LockSuite...", "white")
+            # ── PASO FINAL: Iniciar servicios y abrir Aplicación ───
+            self.log("Iniciando Watchdog, filtro VPN DNS y LockSuite...", "white")
+            run_adb_cmd(["shell", "am", "start-foreground-service", "-n", f"{PACKAGE_NAME}/.service.WatchdogForegroundService"])
+            run_adb_cmd(["shell", "am", "startservice", "-n", f"{PACKAGE_NAME}/.service.WatchdogForegroundService"])
             run_adb_cmd(["shell", "am", "start", "-n", LOGIN_ACTIVITY])
 
             self.set_progress("¡Completado con Éxito!", 1.0)
@@ -558,6 +572,7 @@ class LockSuiteInstallerApp(ctk.CTk):
             self.log("==========================================================", "green")
             self.log("• Device Owner: ACTIVO", "green")
             self.log("• Accesibilidad: ACTIVA", "green")
+            self.log("• Filtro VPN DNS: ACTIVACIÓN AUTOMÁTICA", "green")
             self.log("• Permisos de Sistema: CONCEDIDOS", "green")
             self.log("👉 Ya podés volver a agregar tus cuentas en el celular.", "cyan")
 
@@ -566,6 +581,7 @@ class LockSuiteInstallerApp(ctk.CTk):
                 "✓ LockSuite MDM se instaló y aprovisionó con éxito.\n\n"
                 "• Device Owner: Configurado\n"
                 "• Accesibilidad: Habilitada\n"
+                "• Filtro VPN DNS: Activado automáticamente\n"
                 "• Permisos de fondo y batería: Concedidos\n\n"
                 "¡Ya podés volver a agregar tus cuentas de Google en el celular!"
             )

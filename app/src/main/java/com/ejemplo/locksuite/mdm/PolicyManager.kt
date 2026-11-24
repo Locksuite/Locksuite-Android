@@ -21,6 +21,15 @@ class PolicyManager(private val context: Context) {
     companion object {
         /** Lock para evitar ejecuciones concurrentes de reapplyAllRestrictions (boot, app init, watchdog). */
         private val reapplyLock = Any()
+        private val initialProvisionLock = Any()
+
+        private const val KEY_INITIAL_AUTO_PROVISION = "initial_auto_provision_v1"
+        private const val KEY_VPN_TEMP_UNLOCK_UNTIL = "vpn_config_temp_unlock_until"
+        private const val KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED = "vpn_config_temp_unlock_was_blocked"
+        private const val VPN_TEMP_UNLOCK_WINDOW_MS = 60_000L
+        const val KEY_PROFILE_AUTO_BLOCK_WAZE_DIDI = "profile_auto_block_waze_didi"
+        const val KEY_WEBVIEW_MANUAL_UNBLOCK_PREFIX = "webview_manual_unblock_"
+        const val KEY_PLAY_STORE_A11Y_BLOCKED = "play_store_accessibility_blocked"
 
         /** Guarda de una vez por proceso para autoGrantDeclaredPermissions(). Ver B.55. */
         @Volatile private var permissionsAutoGranted = false
@@ -260,6 +269,57 @@ class PolicyManager(private val context: Context) {
     fun isPlayStoreSuspended(): Boolean {
         val prefs = PrefsHelper.getMdmPrefs(context)
         return prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
+    }
+
+    /**
+     * Switch 1 de "Bloqueo de Play Store": bloquea/suspende la app de Google Play
+     * (`com.android.vending`), reflejándose también en la sección Aplicaciones.
+     */
+    fun isPlayStoreAppBlocked(): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        return isPlayStoreSuspended() || prefs.getBoolean("hide_${AppController.PKG_PLAY_STORE}", false)
+    }
+
+    fun setPlayStoreAppBlocked(block: Boolean): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val appController = AppController(context)
+        return if (block) {
+            val suspendedOk = appController.suspendApp(AppController.PKG_PLAY_STORE, true)
+            if (suspendedOk) {
+                true
+            } else {
+                prefs.edit().putBoolean("suspend_${AppController.PKG_PLAY_STORE}", true).commit()
+                isPlayStoreAppBlocked()
+            }
+        } else {
+            val unhid = appController.hideApp(AppController.PKG_PLAY_STORE, false)
+            val unsuspended = appController.suspendApp(AppController.PKG_PLAY_STORE, false)
+            prefs.edit()
+                .putBoolean("hide_${AppController.PKG_PLAY_STORE}", false)
+                .putBoolean("suspend_${AppController.PKG_PLAY_STORE}", false)
+                .commit()
+            unhid || unsuspended || !isPlayStoreAppBlocked()
+        }
+    }
+
+    /**
+     * Switch 2 de "Bloqueo de Play Store": rebote por Accesibilidad al abrir Play Store
+     * (impide abrirla desde links u otras apps sin depender de `install_apps_blocked_admin`).
+     */
+    fun isPlayStoreAccessibilityBlocked(): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        if (prefs.contains(KEY_PLAY_STORE_A11Y_BLOCKED)) {
+            return prefs.getBoolean(KEY_PLAY_STORE_A11Y_BLOCKED, false)
+        }
+        return isInstallAppsBlocked() || isPlayStoreAppBlocked()
+    }
+
+    fun setPlayStoreAccessibilityBlocked(block: Boolean): Boolean {
+        if (deferIfSuspended(KEY_PLAY_STORE_A11Y_BLOCKED, block)) return true
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean(KEY_PLAY_STORE_A11Y_BLOCKED, block)
+            .commit()
+        return true
     }
 
     fun restoreInstallRestrictions() {
@@ -1108,8 +1168,17 @@ class PolicyManager(private val context: Context) {
                 } catch (e: Exception) {
                     android.util.Log.w("PolicyManager", "No se pudo configurar Always-on VPN: ${e.message}")
                 }
+                PrefsHelper.getMdmPrefs(context).edit()
+                    .remove(KEY_VPN_TEMP_UNLOCK_UNTIL)
+                    .remove(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED)
+                    .apply()
                 setRestriction(UserManager.DISALLOW_CONFIG_VPN, true)
+                com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
             } else {
+                PrefsHelper.getMdmPrefs(context).edit()
+                    .remove(KEY_VPN_TEMP_UNLOCK_UNTIL)
+                    .remove(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED)
+                    .apply()
                 try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                         dpm.setAlwaysOnVpnPackage(adminComponent, null, false)
@@ -1127,6 +1196,158 @@ class PolicyManager(private val context: Context) {
         }
     }
 
+    enum class VpnConfigureOutcome {
+        STARTED_DIRECTLY,
+        CONSENT_LAUNCHED,
+        FAILED
+    }
+
+    private fun startKosherVpnService() {
+        val startIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(startIntent)
+        } else {
+            context.startService(startIntent)
+        }
+    }
+
+    private fun isVpnConfigCurrentlyRestricted(): Boolean {
+        if (isRestrictionEnabled(UserManager.DISALLOW_CONFIG_VPN)) return true
+        val byAdmin = try {
+            dpm.getUserRestrictions(adminComponent).getBoolean(UserManager.DISALLOW_CONFIG_VPN, false)
+        } catch (_: Exception) {
+            false
+        }
+        if (byAdmin) return true
+        return try {
+            (context.getSystemService(Context.USER_SERVICE) as UserManager)
+                .hasUserRestriction(UserManager.DISALLOW_CONFIG_VPN)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun isTemporaryVpnUnlockActive(): Boolean {
+        val until = PrefsHelper.getMdmPrefs(context).getLong(KEY_VPN_TEMP_UNLOCK_UNTIL, 0L)
+        return until > System.currentTimeMillis()
+    }
+
+    private fun tryPrepareVpnSilentlyAsDeviceOwner() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
+                dpm.isDeviceOwnerApp(context.packageName)
+            ) {
+                dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, false)
+                disablePrivateDns()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "No se pudo pre-autorizar VPN silenciosa: ${e.message}")
+        }
+    }
+
+    /**
+     * Configura y arranca la VPN de LockSuite desde la app aunque `DISALLOW_CONFIG_VPN` ya esté
+     * activa:
+     *  1. Si está bloqueada, abre temporalmente la restricción sin borrar la preferencia guardada.
+     *  2. Intenta autorizar silenciosamente vía Device Owner (`setAlwaysOnVpnPackage`).
+     *  3. Si el sistema aún requiere confirmación (`VpnService.prepare != null`), abre el diálogo
+     *     con timeout de seguridad y restaura `DISALLOW_CONFIG_VPN` al volver (`finishTemporaryVpnUnlock`
+     *     o `restoreTemporaryVpnUnlockIfPending`).
+     */
+    fun configureAndStartVpn(
+        activity: android.app.Activity?,
+        requestCode: Int,
+        lockAfterOnSuccess: Boolean = false
+    ): VpnConfigureOutcome {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val wasBlocked = isVpnConfigCurrentlyRestricted()
+        val isDo = try { dpm.isDeviceOwnerApp(context.packageName) } catch (_: Exception) { false }
+        return try {
+            if (wasBlocked && isDo) {
+                prefs.edit()
+                    .putLong(KEY_VPN_TEMP_UNLOCK_UNTIL, System.currentTimeMillis() + VPN_TEMP_UNLOCK_WINDOW_MS)
+                    .putBoolean(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED, true)
+                    .commit()
+                try {
+                    dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_CONFIG_VPN)
+                } catch (e: Exception) {
+                    android.util.Log.w("PolicyManager", "No se pudo abrir temporalmente DISALLOW_CONFIG_VPN: ${e.message}")
+                }
+            }
+
+            if (isDo) {
+                tryPrepareVpnSilentlyAsDeviceOwner()
+            }
+
+            val prepareIntent = VpnService.prepare(context)
+            if (prepareIntent == null) {
+                startKosherVpnService()
+                finishTemporaryVpnUnlock(
+                    granted = true,
+                    lockAfterOnSuccess = wasBlocked || lockAfterOnSuccess
+                )
+                VpnConfigureOutcome.STARTED_DIRECTLY
+            } else if (activity != null) {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                    { restoreTemporaryVpnUnlockIfPending() },
+                    VPN_TEMP_UNLOCK_WINDOW_MS
+                )
+                com.ejemplo.locksuite.ui.dashboard.DashboardActivity.isLaunchingInternalFlow = true
+                activity.startActivityForResult(prepareIntent, requestCode)
+                VpnConfigureOutcome.CONSENT_LAUNCHED
+            } else {
+                restoreTemporaryVpnUnlockIfPending()
+                VpnConfigureOutcome.FAILED
+            }
+        } catch (e: Exception) {
+            com.ejemplo.locksuite.ui.dashboard.DashboardActivity.isLaunchingInternalFlow = false
+            restoreTemporaryVpnUnlockIfPending()
+            e.printStackTrace()
+            VpnConfigureOutcome.FAILED
+        }
+    }
+
+    fun finishTemporaryVpnUnlock(granted: Boolean, lockAfterOnSuccess: Boolean = true) {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val wasBlocked = prefs.getBoolean(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED, false) ||
+            isRestrictionEnabled(UserManager.DISALLOW_CONFIG_VPN)
+        prefs.edit()
+            .remove(KEY_VPN_TEMP_UNLOCK_UNTIL)
+            .remove(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED)
+            .commit()
+
+        if (granted) {
+            try {
+                startKosherVpnService()
+            } catch (e: Exception) {
+                android.util.Log.w("PolicyManager", "Error iniciando KosherVpnService: ${e.message}")
+            }
+            if (wasBlocked || lockAfterOnSuccess) {
+                setVpnConfigBlocked(true)
+            }
+        } else if (wasBlocked && !isLockSuiteSuspended()) {
+            setRestriction(UserManager.DISALLOW_CONFIG_VPN, true)
+            tryPrepareVpnSilentlyAsDeviceOwner()
+        }
+    }
+
+    fun restoreTemporaryVpnUnlockIfPending() {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val hasPending = prefs.contains(KEY_VPN_TEMP_UNLOCK_UNTIL) ||
+            prefs.getBoolean(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED, false)
+        if (!hasPending) return
+        val shouldBlock = prefs.getBoolean(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED, false) ||
+            isRestrictionEnabled(UserManager.DISALLOW_CONFIG_VPN)
+        prefs.edit()
+            .remove(KEY_VPN_TEMP_UNLOCK_UNTIL)
+            .remove(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED)
+            .commit()
+        if (shouldBlock && !isLockSuiteSuspended()) {
+            setRestriction(UserManager.DISALLOW_CONFIG_VPN, true)
+            tryPrepareVpnSilentlyAsDeviceOwner()
+        }
+    }
+
     fun setAdBlockingEnabled(enabled: Boolean): Boolean {
         return try {
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("global_ad_blocking", enabled).apply()
@@ -1136,14 +1357,12 @@ class PolicyManager(private val context: Context) {
 
                 // Arrancar la VPN para que filtre las consultas DNS de anuncios
                 try {
+                    if (VpnService.prepare(context) != null) {
+                        tryPrepareVpnSilentlyAsDeviceOwner()
+                    }
                     val prepareIntent = VpnService.prepare(context)
                     if (prepareIntent == null) {
-                        val startServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            context.startForegroundService(startServiceIntent)
-                        } else {
-                            context.startService(startServiceIntent)
-                        }
+                        startKosherVpnService()
                         
                         // Si "Bloquear Ajustes de VPN" ya está activo, nos aseguramos de forzar Always-On
                         if (isRestrictionEnabled(UserManager.DISALLOW_CONFIG_VPN)) {
@@ -1179,14 +1398,12 @@ class PolicyManager(private val context: Context) {
             if (enabled) {
                 // Arrancar la VPN para filtrar Tenor/GIFs
                 try {
+                    if (VpnService.prepare(context) != null) {
+                        tryPrepareVpnSilentlyAsDeviceOwner()
+                    }
                     val prepareIntent = VpnService.prepare(context)
                     if (prepareIntent == null) {
-                        val startServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            context.startForegroundService(startServiceIntent)
-                        } else {
-                            context.startService(startServiceIntent)
-                        }
+                        startKosherVpnService()
                         
                         // Si "Bloquear Ajustes de VPN" ya está activo, nos aseguramos de forzar Always-On
                         if (isRestrictionEnabled(UserManager.DISALLOW_CONFIG_VPN)) {
@@ -1859,6 +2076,8 @@ class PolicyManager(private val context: Context) {
         dataObj.put("kioskLockTask", isKioskLockTaskEnabled())
         dataObj.put("nokiaKeypadMode", isNokiaKeypadMode())
         dataObj.put("nokiaTouchEnabled", isNokiaTouchEnabled())
+        dataObj.put("playStoreAppBlocked", isPlayStoreAppBlocked())
+        dataObj.put("playStoreAccessibilityBlocked", isPlayStoreAccessibilityBlocked())
         dataObj.put("blockPopularNonKosher", isBlockPopularNonKosherEnabled())
         // 29/10/2026 (B.101) — modo de la Tienda Play (cerrada/kosher/trabajo/lite). Texto,
         // no booleano: son cuatro modos. Los paquetes extra y el catálogo NO viajan en el
@@ -1928,7 +2147,11 @@ class PolicyManager(private val context: Context) {
         }
     }
 
-    fun importPolicyPresetJson(jsonString: String): Boolean {
+    @JvmOverloads
+    fun importPolicyPresetJson(
+        jsonString: String,
+        applyDefaultWebViewBlocks: Boolean = true
+    ): Boolean {
         try {
             val rootObj = org.json.JSONObject(jsonString)
             val dataObj = rootObj.getJSONObject("data")
@@ -1993,6 +2216,9 @@ class PolicyManager(private val context: Context) {
                     // bloqueo. Además el panel mostraba el interruptor apagado. Ahora el
                     // perfil entra por el mismo camino que el interruptor.
                     setInstallAppsBlocked(enabled)
+                } else if (restriccion == UserManager.DISALLOW_CONFIG_VPN) {
+                    // Asegura Always-On VPN + DNS Privado off ANTES de bloquear ajustes VPN.
+                    setVpnConfigBlocked(enabled)
                 } else {
                     setRestriction(restriccion, enabled)
                 }
@@ -2056,6 +2282,14 @@ class PolicyManager(private val context: Context) {
             setNokiaKeypadMode(dataObj.optBoolean("nokiaKeypadMode", isNokiaKeypadMode()))
             setNokiaTouchEnabled(dataObj.optBoolean("nokiaTouchEnabled", isNokiaTouchEnabled()))
             setBlockPopularNonKosher(dataObj.optBoolean("blockPopularNonKosher", isBlockPopularNonKosherEnabled()))
+            val hasPlayStoreApp = dataObj.has("playStoreAppBlocked")
+            val playStoreAppTarget = dataObj.optBoolean("playStoreAppBlocked", isPlayStoreAppBlocked())
+            if (hasPlayStoreApp) {
+                setPlayStoreAppBlocked(playStoreAppTarget)
+            }
+            setPlayStoreAccessibilityBlocked(
+                dataObj.optBoolean("playStoreAccessibilityBlocked", isPlayStoreAccessibilityBlocked())
+            )
 
             // 29/10/2026 (B.101) — Tienda Play. Clave AUSENTE o con un valor que no se
             // reconoce = no se toca (un perfil guardado antes de la tienda no la abre ni la
@@ -2090,6 +2324,10 @@ class PolicyManager(private val context: Context) {
 
             applyDeviceStateFromPreset(dataObj)
 
+            if (applyDefaultWebViewBlocks) {
+                applyDefaultProfileWebViewBlocks(clearManualUnblocks = true)
+            }
+
             com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
             return true
@@ -2110,6 +2348,41 @@ class PolicyManager(private val context: Context) {
         // == "no_control_apps".
         "no_apps_control" -> UserManager.DISALLOW_APPS_CONTROL
         else -> key
+    }
+
+    /**
+     * Bloquea automáticamente el WebView de Waze y DiDi al activar cualquier perfil
+     * (personalizado o maestro operativo). Persistido en `WebViewBlockManager` por paquete,
+     * por lo que protege tanto si ya están instaladas como si se instalan más adelante.
+     */
+    private fun applyDefaultProfileWebViewBlocks(clearManualUnblocks: Boolean) {
+        try {
+            val prefs = PrefsHelper.getMdmPrefs(context)
+            val edit = prefs.edit().putBoolean(KEY_PROFILE_AUTO_BLOCK_WAZE_DIDI, true)
+            if (clearManualUnblocks) {
+                for (pkg in WebViewBlockManager.DEFAULT_PROFILE_BLOCKED_PACKAGES) {
+                    edit.remove(KEY_WEBVIEW_MANUAL_UNBLOCK_PREFIX + pkg)
+                }
+            }
+            edit.apply()
+
+            val packagesToEnsure = if (clearManualUnblocks) {
+                WebViewBlockManager.DEFAULT_PROFILE_BLOCKED_PACKAGES
+            } else {
+                WebViewBlockManager.DEFAULT_PROFILE_BLOCKED_PACKAGES.filterNot { pkg ->
+                    prefs.getBoolean(KEY_WEBVIEW_MANUAL_UNBLOCK_PREFIX + pkg, false)
+                }.toSet()
+            }
+            for (pkg in packagesToEnsure) {
+                if (!WebViewBlockManager.isBlocked(context, pkg)) {
+                    WebViewBlockManager.setBlocked(context, pkg, true)
+                }
+            }
+            PlayStoreManager.releaseWebViewOwnership(context, packagesToEnsure)
+            ClassicStorePolicyManager.releaseWebViewOwnership(context, packagesToEnsure)
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "applyDefaultProfileWebViewBlocks: ${e.message}")
+        }
     }
 
     /**
@@ -2224,7 +2497,10 @@ class PolicyManager(private val context: Context) {
             rootObj.put("version", 1)
             rootObj.put("data", data)
             rootObj.put("signature", computeHmacSha256(canonicalizeJson(data)))
-            val applied = importPolicyPresetJson(rootObj.toString())
+            val applied = importPolicyPresetJson(
+                rootObj.toString(),
+                applyDefaultWebViewBlocks = (profileId != EnrollmentProfiles.LEVEL_BASE)
+            )
             if (applied) {
                 // Queda anotado cuál se aplicó y cuándo: el panel lo muestra, y es lo
                 // primero que hay que mirar cuando un equipo "se comporta distinto a los
@@ -2598,6 +2874,69 @@ class PolicyManager(private val context: Context) {
         }
     }
 
+    /**
+     * Auto-aprovisionamiento inicial al instalar LockSuite como Device Owner, sin requerir
+     * que el administrador abra manualmente la app para activar servicios:
+     *  - Concede permisos declarados y fija `PERMISSION_POLICY_AUTO_GRANT`.
+     *  - Protege la Accesibilidad y la enciende en Ajustes si cuenta con `WRITE_SECURE_SETTINGS`.
+     *  - Activa el filtro VPN DNS silenciosamente (`setVpnConfigBlocked(true)` + `KosherVpnService`),
+     *    salvo que se indique `activateVpnBlock = false` (p. ej. alta QR con perfil específico).
+     *
+     * Idempotente y protegido para no pisar la configuración de equipos ya en producción que
+     * actualizan a esta versión.
+     */
+    @JvmOverloads
+    fun ensureInitialAutoProvisioning(activateVpnBlock: Boolean = true) {
+        synchronized(initialProvisionLock) {
+            try {
+                if (!dpm.isDeviceOwnerApp(context.packageName)) return
+                val prefs = PrefsHelper.getMdmPrefs(context)
+                if (prefs.getBoolean("locksuite_purged", false) || isLockSuiteSuspended()) return
+                if (prefs.getBoolean(KEY_INITIAL_AUTO_PROVISION, false)) return
+
+                val alreadyConfigured = com.ejemplo.locksuite.security.PinManager.isPinConfigured(context) ||
+                    prefs.contains(UserManager.DISALLOW_CONFIG_VPN) ||
+                    prefs.contains("master_profile_id")
+                if (alreadyConfigured) {
+                    permissionsAutoGranted = false
+                    autoGrantDeclaredPermissions()
+                    prefs.edit().putBoolean(KEY_INITIAL_AUTO_PROVISION, true).commit()
+                    return
+                }
+
+                try {
+                    dpm.setPermissionPolicy(adminComponent, DevicePolicyManager.PERMISSION_POLICY_AUTO_GRANT)
+                } catch (_: Exception) { }
+                permissionsAutoGranted = false
+                autoGrantDeclaredPermissions()
+
+                if (!prefs.contains("accessibility_protection_enabled")) {
+                    prefs.edit().putBoolean("accessibility_protection_enabled", true).commit()
+                }
+                if (isAccessibilityProtectionEnabled()) {
+                    applyAccessibilityProtection(true)
+                }
+                com.ejemplo.locksuite.util.AccessibilityZombieHealer.reEnableIfPermitted(
+                    context,
+                    allowBeforePin = true
+                )
+
+                if (activateVpnBlock) {
+                    setVpnConfigBlocked(true)
+                    com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context, force = true)
+                }
+
+                prefs.edit().putBoolean(KEY_INITIAL_AUTO_PROVISION, true).commit()
+                com.ejemplo.locksuite.diag.DiagLog.i(
+                    "provision",
+                    "Auto-aprovisionamiento inicial completado (permisos + accesibilidad + VPN=$activateVpnBlock)"
+                )
+            } catch (e: Exception) {
+                android.util.Log.w("PolicyManager", "ensureInitialAutoProvisioning: ${e.message}")
+            }
+        }
+    }
+
     fun reapplyAllRestrictions() {
         synchronized(reapplyLock) {
         // Mientras LockSuite está suspendido nadie vuelve a aplicar nada: ni el
@@ -2618,6 +2957,7 @@ class PolicyManager(private val context: Context) {
         // POST_NOTIFICATIONS) para que el usuario no pueda dejar mudo el aviso de
         // accesibilidad caída. Guarda interna de una vez por proceso: barato.
         autoGrantDeclaredPermissions()
+        ensureInitialAutoProvisioning()
 
         // Auto-curación de apps esenciales/libres (Archivos, Grabadora, Google Chat, Video)
         healRestrictedEssentialApps()
@@ -2705,6 +3045,9 @@ class PolicyManager(private val context: Context) {
             // también la ponía y la sacaba en la misma vuelta.
             if (restriction == UserManager.DISALLOW_INSTALL_APPS) return@forEach
             if (isInstallInProgress && restriction == UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES) {
+                return@forEach
+            }
+            if (restriction == UserManager.DISALLOW_CONFIG_VPN && isTemporaryVpnUnlockActive()) {
                 return@forEach
             }
             if (PolicyReconciler.hayQueAplicar(
@@ -2888,6 +3231,9 @@ class PolicyManager(private val context: Context) {
             ClassicStorePolicyManager.reconcile(context)
         } catch (e: Exception) {
             android.util.Log.w("PolicyManager", "Tienda clásica: reconcile falló: ${e.message}")
+        }
+        if (PrefsHelper.getMdmPrefs(context).getBoolean(KEY_PROFILE_AUTO_BLOCK_WAZE_DIDI, false)) {
+            applyDefaultProfileWebViewBlocks(clearManualUnblocks = false)
         }
         try {
             syncMeteredDataDisabledPackages()

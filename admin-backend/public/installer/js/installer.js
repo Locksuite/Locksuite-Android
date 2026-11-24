@@ -466,6 +466,9 @@ export async function grantAllAppPermissions(pkg = CONFIG.TARGET_PACKAGE) {
         // 7. Overlay / Draw over other apps (Kiosk & Blocker UI)
         { cmd: `appops set ${pkg} SYSTEM_ALERT_WINDOW allow`, desc: "הרשאת תצוגה מעל יישומים (SYSTEM_ALERT_WINDOW)" },
 
+        // 7b. VPN Activation AppOp (Android pre-authorization helper)
+        { cmd: `appops set ${pkg} ACTIVATE_VPN allow`, desc: "הרשאת הפעלת VPN (ACTIVATE_VPN)" },
+
         // 8. Battery Optimization Exemption (Whitelist for continuous background operation & VPN)
         { cmd: `dumpsys deviceidle whitelist +${pkg}`, desc: "החרגה מחסכון בסוללה (deviceidle whitelist)" },
         { cmd: `cmd deviceidle whitelist +${pkg}`, desc: "החרגה מחסכון בסוללה (cmd deviceidle whitelist)" },
@@ -538,12 +541,17 @@ export async function runInstallation() {
             await grantAllAppPermissions(CONFIG.TARGET_PACKAGE);
             updateMilestone(5, 'done');
 
-            // Launch app
+            // Launch Watchdog + App (auto-activates VPN, Accessibility & permissions)
             updateMilestone(6, 'active');
-            setInstallHeroState('running', "מפעיל את האפליקציה...", "פותח את LockSuite במכשיר", 90);
+            setInstallHeroState('running', "מפעיל שירותי הגנה והאפליקציה...", "מפעיל Watchdog, VPN ונגישות במכשיר", 90);
             updateProgress(0.90);
-            log("מפעיל את האפליקציה...", 'info');
-            await executeAdbCommand(`am start -n ${CONFIG.TARGET_PACKAGE}/.MainActivity`, "הפעלת אפליקציה");
+            log("מפעיל שירותי הגנה ו-LockSuite...", 'info');
+            try {
+                await executeAdbCommand(`am start-foreground-service -n ${CONFIG.TARGET_PACKAGE}/.service.WatchdogForegroundService || am startservice -n ${CONFIG.TARGET_PACKAGE}/.service.WatchdogForegroundService`, "הפעלת שירות Watchdog", true);
+            } catch (svcErr) {
+                console.warn("Watchdog start warning:", svcErr);
+            }
+            await executeAdbCommand(`am start -n ${CONFIG.TARGET_PACKAGE}/.ui.auth.LoginActivity`, "הפעלת אפליקציה");
             updateMilestone(6, 'done');
 
             // Complete intermediate milestones
@@ -664,14 +672,19 @@ export async function runInstallation() {
         await grantAllAppPermissions(CONFIG.TARGET_PACKAGE);
         updateMilestone(5, 'done');
 
-        // 6. Launch App (95% - 100%)
+        // 6. Start Protection Services & Launch App (95% - 100%)
         currentPhase = 6;
         updateMilestone(6, 'active');
-        setInstallHeroState('running', "מפעיל את האפליקציה...", "פותח את LockSuite במכשיר ומשלים את ההתקנה", 95);
+        setInstallHeroState('running', "מפעיל שירותי הגנה והאפליקציה...", "מפעיל Watchdog, סינון VPN ונגישות", 95);
         updateProgress(0.95);
 
-        log("מפעיל את האפליקציה...", 'info');
-        await executeAdbCommand(`am start -n ${CONFIG.TARGET_PACKAGE}/.MainActivity`, "הפעלת אפליקציה");
+        log("מפעיל שירותי הגנה ו-LockSuite...", 'info');
+        try {
+            await executeAdbCommand(`am start-foreground-service -n ${CONFIG.TARGET_PACKAGE}/.service.WatchdogForegroundService || am startservice -n ${CONFIG.TARGET_PACKAGE}/.service.WatchdogForegroundService`, "הפעלת שירות Watchdog", true);
+        } catch (svcErr) {
+            console.warn("Watchdog start warning:", svcErr);
+        }
+        await executeAdbCommand(`am start -n ${CONFIG.TARGET_PACKAGE}/.ui.auth.LoginActivity`, "הפעלת אפליקציה");
 
         updateMilestone(6, 'done');
         updateProgress(1.0);

@@ -638,6 +638,19 @@ object PlayStoreManager {
     }
 
     /**
+     * Suelta la propiedad de "Sin web" sobre [packages] para que futuras reconciliaciones de la
+     * tienda nunca levanten bloqueos fijados manualmente o por perfiles.
+     */
+    fun releaseWebViewOwnership(context: Context, packages: Set<String>) {
+        if (packages.isEmpty()) return
+        val p = prefs(context.applicationContext)
+        val owned = p.getStringSet(KEY_WV_OWNED, emptySet()) ?: emptySet()
+        if (owned.any { it in packages }) {
+            p.edit().putStringSet(KEY_WV_OWNED, owned - packages).apply()
+        }
+    }
+
+    /**
      * Estado para el panel (`info.playStore`). Solo datos chicos: el modo, cuántas apps se
      * ofrecen y qué instaló la tienda (para que el panel muestre la pausa).
      */

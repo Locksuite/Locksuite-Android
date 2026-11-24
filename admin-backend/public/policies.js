@@ -13,6 +13,20 @@
 window.LOCKSUITE_POLICIES = {
   "policies": [
     {
+      "field": "playStoreAppBlocked",
+      "label": "Bloqueo de Play Store (Bloquear app)",
+      "group": "Bloqueo de Play Store",
+      "on": "BLOCK_PLAY_STORE_APP",
+      "off": "UNBLOCK_PLAY_STORE_APP"
+    },
+    {
+      "field": "playStoreAccessibilityBlocked",
+      "label": "Bloqueo de Play Store (Por accesibilidad)",
+      "group": "Bloqueo de Play Store",
+      "on": "BLOCK_PLAY_STORE_ACCESSIBILITY",
+      "off": "UNBLOCK_PLAY_STORE_ACCESSIBILITY"
+    },
+    {
       "field": "factoryResetBlocked",
       "label": "Bloquear Restauración de Fábrica",
       "group": "Políticas de Sistema (Device Owner)",

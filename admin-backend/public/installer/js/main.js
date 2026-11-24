@@ -20,7 +20,7 @@ import {
 } from './ui.js';
 import { connectAdb, initUsbConnectionDaemon } from './adb-client.js';
 import { checkAccounts, runAccountBypass, restoreAccounts, getBypassPreview } from './accounts.js';
-import { checkForUpdates, startDownload, runInstallation, setManualApkFile, resetApkBlob } from './installer.js';
+import { checkForUpdates, startDownload, runInstallation, setManualApkFile, resetApkBlob } from './installer.js?v=2.0.3';
 import { appState, restoreSessionState } from './state.js';
 
 // --- Rescue Banner Management ---

@@ -770,6 +770,16 @@
   function valorActualPolitica(f) {
     if (f === "whitelistEnforce") return campo("whitelistSimulation", true) === false;
     if (f === "iabFinderEnforce") return campo("iabFinderSimulation", true) === false;
+    if (f === "playStoreAppBlocked") {
+      const raw = campo(f, undefined);
+      if (raw !== undefined) return raw === true;
+      const v = S.instaladas && S.instaladas[PKG_PLAY];
+      return v ? (v.isSuspended === true || v.isHidden === true) : campo("installAppsBlocked", false) === true;
+    }
+    if (f === "playStoreAccessibilityBlocked") {
+      const raw = campo(f, undefined);
+      return raw !== undefined ? raw === true : campo("installAppsBlocked", false) === true;
+    }
     const defVal = (f === "googleAccountWebBlocked" || f === "contactPhotoPickerBlocked" ||
       f === "geminiMessagesBlocked" || f === "santanderBlocked" || f === "whitelistSharedCdn" ||
       f === "captivePortalGuard" || f === "captivePortalCoverImages");

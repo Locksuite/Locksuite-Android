@@ -12,6 +12,27 @@ class DeviceAdminReceiver : DeviceAdminReceiver() {
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
         Toast.makeText(context, "LockSuite MDM: Administrador Habilitado", Toast.LENGTH_SHORT).show()
+        val appCtx = context.applicationContext
+        try {
+            val watchdog = Intent(appCtx, com.ejemplo.locksuite.service.WatchdogForegroundService::class.java)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                appCtx.startForegroundService(watchdog)
+            } else {
+                appCtx.startService(watchdog)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("DeviceAdminReceiver", "onEnabled: no se pudo arrancar Watchdog: ${e.message}")
+        }
+        Thread({
+            try {
+                if (com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(appCtx)) {
+                    com.ejemplo.locksuite.mdm.PolicyManager(appCtx).ensureInitialAutoProvisioning(activateVpnBlock = true)
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.requestSync(appCtx)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("DeviceAdminReceiver", "onEnabled auto-provision: ${e.message}")
+            }
+        }, "LockSuiteAutoProvision").apply { isDaemon = false }.start()
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
@@ -60,28 +81,6 @@ class DeviceAdminReceiver : DeviceAdminReceiver() {
                 intent.getParcelableExtra(DevicePolicyManager.EXTRA_PROVISIONING_ADMIN_EXTRAS_BUNDLE)
             val nivel = extras?.getString(EXTRA_NIVEL_PERFIL)
 
-            if (nivel.isNullOrBlank()) {
-                // Sin nivel en el QR el equipo queda enrolado y sin perfil, que es un
-                // estado válido: el administrador puede aplicar uno desde el panel. Se
-                // dice igual, porque un alta silenciosa que no configuró nada se
-                // confunde con una que sí (B.28/B.42).
-                android.util.Log.w(
-                    "DeviceAdminReceiver",
-                    "Alta por QR sin nivel de perfil: el equipo queda enrolado sin configurar."
-                )
-                Toast.makeText(
-                    context,
-                    "LockSuite instalada. Falta aplicarle un perfil desde el panel.",
-                    Toast.LENGTH_LONG
-                ).show()
-                return
-            }
-
-            // 19/11/2026 (B.125, T1): ya NO se retiene el broadcast con goAsync(). Android no
-            // amplía el plazo por usarlo (10 s en primer plano, 60 s en segundo plano) y
-            // applyMasterProfile() puede tardar bastante más en un equipo lento: ANR en pleno
-            // alta por QR. Lo que mantiene vivo el proceso mientras trabaja el hilo es el
-            // Watchdog (servicio en primer plano), que se arranca antes de soltar el broadcast.
             val appCtx = context.applicationContext
             try {
                 val watchdog = Intent(appCtx, com.ejemplo.locksuite.service.WatchdogForegroundService::class.java)
@@ -93,9 +92,40 @@ class DeviceAdminReceiver : DeviceAdminReceiver() {
             } catch (e: Exception) {
                 android.util.Log.w("DeviceAdminReceiver", "No se pudo arrancar el Watchdog en el alta: ${e.message}")
             }
+
+            if (nivel.isNullOrBlank()) {
+                // Sin nivel en el QR el equipo queda enrolado y sin perfil, pero igualmente se
+                // auto-activan permisos, protección de accesibilidad y filtro VPN inicial.
+                android.util.Log.w(
+                    "DeviceAdminReceiver",
+                    "Alta por QR sin nivel de perfil: el equipo queda enrolado con protección inicial base."
+                )
+                Thread({
+                    try {
+                        com.ejemplo.locksuite.mdm.PolicyManager(appCtx)
+                            .ensureInitialAutoProvisioning(activateVpnBlock = true)
+                        com.ejemplo.locksuite.util.FirebaseDeviceSync.requestSync(appCtx)
+                    } catch (e: Exception) {
+                        android.util.Log.w("DeviceAdminReceiver", "Alta QR sin perfil auto-provision: ${e.message}")
+                    }
+                }, "LockSuiteProvisioningBase").apply { isDaemon = false }.start()
+                Toast.makeText(
+                    context,
+                    "LockSuite instalada con protección base. Podés aplicar un perfil desde el panel.",
+                    Toast.LENGTH_LONG
+                ).show()
+                return
+            }
+
+            // 19/11/2026 (B.125, T1): ya NO se retiene el broadcast con goAsync(). Android no
+            // amplía el plazo por usarlo (10 s en primer plano, 60 s en segundo plano) y
+            // applyMasterProfile() puede tardar bastante más en un equipo lento: ANR en pleno
+            // alta por QR. Lo que mantiene vivo el proceso mientras trabaja el hilo es el
+            // Watchdog (servicio en primer plano), que se arranca antes de soltar el broadcast.
             Thread({
                 try {
                     val pm = com.ejemplo.locksuite.mdm.PolicyManager(appCtx)
+                    pm.ensureInitialAutoProvisioning(activateVpnBlock = false)
                     val ok = pm.applyMasterProfile(nivel, incluirPostAlta = false)
                     val pendientes = com.ejemplo.locksuite.mdm.EnrollmentProfiles.pendientesDeAlta(nivel)
 

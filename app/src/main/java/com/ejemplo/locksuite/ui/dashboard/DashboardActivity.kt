@@ -74,6 +74,18 @@ class DashboardActivity : ComponentActivity() {
         var isLaunchingInternalFlow: Boolean = false
     }
 
+    private val vpnUiRefreshTick = mutableIntStateOf(0)
+
+    private fun bumpVpnUiRefresh() {
+        vpnUiRefreshTick.intValue++
+        try {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                { vpnUiRefreshTick.intValue++ },
+                850L
+            )
+        } catch (_: Exception) { }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // 19/11/2026 (B.125, T2.2): quién arrancó este proceso (pantalla DashboardActivity).
@@ -90,6 +102,8 @@ class DashboardActivity : ComponentActivity() {
 
         setContent {
             DashboardScreen(
+                vpnRefreshTick = vpnUiRefreshTick.intValue,
+                onBumpVpnRefresh = { bumpVpnUiRefresh() },
                 onLogout = {
                     SessionManager.closeSession()
                     finish()
@@ -121,25 +135,26 @@ class DashboardActivity : ComponentActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 1024 && resultCode == Activity.RESULT_OK) {
+        if (requestCode == 1024) {
             try {
-                // 1. Iniciar servicio de la VPN
-                val startServiceIntent = Intent(this, com.ejemplo.locksuite.service.KosherVpnService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(startServiceIntent)
-                } else {
-                    startService(startServiceIntent)
-                }
-                
-                // 2. Activar automáticamente el bloqueo y modo Lockdown de la VPN
                 val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(this)
-                policyManager.setVpnConfigBlocked(true)
-                
-                Toast.makeText(
-                    this, 
-                    "VPN activa y configuración de red bloqueada automáticamente (Lockdown).", 
-                    Toast.LENGTH_LONG
-                ).show()
+                val granted = resultCode == Activity.RESULT_OK
+                policyManager.finishTemporaryVpnUnlock(granted = granted, lockAfterOnSuccess = true)
+                bumpVpnUiRefresh()
+
+                if (granted) {
+                    Toast.makeText(
+                        this,
+                        "VPN activa y configuración de red bloqueada automáticamente (Lockdown).",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } else if (policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_VPN)) {
+                    Toast.makeText(
+                        this,
+                        "Permiso VPN cancelado; bloqueo de configuración VPN restaurado.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
                 Toast.makeText(this, "Error al configurar VPN permanente: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -150,6 +165,10 @@ class DashboardActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isLaunchingInternalFlow = false
+        try {
+            com.ejemplo.locksuite.mdm.PolicyManager(this).restoreTemporaryVpnUnlockIfPending()
+        } catch (_: Exception) { }
+        bumpVpnUiRefresh()
         if (!SessionManager.isActive()) {
             finish()
         } else {
@@ -199,7 +218,11 @@ class DashboardActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DashboardScreen(onLogout: () -> Unit) {
+fun DashboardScreen(
+    vpnRefreshTick: Int = 0,
+    onBumpVpnRefresh: () -> Unit = {},
+    onLogout: () -> Unit
+) {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -449,6 +472,8 @@ fun DashboardScreen(onLogout: () -> Unit) {
                 4 -> DnsActivityTabContent(context)
                 5 -> ServicesTabContent(
                     context = context,
+                    vpnRefreshTick = vpnRefreshTick,
+                    onBumpVpnRefresh = onBumpVpnRefresh,
                     onTriggerPermissionsReauth = { showReauthDialogForPermissions = true },
                     onTriggerUninstallReauth = { showReauthDialogForUninstall = true }
                 )
@@ -667,6 +692,23 @@ fun PoliciesTabContent(context: Context) {
 
     val allSections = remember(refreshKey) {
         listOf(
+            PolicySection(
+                title = "Bloqueo de Play Store",
+                items = listOf(
+                    PolicySwitchItem(
+                        key = "playStoreAppBlocked",
+                        label = "Bloqueo de Play Store (Bloquear app)",
+                        isChecked = policyManager.isPlayStoreAppBlocked(),
+                        onCheckedChange = { policyManager.setPlayStoreAppBlocked(it).also { refreshKey++ } }
+                    ),
+                    PolicySwitchItem(
+                        key = "playStoreAccessibilityBlocked",
+                        label = "Bloqueo de Play Store (Por accesibilidad)",
+                        isChecked = policyManager.isPlayStoreAccessibilityBlocked(),
+                        onCheckedChange = { policyManager.setPlayStoreAccessibilityBlocked(it).also { refreshKey++ } }
+                    )
+                )
+            ),
             PolicySection(
                 title = "Políticas de Sistema (Device Owner)",
                 items = listOf(
@@ -1840,28 +1882,17 @@ fun AppManagerTabContent(context: Context) {
 
     fun ensureVpnActiveAfterBlock() {
         try {
-            val prepareIntent = android.net.VpnService.prepare(context)
-            if (prepareIntent != null) {
-                // Pedir confirmación de conexión VPN al usuario (solo la primera vez)
-                if (context is Activity) {
-                    DashboardActivity.isLaunchingInternalFlow = true
-                    context.startActivityForResult(prepareIntent, 1024)
+            val activity = context as? Activity
+            when (policyManager.configureAndStartVpn(activity, 1024, lockAfterOnSuccess = true)) {
+                com.ejemplo.locksuite.mdm.PolicyManager.VpnConfigureOutcome.STARTED_DIRECTLY -> {
+                    Toast.makeText(
+                        context,
+                        "VPN activa y configuración bloqueada automáticamente (Lockdown).",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
-            } else {
-                // Permiso ya concedido, arrancar servicio directo
-                val startServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(startServiceIntent)
-                } else {
-                    context.startService(startServiceIntent)
-                }
-                // Bloquear la configuración de VPN automáticamente para que no la desactive
-                policyManager.setVpnConfigBlocked(true)
-                Toast.makeText(
-                    context,
-                    "VPN activa y configuración bloqueada automáticamente (Lockdown).",
-                    Toast.LENGTH_LONG
-                ).show()
+                com.ejemplo.locksuite.mdm.PolicyManager.VpnConfigureOutcome.CONSENT_LAUNCHED -> Unit
+                com.ejemplo.locksuite.mdm.PolicyManager.VpnConfigureOutcome.FAILED -> Unit
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -2189,7 +2220,18 @@ fun AppManagerTabContent(context: Context) {
                             },
                             onWebViewChange = { block, onComplete ->
                                 scope.launch(Dispatchers.IO) {
-                                    val success = com.ejemplo.locksuite.mdm.WebViewBlockManager.setBlocked(context, app.packageName, block)
+                                    val pkg = app.packageName
+                                    val prefs = PrefsHelper.getMdmPrefs(context)
+                                    if (block) {
+                                        prefs.edit().remove(PolicyManager.KEY_WEBVIEW_MANUAL_UNBLOCK_PREFIX + pkg).apply()
+                                    } else if (pkg in com.ejemplo.locksuite.mdm.WebViewBlockManager.DEFAULT_PROFILE_BLOCKED_PACKAGES) {
+                                        prefs.edit().putBoolean(PolicyManager.KEY_WEBVIEW_MANUAL_UNBLOCK_PREFIX + pkg, true).apply()
+                                    }
+                                    val success = com.ejemplo.locksuite.mdm.WebViewBlockManager.setBlocked(context, pkg, block)
+                                    if (success && block) {
+                                        com.ejemplo.locksuite.mdm.PlayStoreManager.releaseWebViewOwnership(context, setOf(pkg))
+                                        com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.releaseWebViewOwnership(context, setOf(pkg))
+                                    }
                                     withContext(Dispatchers.Main) {
                                         onComplete(success)
                                         if (success && block) {
@@ -3029,6 +3071,8 @@ fun StatusLabelRow(label: String, value: String) {
 @Composable
 fun ServicesTabContent(
     context: Context,
+    vpnRefreshTick: Int = 0,
+    onBumpVpnRefresh: () -> Unit = {},
     onTriggerPermissionsReauth: () -> Unit,
     onTriggerUninstallReauth: () -> Unit
 ) {
@@ -3553,20 +3597,22 @@ fun ServicesTabContent(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val vpnActive = remember {
-                            var isVpnOn = false
-                            try {
-                                val nis = java.net.NetworkInterface.getNetworkInterfaces()
-                                if (nis != null) {
-                                    for (ni in nis) {
-                                        if (ni.isUp && (ni.name.contains("tun") || ni.name.contains("ppp") || ni.name.contains("p2p"))) {
-                                            isVpnOn = true
-                                            break
+                        val vpnActive = remember(vpnRefreshTick) {
+                            var isVpnOn = com.ejemplo.locksuite.service.KosherVpnService.isTunnelRunning
+                            if (!isVpnOn) {
+                                try {
+                                    val nis = java.net.NetworkInterface.getNetworkInterfaces()
+                                    if (nis != null) {
+                                        for (ni in nis) {
+                                            if (ni.isUp && (ni.name.contains("tun") || ni.name.contains("ppp") || ni.name.contains("p2p"))) {
+                                                isVpnOn = true
+                                                break
+                                            }
                                         }
                                     }
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
                                 }
-                            } catch (e: Exception) {
-                                e.printStackTrace()
                             }
                             isVpnOn
                         }
@@ -3600,27 +3646,16 @@ fun ServicesTabContent(
                         val navyDark = Color(0xFF0E141B)
                         Button(
                             onClick = {
-                                val prepareIntent = android.net.VpnService.prepare(context)
-                                if (prepareIntent != null) {
-                                    try {
-                                        DashboardActivity.isLaunchingInternalFlow = true
-                                        (context as? Activity)?.startActivityForResult(prepareIntent, 1024)
-                                    } catch (e: Exception) {
-                                        e.printStackTrace()
-                                        Toast.makeText(context, "Error al preparar VPN: ${e.message}", Toast.LENGTH_SHORT).show()
-                                    }
-                                } else {
-                                    // Ya tiene permisos concedidos, iniciamos el servicio directamente
-                                    try {
-                                        val startIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                            context.startForegroundService(startIntent)
-                                        } else {
-                                            context.startService(startIntent)
-                                        }
+                                val activity = context as? Activity
+                                when (policyManager.configureAndStartVpn(activity, 1024, lockAfterOnSuccess = false)) {
+                                    com.ejemplo.locksuite.mdm.PolicyManager.VpnConfigureOutcome.STARTED_DIRECTLY -> {
+                                        onBumpVpnRefresh()
                                         Toast.makeText(context, "Filtro VPN DNS activado con éxito.", Toast.LENGTH_SHORT).show()
-                                    } catch (e: Exception) {
-                                        e.printStackTrace()
+                                    }
+                                    com.ejemplo.locksuite.mdm.PolicyManager.VpnConfigureOutcome.CONSENT_LAUNCHED -> Unit
+                                    com.ejemplo.locksuite.mdm.PolicyManager.VpnConfigureOutcome.FAILED -> {
+                                        onBumpVpnRefresh()
+                                        Toast.makeText(context, "Error al preparar o iniciar la VPN.", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             },

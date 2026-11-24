@@ -136,6 +136,33 @@ object ZombieHealPolicy {
         return (entries + "$pkg/$cls").joinToString(":")
     }
 
+    /**
+     * ¿Hace falta reescribir ajustes seguros para reactivar nuestro servicio de accesibilidad?
+     * Cubre tanto el caso en que se borró el componente de `ENABLED_ACCESSIBILITY_SERVICES`
+     * como el caso en que alguien apagó el interruptor maestro (`ACCESSIBILITY_ENABLED != 1`)
+     * dejando el componente escrito.
+     */
+    fun needsReEnable(
+        enabledServices: String?,
+        masterEnabled: Int,
+        pkg: String,
+        cls: String
+    ): Boolean = !containsComponent(enabledServices, pkg, cls) || masterEnabled != 1
+
+    /**
+     * Verdadero estado ZOMBI en AMS: el interruptor maestro está encendido (`masterEnabled == 1`),
+     * nuestro componente figura habilitado en `ENABLED_ACCESSIBILITY_SERVICES`, pero el servicio no
+     * está enlazado/corriendo. Cuando `masterEnabled != 1` simplemente está apagado y se resuelve
+     * reencendiendo por ajuste seguro, sin pasar por el flujo de zombi.
+     */
+    fun isZombieState(
+        enabledServices: String?,
+        masterEnabled: Int,
+        serviceRunning: Boolean,
+        pkg: String,
+        cls: String
+    ): Boolean = masterEnabled == 1 && containsComponent(enabledServices, pkg, cls) && !serviceRunning
+
     private fun splitEntries(enabled: String?): List<String> =
         enabled?.split(':')?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
 }

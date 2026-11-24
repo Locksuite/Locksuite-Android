@@ -419,11 +419,23 @@ class CommandProcessor(private val context: Context) {
                     true
                 }
                 "BLOCK_WEBVIEW" -> {
-                    packagesList.forEach { com.ejemplo.locksuite.mdm.WebViewBlockManager.setBlocked(context, it, true) }
+                    val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
+                    packagesList.forEach { pkg ->
+                        prefs.edit().remove(com.ejemplo.locksuite.mdm.PolicyManager.KEY_WEBVIEW_MANUAL_UNBLOCK_PREFIX + pkg).apply()
+                        com.ejemplo.locksuite.mdm.WebViewBlockManager.setBlocked(context, pkg, true)
+                    }
+                    com.ejemplo.locksuite.mdm.PlayStoreManager.releaseWebViewOwnership(context, packagesList.toSet())
+                    com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.releaseWebViewOwnership(context, packagesList.toSet())
                     true
                 }
                 "UNBLOCK_WEBVIEW" -> {
-                    packagesList.forEach { com.ejemplo.locksuite.mdm.WebViewBlockManager.setBlocked(context, it, false) }
+                    val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
+                    packagesList.forEach { pkg ->
+                        if (pkg in com.ejemplo.locksuite.mdm.WebViewBlockManager.DEFAULT_PROFILE_BLOCKED_PACKAGES) {
+                            prefs.edit().putBoolean(com.ejemplo.locksuite.mdm.PolicyManager.KEY_WEBVIEW_MANUAL_UNBLOCK_PREFIX + pkg, true).apply()
+                        }
+                        com.ejemplo.locksuite.mdm.WebViewBlockManager.setBlocked(context, pkg, false)
+                    }
                     true
                 }
                 "BLOCK_APP_INTERNET" -> {
@@ -858,6 +870,10 @@ class CommandProcessor(private val context: Context) {
                 "UNBLOCK_GEMINI_MESSAGES" -> policyManager.setGeminiMessagesBlocked(false)
                 "BLOCK_SANTANDER" -> policyManager.setSantanderBlocked(true)
                 "UNBLOCK_SANTANDER" -> policyManager.setSantanderBlocked(false)
+                "BLOCK_PLAY_STORE_APP" -> policyManager.setPlayStoreAppBlocked(true)
+                "UNBLOCK_PLAY_STORE_APP" -> policyManager.setPlayStoreAppBlocked(false)
+                "BLOCK_PLAY_STORE_ACCESSIBILITY" -> policyManager.setPlayStoreAccessibilityBlocked(true)
+                "UNBLOCK_PLAY_STORE_ACCESSIBILITY" -> policyManager.setPlayStoreAccessibilityBlocked(false)
                 "ENABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(true)
                 "DISABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(false)
                 "ENABLE_ACC_NAG" -> policyManager.setAccNag(true)

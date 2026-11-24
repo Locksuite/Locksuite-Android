@@ -43,6 +43,9 @@ SUITES=(
   "com.ejemplo.locksuite.util.CrashNetPolicyTest|util/CrashNetPolicy.kt|util/CrashNetPolicyTest.kt"
   # 24/11/2026 (B.128) — Split APKs (.apks, .xapk, .apkm) en tienda clásica y ruta silenciosa
   "com.ejemplo.locksuite.mdm.SplitApkBundleTest|mdm/BinaryManifestParser.kt mdm/UpdateRoutePlanner.kt mdm/SplitApkBundle.kt|mdm/SplitApkBundleTest.kt"
+  # 24/11/2026 (B.129) — Auto-reencendido de accesibilidad y rebote selectivo en Ajustes
+  "com.ejemplo.locksuite.mdm.AccessibilityBouncePolicyTest|mdm/AccessibilityBouncePolicy.kt|mdm/AccessibilityBouncePolicyTest.kt"
+  "com.ejemplo.locksuite.mdm.WebViewProfileDefaultsTest|mdm/WebViewPolicy.kt mdm/PlayStoreCatalog.kt|mdm/WebViewProfileDefaultsTest.kt"
 )
 
 declare -A SEEN=()

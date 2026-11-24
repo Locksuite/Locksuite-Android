@@ -17,6 +17,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
+import com.ejemplo.locksuite.mdm.AccessibilityBouncePolicy
 import com.ejemplo.locksuite.mdm.CaptivePortalPolicy
 import com.ejemplo.locksuite.mdm.EmbeddedBrowserDetector
 import com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy
@@ -325,10 +326,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val waChannels: Boolean,
         val mpOffers: Boolean,
         val settingsEvasion: Boolean,
-        val installBlocked: Boolean,
-        val playStoreSuspended: Boolean,
-        val vendingHidden: Boolean,
-        val vendingSuspended: Boolean,
+        val playStoreAccessibilityBlocked: Boolean,
         val updateInProgress: Boolean,
         val updatingPkg: String?,
         /**
@@ -386,10 +384,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             waChannels = policyManager.isWhatsAppBlockChannelsEnabled(),
             mpOffers = policyManager.isMercadoPagoBlockOffersAccessibilityEnabled(),
             settingsEvasion = p.getBoolean("settings_evasion_enabled", false),
-            installBlocked = policyManager.isInstallAppsBlocked(),
-            playStoreSuspended = policyManager.isPlayStoreSuspended(),
-            vendingHidden = p.getBoolean("hide_$PKG_PLAY_STORE", false),
-            vendingSuspended = p.getBoolean("suspend_$PKG_PLAY_STORE", false),
+            playStoreAccessibilityBlocked = policyManager.isPlayStoreAccessibilityBlocked(),
             updateInProgress = p.getBoolean("mdm_install_in_progress", false),
             updatingPkg = p.getString("updating_package", null),
             // Ausente = Google Play: es lo que deja un flujo de una versión anterior.
@@ -783,25 +778,21 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return
         }
 
-        // Bloqueo estricto de Play Store fuera del flujo de actualización POR GOOGLE PLAY
+        // Bloqueo de Google Play Store por Accesibilidad fuera del flujo de actualización
         // (B.97: la ruta de la Tienda no abre Play Store, así que no la exime).
-        if (!f.playUpdateActive && packageName == PKG_PLAY_STORE) {
-            val shouldBlock = f.installBlocked || f.playStoreSuspended ||
-                f.vendingHidden || f.vendingSuspended
-            if (shouldBlock) {
-                Log.w(TAG, "🚫 Intento no autorizado de abrir Google Play Store. Bloqueando y regresando a Home...")
-                Layer3Audit.anotar(
-                    applicationContext, "play-store", packageName, null,
-                    "Play Store está bloqueada o suspendida fuera del flujo de actualización", true
-                )
-                overlayManager.hideBlockingMessageOverlay()
-                performGlobalAction(GLOBAL_ACTION_HOME)
-                // Con una instalación silenciosa en curso (la Tienda, o la ruta de la Tienda
-                // de una actualización) NO se re-imponen las restricciones: le cortaría la
-                // instalación a mitad. Esa ventana la cierra quien la abrió.
-                if (!f.updateInProgress) policyManager.restoreInstallRestrictions()
-                return
-            }
+        if (!f.playUpdateActive && packageName == PKG_PLAY_STORE && f.playStoreAccessibilityBlocked) {
+            Log.w(TAG, "🚫 Bloqueo de Google Play Store por Accesibilidad activo. Bloqueando y regresando a Home...")
+            Layer3Audit.anotar(
+                applicationContext, "play-store", packageName, null,
+                "Bloqueo de Play Store por Accesibilidad activo", true
+            )
+            overlayManager.hideBlockingMessageOverlay()
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            // Con una instalación silenciosa en curso (la Tienda, o la ruta de la Tienda
+            // de una actualización) NO se re-imponen las restricciones: le cortaría la
+            // instalación a mitad. Esa ventana la cierra quien la abrió.
+            if (!f.updateInProgress) policyManager.restoreInstallRestrictions()
+            return
         }
 
         // ── Actualizar stack de paquetes de apps reales ──
@@ -944,11 +935,15 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
         }
 
-        // ── Rebote del menú de Accesibilidad de Ajustes ──
-        // Va ANTES de la anti-evasión genérica porque es más específico y más barato:
-        // en el caso normal (95 % de las pantallas de Ajustes) se resuelve mirando el
-        // nombre de la clase de la ventana, sin tocar el árbol.
-        if (f.accSettingsBounce && isSettingsPackage(packageName)) {
+        // ── Rebote selectivo de LockSuite dentro de Accesibilidad en Ajustes ──
+        if (!isSettingsPackage(packageName)) {
+            if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                !packageName.contains("inputmethod", ignoreCase = true)
+            ) {
+                inAccessibilityContext = false
+                lastSettingsWindowTitleFolded = ""
+            }
+        } else if (f.accSettingsBounce) {
             if (handleAccessibilitySettingsBounce(ev, eventType)) return
         }
 
@@ -1551,23 +1546,37 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var accBounceInProgress = false
     private var accBounceBackoffUntil = 0L
 
+    /** Contexto de navegación dentro de Accesibilidad de Ajustes (permite menú principal y otras apps). */
+    private var inAccessibilityContext = false
+    private var lastSettingsWindowTitleFolded = ""
+
     /** Cache de las señales que dependen del equipo y del idioma actual. */
     private var accSettingsClasses: Set<String> = emptySet()
     private var accSettingsTitles: Set<String> = emptySet()
     private var accOwnLabelFolded: String = ""
+    private var accOwnDescriptionPrefixFolded: String = ""
     private var accSignalsAt = 0L
 
     /** Cada cuánto se vuelven a resolver componente y título localizado. */
     private val ACC_SIGNALS_TTL_MS = 10 * 60 * 1000L
+    private val ACC_WHITESPACE_REGEX = Regex("\\s+")
 
     private fun isSettingsPackage(pkg: String): Boolean =
         pkg == SETTINGS_PKG || pkg.endsWith(".settings")
 
+    private fun normalizeSpaces(raw: String): String =
+        foldAccents(raw).trim().replace(ACC_WHITESPACE_REGEX, " ")
+
+    private fun matchesOwnLabelFolded(folded: String): Boolean {
+        if (folded.isEmpty()) return false
+        if (accOwnLabelFolded.isNotEmpty() && containsWholeWord(folded, accOwnLabelFolded)) return true
+        return containsWholeWord(folded, "locksuite")
+    }
+
     /**
      * Resuelve —y cachea— el nombre de clase de la pantalla de Accesibilidad y su
-     * título en el idioma actual del equipo. Se rehace cada 10 minutos, y también
-     * cuando cambia la configuración (ver `onConfigurationChanged`), que es
-     * exactamente lo que pasa cuando el usuario cambia el idioma.
+     * título en el idioma actual del equipo, además de la descripción propia de
+     * `accessibility_description` (exclusiva de la pantalla de LockSuite en Accesibilidad).
      */
     private fun refreshAccessibilitySignals(force: Boolean = false) {
         val now = SystemClock.elapsedRealtime()
@@ -1588,18 +1597,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
             info?.activityInfo?.let { ai ->
                 classes.add(ai.name)
-                // Muchos fabricantes exponen un alias `Settings$XxxActivity` y ejecutan
-                // otra clase por debajo; guardar las dos formas cuesta nada.
                 ai.targetActivity?.let { classes.add(it) }
             }
         } catch (e: Exception) {
             Log.w(TAG, "No se pudo resolver la actividad de Accesibilidad: ${e.message}")
         }
 
-        // 2. El título, en el idioma que el equipo tenga puesto AHORA, pedido a la
-        //    propia app de Ajustes. `accessibility_settings` es el nombre del recurso
-        //    en AOSP y lo respetan los fabricantes; si no existe, simplemente no se
-        //    agrega ninguna señal de título y quedan las otras dos.
+        // 2. El título, en el idioma actual, pedido a la app de Ajustes (para detectar el
+        //    menú principal de Accesibilidad y distinguirlo sin rebotarlo).
         for (pkg in listOf(SETTINGS_PKG, "com.samsung.android.settings")) {
             try {
                 val res = packageManager.getResourcesForApplication(pkg)
@@ -1607,7 +1612,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                     val id = res.getIdentifier(name, "string", pkg)
                     if (id != 0) {
                         val value = res.getString(id)
-                        if (!value.isNullOrBlank()) titles.add(foldAccents(value).trim())
+                        if (!value.isNullOrBlank()) titles.add(normalizeSpaces(value))
                     }
                 }
             } catch (e: Exception) {
@@ -1615,18 +1620,25 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 3. Nuestra propia etiqueta, que no se traduce.
+        // 3. Nuestra propia etiqueta y nuestra descripción exclusiva del servicio de Accesibilidad.
         accOwnLabelFolded = try {
             val label = packageManager.getApplicationLabel(applicationInfo)?.toString() ?: ""
-            foldAccents(label).trim()
+            normalizeSpaces(label)
         } catch (e: Exception) {
             "locksuite"
+        }
+
+        accOwnDescriptionPrefixFolded = try {
+            val full = normalizeSpaces(getString(com.ejemplo.locksuite.R.string.accessibility_description))
+            if (full.length > 48) full.substring(0, 48).trim() else full
+        } catch (e: Exception) {
+            ""
         }
 
         accSettingsClasses = classes
         accSettingsTitles = titles
         if (VERBOSE) {
-            Log.d(TAG, "Señales de Accesibilidad: clases=$classes titulos=$titles etiqueta=$accOwnLabelFolded")
+            Log.d(TAG, "Señales A11y: clases=$classes titulos=$titles etiqueta=$accOwnLabelFolded")
         }
     }
 
@@ -1639,145 +1651,267 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         refreshAccessibilitySignals(force = true)
     }
 
-    /** Devuelve true si rebotó (y por lo tanto el evento ya está atendido). */
+    /**
+     * Rebote selectivo: permite recorrer el menú general de Accesibilidad y sus demás
+     * opciones (TalkBack, lupa, tamaño de fuente, etc.), y rebota ÚNICAMENTE si entra en la
+     * ficha propia de LockSuite dentro de Accesibilidad o su diálogo de detención.
+     */
     private fun handleAccessibilitySettingsBounce(ev: AccessibilityEvent, eventType: Int): Boolean {
-        // Solo al cambiar de ventana. Una sub-pantalla de Ajustes SIEMPRE llega con un
-        // WINDOW_STATE_CHANGED; mirar también los CONTENT_CHANGED era trabajo repetido
-        // y multiplicaba las chances de un falso positivo.
-        if (eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return false
+        val isWindowChange = eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        val isContentChange = eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+        if (!isWindowChange && !isContentChange) return false
+
+        if (isWindowChange) {
+            val evTitle = ev.text?.firstOrNull()?.toString()
+            lastSettingsWindowTitleFolded = if (!evTitle.isNullOrBlank()) normalizeSpaces(evTitle) else ""
+        } else {
+            // En CONTENT_CHANGED solo inspeccionamos si estamos navegando Accesibilidad o el título
+            // reciente nombra a LockSuite: costo cero en el resto de Ajustes.
+            if (!AccessibilityBouncePolicy.shouldScanOnContentChanged(
+                    inAccessibilityContext,
+                    matchesOwnLabelFolded(lastSettingsWindowTitleFolded)
+                )
+            ) {
+                return false
+            }
+        }
 
         val now = SystemClock.elapsedRealtime()
         if (accBounceInProgress || now < accBounceBackoffUntil) return false
-        // El administrador con sesión abierta puede entrar a propósito.
         if (com.ejemplo.locksuite.security.SessionManager.isActive()) return false
 
         refreshAccessibilitySignals()
-        if (!isAccessibilitySettingsScreen(ev)) return false
 
-        accBounceInProgress = true
-        Log.w(TAG, "🚫 Menú de Accesibilidad de Ajustes: rebotando al usuario.")
-        Layer3Audit.anotar(
-            applicationContext, "menu-accesibilidad", SETTINGS_PKG,
-            ev.className?.toString(), "pantalla del menú de Accesibilidad de Ajustes", true
-        )
-        performGlobalAction(GLOBAL_ACTION_BACK)
-
-        mainHandler.postDelayed({
-            // Verificación: si el "atrás" sirvió, no hay nada más que hacer. Solo se
-            // fuerza HOME si seguimos en la MISMA pantalla, y con backoff, para no
-            // encadenar acciones y sacar al usuario de Ajustes por completo sin motivo.
-            var stillThere = false
-            val current = rootInActiveWindow
-            if (current != null) {
-                val pkg = current.packageName?.toString() ?: ""
-                if (isSettingsPackage(pkg)) {
-                    stillThere = hasOwnLabelWithSwitch(current)
-                }
-                current.recycle()
-            }
-            if (stillThere) {
-                Log.w(TAG, "🏠 La pantalla del servicio persiste: forzando HOME.")
-                performGlobalAction(GLOBAL_ACTION_HOME)
-                accBounceBackoffUntil = SystemClock.elapsedRealtime() + ACC_BOUNCE_BACKOFF_MS
-            }
-            accBounceInProgress = false
-        }, 600)
-
-        return true
-    }
-
-    /** Las tres señales, de la más barata a la más cara. */
-    private fun isAccessibilitySettingsScreen(ev: AccessibilityEvent): Boolean {
-        // ── Señal 1: componente exacto ──
-        val cls = ev.className?.toString()
-        if (cls != null) {
-            if (cls in accSettingsClasses) return true
-            // Red de seguridad para fabricantes con actividad propia y nombre parlante.
-            // NO alcanza sola en Android puro (usa `SubSettings` para casi todo), pero
-            // cuando aparece es inequívoca.
-            if (cls.contains("AccessibilitySettings", ignoreCase = true) ||
-                cls.contains("AccessibilityMenu", ignoreCase = true)
-            ) return true
+        val cls = ev.className?.toString() ?: ""
+        // Camino rápido sin tocar el árbol de nodos para pantallas fuera de Accesibilidad.
+        if (isWindowChange &&
+            AccessibilityBouncePolicy.isExplicitlyNonAccessibilityClass(cls) &&
+            !matchesOwnLabelFolded(lastSettingsWindowTitleFolded)
+        ) {
+            inAccessibilityContext = false
+            return false
         }
 
-        // ── Señal 2: título de la ventana contra el título localizado real ──
-        // Ojo: SOLO el título, no el árbol. Ese fue el bug que rebotaba media app de
-        // Ajustes, porque "Accesibilidad" aparece como fila en el menú principal.
-        if (accSettingsTitles.isNotEmpty()) {
-            val evTitle = ev.text?.firstOrNull()?.toString()
-            if (evTitle != null) {
-                val folded = foldAccents(evTitle).trim()
-                if (folded in accSettingsTitles) return true
+        val root = rootInActiveWindow ?: run {
+            if (isWindowChange &&
+                AccessibilityBouncePolicy.isMainAccessibilityMenu(
+                    AccessibilityBouncePolicy.ScreenSnapshot(
+                        className = cls,
+                        windowTitleFolded = lastSettingsWindowTitleFolded,
+                        inAccessibilityContext = inAccessibilityContext,
+                        knownAccMenuClasses = accSettingsClasses,
+                        knownAccMenuTitles = accSettingsTitles,
+                        hasOwnDescription = false,
+                        hasOwnLabelInHeader = matchesOwnLabelFolded(lastSettingsWindowTitleFolded),
+                        hasOwnLabelInBody = false,
+                        hasSwitch = false,
+                        hasAccessibilityViewHints = false,
+                        hasExcludedSettingsHints = false,
+                        isDialog = cls.contains("Dialog", ignoreCase = true)
+                    )
+                )
+            ) {
+                inAccessibilityContext = true
             }
+            return false
         }
 
-        // ── Señal 3: nuestra etiqueta junto a un interruptor ──
-        // Es la pantalla donde realmente se apaga el servicio. Independiente del idioma
-        // porque el nombre de nuestra app no se traduce.
-        val root = rootInActiveWindow ?: return false
-        return try {
-            hasOwnLabelWithSwitch(root)
+        val action = try {
+            val snapshot = buildAccessibilityBounceSnapshot(root, cls, lastSettingsWindowTitleFolded)
+            AccessibilityBouncePolicy.classify(snapshot)
         } finally {
             root.recycle()
         }
+
+        when (action) {
+            AccessibilityBouncePolicy.Action.ENTER_ACCESSIBILITY_CONTEXT -> {
+                inAccessibilityContext = true
+                return false
+            }
+            AccessibilityBouncePolicy.Action.LEAVE_ACCESSIBILITY_CONTEXT -> {
+                inAccessibilityContext = false
+                return false
+            }
+            AccessibilityBouncePolicy.Action.IGNORE -> {
+                return false
+            }
+            AccessibilityBouncePolicy.Action.BOUNCE -> {
+                inAccessibilityContext = true
+                accBounceInProgress = true
+                Log.w(TAG, "🚫 Pantalla de LockSuite en Accesibilidad ($cls): rebotando al usuario.")
+                Layer3Audit.anotar(
+                    applicationContext, "menu-accesibilidad", SETTINGS_PKG,
+                    cls.ifBlank { null }, "pantalla de LockSuite en Accesibilidad", true
+                )
+                performGlobalAction(GLOBAL_ACTION_BACK)
+
+                mainHandler.postDelayed({
+                    try {
+                        var stillThere = false
+                        val current = rootInActiveWindow
+                        if (current != null) {
+                            try {
+                                val pkg = current.packageName?.toString() ?: ""
+                                if (isSettingsPackage(pkg)) {
+                                    val currentSnap = buildAccessibilityBounceSnapshot(
+                                        current,
+                                        "",
+                                        ""
+                                    )
+                                    stillThere = AccessibilityBouncePolicy.classify(currentSnap) ==
+                                        AccessibilityBouncePolicy.Action.BOUNCE
+                                }
+                            } finally {
+                                current.recycle()
+                            }
+                        }
+                        if (stillThere) {
+                            Log.w(TAG, "🏠 La pantalla de LockSuite en Accesibilidad persiste: forzando HOME.")
+                            performGlobalAction(GLOBAL_ACTION_HOME)
+                            accBounceBackoffUntil = SystemClock.elapsedRealtime() + ACC_BOUNCE_BACKOFF_MS
+                        }
+                    } finally {
+                        accBounceInProgress = false
+                    }
+                }, 600)
+
+                return true
+            }
+        }
     }
 
-    private class LabelSwitchScan {
-        var sawLabel = false
-        var sawSwitch = false
-        val done: Boolean get() = sawLabel && sawSwitch
+    private class BounceTreeScan {
+        var hasOwnDescription = false
+        var hasOwnLabelInHeader = false
+        var hasOwnLabelInBody = false
+        var hasSwitch = false
+        var hasAccessibilityViewHints = false
+        var hasExcludedSettingsHints = false
     }
 
-    /**
-     * ¿La ventana muestra el nombre de NUESTRA app y además un interruptor?
-     *
-     * Esa combinación solo se da en pantallas de Ajustes que gobiernan LockSuite: la
-     * del servicio de accesibilidad, la de información de la app, la de notificaciones.
-     * Rebotar de todas ellas es deseable en un MDM. Y no depende de ningún idioma.
-     */
-    private fun hasOwnLabelWithSwitch(root: AccessibilityNodeInfo): Boolean {
-        if (accOwnLabelFolded.isEmpty()) return false
-        val state = LabelSwitchScan()
+    private fun buildAccessibilityBounceSnapshot(
+        root: AccessibilityNodeInfo,
+        cls: String,
+        windowTitleFolded: String
+    ): AccessibilityBouncePolicy.ScreenSnapshot {
+        val scan = BounceTreeScan()
+        if (matchesOwnLabelFolded(windowTitleFolded)) {
+            scan.hasOwnLabelInHeader = true
+        }
         nodeBudget = 600
-        scanLabelSwitchNode(root, 0, state)
-        return state.done
+        scanBounceTree(root, 0, inHeader = false, out = scan)
+
+        return AccessibilityBouncePolicy.ScreenSnapshot(
+            className = cls,
+            windowTitleFolded = windowTitleFolded,
+            inAccessibilityContext = inAccessibilityContext,
+            knownAccMenuClasses = accSettingsClasses,
+            knownAccMenuTitles = accSettingsTitles,
+            hasOwnDescription = scan.hasOwnDescription,
+            hasOwnLabelInHeader = scan.hasOwnLabelInHeader,
+            hasOwnLabelInBody = scan.hasOwnLabelInBody,
+            hasSwitch = scan.hasSwitch,
+            hasAccessibilityViewHints = scan.hasAccessibilityViewHints,
+            hasExcludedSettingsHints = scan.hasExcludedSettingsHints,
+            isDialog = cls.contains("Dialog", ignoreCase = true)
+        )
     }
 
-    private fun scanLabelSwitchNode(node: AccessibilityNodeInfo, depth: Int, out: LabelSwitchScan) {
-        if (out.done || depth > 14) return
-        if (nodeBudget-- <= 0) return
+    private fun scanBounceTree(
+        node: AccessibilityNodeInfo,
+        depth: Int,
+        inHeader: Boolean,
+        out: BounceTreeScan
+    ) {
+        if (depth > 14 || nodeBudget-- <= 0) return
 
-        if (!out.sawSwitch) {
+        val viewIdLower = node.viewIdResourceName?.lowercase()
+        var currentInHeader = inHeader
+        if (viewIdLower != null) {
+            if (!out.hasExcludedSettingsHints &&
+                AccessibilityBouncePolicy.EXCLUDED_VIEW_ID_HINTS.any { viewIdLower.contains(it) }
+            ) {
+                out.hasExcludedSettingsHints = true
+            }
+            if (!out.hasAccessibilityViewHints &&
+                AccessibilityBouncePolicy.ACCESSIBILITY_VIEW_ID_HINTS.any { viewIdLower.contains(it) }
+            ) {
+                out.hasAccessibilityViewHints = true
+            }
+            if (!currentInHeader &&
+                AccessibilityBouncePolicy.HEADER_VIEW_ID_HINTS.any { viewIdLower.contains(it) }
+            ) {
+                currentInHeader = true
+            }
+            if (!out.hasSwitch &&
+                (viewIdLower.contains("switch_bar") ||
+                    viewIdLower.contains("main_switch_bar") ||
+                    viewIdLower.contains("switchwidget"))
+            ) {
+                out.hasSwitch = true
+            }
+        }
+
+        if (!out.hasSwitch) {
             val cn = node.className?.toString()
             if (cn != null &&
-                (cn.endsWith("Switch") || cn.endsWith("ToggleButton") ||
-                 cn.endsWith("SwitchCompat") || cn.endsWith("CheckBox"))
-            ) out.sawSwitch = true
+                (cn.endsWith("Switch") || cn.endsWith("ToggleButton") || cn.endsWith("SwitchCompat"))
+            ) {
+                out.hasSwitch = true
+            }
         }
 
-        if (!out.sawLabel) {
-            val text = node.text
-            if (text != null && text.isNotEmpty() &&
-                containsWholeWord(foldAccents(text), accOwnLabelFolded)
-            ) out.sawLabel = true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && !out.hasOwnLabelInHeader) {
+            val pane = node.paneTitle
+            if (pane != null && pane.isNotEmpty() && matchesOwnLabelFolded(normalizeSpaces(pane.toString()))) {
+                out.hasOwnLabelInHeader = true
+                out.hasOwnLabelInBody = true
+            }
         }
-        if (!out.sawLabel) {
-            val desc = node.contentDescription
-            if (desc != null && desc.isNotEmpty() &&
-                containsWholeWord(foldAccents(desc), accOwnLabelFolded)
-            ) out.sawLabel = true
+
+        val text = node.text
+        if (text != null && text.isNotEmpty()) {
+            val folded = normalizeSpaces(text.toString())
+            if (!out.hasOwnDescription &&
+                accOwnDescriptionPrefixFolded.length >= 20 &&
+                folded.contains(accOwnDescriptionPrefixFolded)
+            ) {
+                out.hasOwnDescription = true
+            }
+            if (matchesOwnLabelFolded(folded)) {
+                out.hasOwnLabelInBody = true
+                if (currentInHeader) out.hasOwnLabelInHeader = true
+            }
         }
-        if (out.done) return
+
+        val desc = node.contentDescription
+        if (desc != null && desc.isNotEmpty()) {
+            val foldedDesc = normalizeSpaces(desc.toString())
+            if (!out.hasOwnDescription &&
+                accOwnDescriptionPrefixFolded.length >= 20 &&
+                foldedDesc.contains(accOwnDescriptionPrefixFolded)
+            ) {
+                out.hasOwnDescription = true
+            }
+            if (matchesOwnLabelFolded(foldedDesc)) {
+                out.hasOwnLabelInBody = true
+                if (currentInHeader) out.hasOwnLabelInHeader = true
+            }
+        }
+
+        // Parada temprana si ya reunimos la señal inequívoca de rebote o exclusión.
+        if (out.hasOwnDescription || out.hasExcludedSettingsHints) return
 
         val childCount = node.childCount
         for (i in 0 until childCount) {
+            if (nodeBudget <= 0) return
             val child = node.getChild(i) ?: continue
             try {
-                scanLabelSwitchNode(child, depth + 1, out)
+                scanBounceTree(child, depth + 1, currentInHeader, out)
             } finally {
                 child.recycle()
             }
-            if (out.done) return
+            if (out.hasOwnDescription || out.hasExcludedSettingsHints) return
         }
     }
 

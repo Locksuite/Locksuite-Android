@@ -400,6 +400,7 @@ class WatchdogForegroundService : Service() {
         handler.post(enforcerRunnable)
 
         val uri = Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+        val masterUri = Settings.Secure.getUriFor(Settings.Secure.ACCESSIBILITY_ENABLED)
         accessibilityObserver = object : android.database.ContentObserver(handler) {
             override fun onChange(selfChange: Boolean) {
                 super.onChange(selfChange)
@@ -426,6 +427,11 @@ class WatchdogForegroundService : Service() {
         }
         try {
             contentResolver.registerContentObserver(uri, false, accessibilityObserver!!)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        try {
+            contentResolver.registerContentObserver(masterUri, false, accessibilityObserver!!)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -483,7 +489,11 @@ class WatchdogForegroundService : Service() {
         val now = android.os.SystemClock.elapsedRealtime()
 
         // Si se cuenta con WRITE_SECURE_SETTINGS y la accesibilidad fue apagada, reencenderla de inmediato
-        com.ejemplo.locksuite.util.AccessibilityZombieHealer.reEnableIfPermitted(context)
+        // y darle a Android ~1,5 s para re-enlazar antes de disparar pantalla roja o suspender apps.
+        if (com.ejemplo.locksuite.util.AccessibilityZombieHealer.reEnableIfPermitted(context)) {
+            com.ejemplo.locksuite.util.AccessibilityEnforcer.resetDebounce()
+            return
+        }
 
         // null = lectura todavía sin confirmar (antirrebote). No tocar nada: actuar
         // sobre estados de transición era exactamente lo que producía el vaivén.

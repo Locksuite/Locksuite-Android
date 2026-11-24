@@ -127,6 +127,11 @@ class EnrollmentProfilesStoreModeTest {
 
         // Reglas explícitas del dueño (18/11/2026)
         assertEquals(false, ref.switches["kosherLauncherEnabled"])
+        assertEquals(true, ref.switches["playStoreAppBlocked"])
+        assertEquals(true, ref.switches["playStoreAccessibilityBlocked"])
+        val base = EnrollmentProfiles.byId(EnrollmentProfiles.LEVEL_BASE)!!
+        assertEquals(false, base.switches["playStoreAppBlocked"])
+        assertEquals(false, base.switches["playStoreAccessibilityBlocked"])
         assertEquals(true, ref.switches["accSuspendAll"])
         assertEquals(true, ref.switches["bootGateWaitAccessibility"])
         assertEquals(false, ref.restrictions[android.os.UserManager.DISALLOW_CONFIG_TETHERING])

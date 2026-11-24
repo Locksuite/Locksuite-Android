@@ -103,6 +103,19 @@ object ClassicStorePolicyManager {
         prefs(context.applicationContext).edit().clear().apply()
     }
 
+    /**
+     * Suelta la propiedad de WebView sobre [packages] para que reconciliaciones posteriores de
+     * `storeApps` nunca desbloqueen apps bloqueadas por un perfil o manualmente.
+     */
+    fun releaseWebViewOwnership(context: Context, packages: Set<String>) {
+        if (packages.isEmpty()) return
+        val p = prefs(context.applicationContext)
+        val wvOwned = p.getStringSet(KEY_WV_OWNED, emptySet()) ?: emptySet()
+        if (wvOwned.any { it in packages }) {
+            p.edit().putStringSet(KEY_WV_OWNED, wvOwned - packages).apply()
+        }
+    }
+
     fun reconcile(context: Context) {
         val ctx = context.applicationContext
         try {

@@ -199,6 +199,8 @@ object EnrollmentProfiles {
     )
 
     private val UNIFIED_SWITCHES: Map<String, Boolean> = mapOf(
+        "playStoreAppBlocked" to true,
+        "playStoreAccessibilityBlocked" to true,
         "adBlockingEnabled" to true,
         "gifsBlocked" to true,
         "whatsappBlockStatus" to true,
@@ -237,6 +239,8 @@ object EnrollmentProfiles {
     private val BASE_RESTRICTIONS: Map<String, Boolean> = ANTI_TAMPER
 
     private val BASE_SWITCHES: Map<String, Boolean> = mapOf(
+        "playStoreAppBlocked" to false,
+        "playStoreAccessibilityBlocked" to false,
         "accessibilityProtection" to true,
         "geminiMessagesBlocked" to true,
         "santanderBlocked" to true,

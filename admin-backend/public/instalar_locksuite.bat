@@ -94,11 +94,24 @@ echo [*] Asignando permisos de Device Owner...
 echo.
 
 :: ─── Activar Accesibilidad y Permisos de Sistema ─────────────
-echo [*] Habilitando Servicio de Accesibilidad y permisos...
-%ADB% shell appops set com.ejemplo.locksuite ACCESS_RESTRICTED_SETTINGS allow
+echo [*] Habilitando Servicio de Accesibilidad, VPN y permisos del sistema...
+%ADB% shell appops set com.ejemplo.locksuite ACCESS_RESTRICTED_SETTINGS allow >nul 2>&1
+%ADB% shell pm grant com.ejemplo.locksuite android.permission.WRITE_SECURE_SETTINGS >nul 2>&1
+%ADB% shell pm grant com.ejemplo.locksuite android.permission.PACKAGE_USAGE_STATS >nul 2>&1
+%ADB% shell appops set com.ejemplo.locksuite GET_USAGE_STATS allow >nul 2>&1
+%ADB% shell appops set com.ejemplo.locksuite PACKAGE_USAGE_STATS allow >nul 2>&1
+%ADB% shell appops set com.ejemplo.locksuite SYSTEM_ALERT_WINDOW allow >nul 2>&1
+%ADB% shell appops set com.ejemplo.locksuite WRITE_SETTINGS allow >nul 2>&1
+%ADB% shell appops set com.ejemplo.locksuite REQUEST_INSTALL_PACKAGES allow >nul 2>&1
+%ADB% shell appops set com.ejemplo.locksuite ACTIVATE_VPN allow >nul 2>&1
+%ADB% shell pm grant com.ejemplo.locksuite android.permission.POST_NOTIFICATIONS >nul 2>&1
+%ADB% shell pm grant com.ejemplo.locksuite android.permission.CAMERA >nul 2>&1
+%ADB% shell dumpsys deviceidle whitelist +com.ejemplo.locksuite >nul 2>&1
+%ADB% shell cmd deviceidle whitelist +com.ejemplo.locksuite >nul 2>&1
 %ADB% shell settings put secure enabled_accessibility_services com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService
 %ADB% shell settings put secure accessibility_enabled 1
-%ADB% shell pm grant com.ejemplo.locksuite android.permission.WRITE_SECURE_SETTINGS
+%ADB% shell am start-foreground-service -n com.ejemplo.locksuite/.service.WatchdogForegroundService >nul 2>&1 || %ADB% shell am startservice -n com.ejemplo.locksuite/.service.WatchdogForegroundService >nul 2>&1
+%ADB% shell am start -n com.ejemplo.locksuite/.ui.auth.LoginActivity >nul 2>&1
 echo.
 
 :: ─── Limpiar APK temporal ────────────────────────────────
