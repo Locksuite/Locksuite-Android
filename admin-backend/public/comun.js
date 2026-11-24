@@ -362,11 +362,11 @@
     return callClassicStoreFn({ action: "deleteObject", objectPath });
   };
 
-  LS.uploadToSignedUrl = function (uploadUrl, file, onProgress) {
+  LS.uploadToSignedUrl = function (uploadUrl, file, onProgress, contentType) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("PUT", uploadUrl, true);
-      xhr.setRequestHeader("Content-Type", "application/vnd.android.package-archive");
+      xhr.setRequestHeader("Content-Type", contentType || "application/vnd.android.package-archive");
       xhr.upload.onprogress = function (ev) {
         if (ev.lengthComputable && typeof onProgress === "function") {
           onProgress(Math.round((ev.loaded * 100) / ev.total));

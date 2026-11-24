@@ -4111,6 +4111,12 @@ function renderStoreApps(storeApps) {
         // el celular, el administrador tendría que ir a buscarlo ahí.
         const tieneSha = typeof app.sha256 === "string" && /^[0-9a-f]{64}$/i.test(app.sha256);
         const shaFecha = app.sha256At ? new Date(app.sha256At).toLocaleDateString() : null;
+        const splitCount = Number(app.splitCount) || 1;
+        const fmt = String(app.bundleFormat || "").toLowerCase();
+        const isSplit = splitCount > 1 || (fmt && fmt !== "apk");
+        const splitHtml = isSplit
+            ? `<p style="font-size:11px; color:var(--accent-cyan); margin:4px 0;">📦 ${escapeHtml(splitCount > 1 ? `Split (${splitCount} APKs)` : `Split (${fmt.toUpperCase()})`)}</p>`
+            : "";
         const shaHtml = tieneSha
             ? `<p style="font-size:11px; color:var(--success-green); margin:6px 0 0 0;" title="${escapeHtml(app.sha256)}">
                  ✓ Verificable${shaFecha ? ` — huella calculada el ${shaFecha}` : ""}
@@ -4122,6 +4128,7 @@ function renderStoreApps(storeApps) {
             <div>
                 <h3 style="margin-top:0; margin-bottom:8px;">${escapeHtml(app.label)}</h3>
                 <p style="font-size:12px; color:var(--text-gray); margin: 4px 0;"><strong>Paquete:</strong> ${escapeHtml(app.packageName)}</p>
+                ${splitHtml}
                 <p style="font-size:11px; color:var(--accent); word-break:break-all; margin: 4px 0;"><strong>URL:</strong> ${escapeHtml(app.apkUrl)}</p>
                 ${shaHtml}
             </div>

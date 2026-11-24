@@ -812,6 +812,7 @@ exports.checkPlayApps = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 }, a
 // ─────────────────────────────────────────────────────────────────────────────
 const STORE_APKS_BUCKET = "locksuite-nueva-store-apks";
 const MAX_STORE_APK_BYTES = 512 * 1024 * 1024;
+const CLASSIC_EXT_RE = /\.(apk|apks|xapk|apkm)$/i;
 const CLASSIC_PKG_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
 const CLASSIC_NEVER_OFFERED = new Set([
   "com.ejemplo.locksuite",
@@ -858,16 +859,19 @@ exports.classicStoreApk = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 },
       }
       const rawName = typeof fileName === "string" ? fileName.trim() : "";
       const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/^_+|_+$/g, "");
-      if (!safeName || safeName.length > 140 || !/\.apk$/i.test(safeName)) {
-        res.status(400).json({ error: "El archivo debe tener extensión .apk." });
+      if (!safeName || safeName.length > 140 || !CLASSIC_EXT_RE.test(safeName)) {
+        res.status(400).json({ error: "El archivo debe tener extensión .apk, .apks, .xapk o .apkm." });
         return;
       }
       const size = Number(sizeBytes);
       if (!Number.isFinite(size) || size <= 0 || size > MAX_STORE_APK_BYTES) {
-        res.status(400).json({ error: "Tamaño de APK inválido (máximo 512 MB)." });
+        res.status(400).json({ error: "Tamaño de paquete inválido (máximo 512 MB)." });
         return;
       }
 
+      const contentType = /\.apk$/i.test(safeName)
+        ? "application/vnd.android.package-archive"
+        : "application/octet-stream";
       const targetPath = `apks/${pkg.replace(/\./g, "_")}/${Date.now()}_${safeName}`;
       const reqOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
       const origin = CLASSIC_UPLOAD_ORIGINS.has(reqOrigin) ? reqOrigin : "https://locksuite-nueva.web.app";
@@ -875,7 +879,7 @@ exports.classicStoreApk = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 },
       const [uploadUrl] = await admin.storage().bucket(STORE_APKS_BUCKET).file(targetPath).createResumableUpload({
         origin,
         metadata: {
-          contentType: "application/vnd.android.package-archive",
+          contentType,
           cacheControl: "public, max-age=3600",
         },
       });
@@ -885,13 +889,14 @@ exports.classicStoreApk = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 },
         uploadUrl,
         objectPath: targetPath,
         downloadUrl: `https://storage.googleapis.com/${STORE_APKS_BUCKET}/${targetPath}`,
+        contentType,
       });
       return;
     }
 
     if (action === "deleteObject") {
       const obj = typeof objectPath === "string" ? objectPath.trim() : "";
-      if (!obj || obj.length > 400 || !obj.startsWith("apks/") || !/\.apk$/i.test(obj) ||
+      if (!obj || obj.length > 400 || !obj.startsWith("apks/") || !CLASSIC_EXT_RE.test(obj) ||
           obj.includes("..") || obj.startsWith("/") || /[\u0000-\u001f\u007f\\]/.test(obj)) {
         res.status(400).json({ error: "Ruta de objeto inválida." });
         return;

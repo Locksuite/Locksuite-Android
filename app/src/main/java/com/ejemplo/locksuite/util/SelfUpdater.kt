@@ -317,6 +317,24 @@ object SelfUpdater {
                     return@withContext "Actualización cancelada"
                 }
 
+                val prepared = SplitApkInstaller.prepareForInstall(context, tempFile, packageName)
+                if (prepared is SplitApkInstaller.PrepareResult.Error) {
+                    tempFile.delete()
+                    if (!quiet) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, prepared.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    return@withContext prepared.message
+                }
+                if (prepared is SplitApkInstaller.PrepareResult.ReadySplits && prepared.hasObb) {
+                    Log.w("SelfUpdater", "El paquete $label contiene archivos OBB adicionales que no se instalan por PackageInstaller")
+                }
+                if (isCancelled?.invoke() == true) {
+                    tempFile.delete()
+                    return@withContext "Actualización cancelada"
+                }
+
                 if (!quiet) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(context, "Instalando $label en segundo plano...", Toast.LENGTH_SHORT).show()
@@ -336,56 +354,68 @@ object SelfUpdater {
                 }
                 temporaryInstallAccessPrepared = true
 
-                val pm = context.packageManager
-                val packageInstaller = pm.packageInstaller
-                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-                params.setAppPackageName(packageName)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
-                }
-
-                val sessionId = packageInstaller.createSession(params)
-                val session = packageInstaller.openSession(sessionId)
-                // Mismo problema que en checkAndPerformUpdate: session.close() se
-                // mueve a un finally para que "fis"/"out"/la sesión siempre se
-                // cierren, incluso si la copia falla a mitad de camino.
-                try {
-                    val fileSize = tempFile.length().takeIf { it > 0L } ?: -1L
-                    session.openWrite("COSU", 0, fileSize).use { out ->
-                        FileInputStream(tempFile).use { fis ->
-                            val buffer = ByteArray(65536)
-                            var bytesRead: Int
-                            while (fis.read(buffer).also { bytesRead = it } != -1) {
-                                out.write(buffer, 0, bytesRead)
-                            }
-                            session.fsync(out)
-                        }
-                    }
-
-                    // B.97: el paquete va también en un extra propio. EXTRA_PACKAGE_NAME no lo
-                    // ponen todos los Android en las fallas, y sin él PackageInstallStatusReceiver
-                    // no sabría a qué actualización corresponde el resultado.
-                    val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
-                        .putExtra(com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver.EXTRA_LS_PACKAGE, packageName)
-                    val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-                    } else {
-                        PendingIntent.FLAG_UPDATE_CURRENT
-                    }
-                    val pendingIntent = PendingIntent.getBroadcast(
-                        context,
-                        sessionId,
-                        intent,
-                        flags
+                if (prepared is SplitApkInstaller.PrepareResult.ReadySplits) {
+                    SplitApkInstaller.commitSplitSession(
+                        context = context,
+                        bundleFile = tempFile,
+                        packageName = packageName,
+                        splits = prepared.splits,
+                        totalBytes = prepared.totalBytes,
+                        isCancelled = isCancelled
                     )
-
-                    session.commit(pendingIntent.intentSender)
                     installCommitSubmitted = true
-                } finally {
-                    if (!installCommitSubmitted) {
-                        try { session.abandon() } catch (_: Exception) {}
+                } else {
+                    val pm = context.packageManager
+                    val packageInstaller = pm.packageInstaller
+                    val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+                    params.setAppPackageName(packageName)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
                     }
-                    try { session.close() } catch (_: Exception) {}
+
+                    val sessionId = packageInstaller.createSession(params)
+                    val session = packageInstaller.openSession(sessionId)
+                    // Mismo problema que en checkAndPerformUpdate: session.close() se
+                    // mueve a un finally para que "fis"/"out"/la sesión siempre se
+                    // cierren, incluso si la copia falla a mitad de camino.
+                    try {
+                        val fileSize = tempFile.length().takeIf { it > 0L } ?: -1L
+                        session.openWrite("COSU", 0, fileSize).use { out ->
+                            FileInputStream(tempFile).use { fis ->
+                                val buffer = ByteArray(65536)
+                                var bytesRead: Int
+                                while (fis.read(buffer).also { bytesRead = it } != -1) {
+                                    out.write(buffer, 0, bytesRead)
+                                }
+                                session.fsync(out)
+                            }
+                        }
+
+                        // B.97: el paquete va también en un extra propio. EXTRA_PACKAGE_NAME no lo
+                        // ponen todos los Android en las fallas, y sin él PackageInstallStatusReceiver
+                        // no sabría a qué actualización corresponde el resultado.
+                        val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
+                            .putExtra(com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver.EXTRA_LS_PACKAGE, packageName)
+                        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                        } else {
+                            PendingIntent.FLAG_UPDATE_CURRENT
+                        }
+                        val pendingIntent = PendingIntent.getBroadcast(
+                            context,
+                            sessionId,
+                            intent,
+                            flags
+                        )
+
+                        session.commit(pendingIntent.intentSender)
+                        installCommitSubmitted = true
+                    } finally {
+                        if (!installCommitSubmitted) {
+                            try { session.abandon() } catch (_: Exception) {}
+                        }
+                        try { session.close() } catch (_: Exception) {}
+                    }
                 }
 
                 return@withContext null

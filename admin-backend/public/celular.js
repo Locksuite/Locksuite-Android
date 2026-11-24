@@ -2041,7 +2041,13 @@
           ? "instalada" + (versionDe(inst) ? " · v" + esc(versionDe(inst)) : "") +
             (a.sha256 ? '<br><button class="ls-btn ls-btn-sm" data-tienda-upd="' + esc(pkg) + '" style="margin-top:4px">⬆️ Actualizar desde la Tienda</button>' : "")
           : '<span style="color:var(--text-muted)">no instalada</span>';
-        return "<tr><td><b>" + esc(a.label || a.name || pkg) + "</b><br>" +
+        const splitCount = Number(a.splitCount) || 1;
+        const fmt = String(a.bundleFormat || "").toLowerCase();
+        const isSplit = splitCount > 1 || (fmt && fmt !== "apk");
+        const splitChip = isSplit
+          ? ' <span class="ls-chip">' + esc(splitCount > 1 ? "Split (" + splitCount + " APKs)" : "Split (" + fmt.toUpperCase() + ")") + "</span>"
+          : "";
+        return "<tr><td><b>" + esc(a.label || a.name || pkg) + "</b>" + splitChip + "<br>" +
           '<span class="ls-apppkg">' + esc(pkg) + "</span></td>" +
           "<td>" + chipSt + "</td><td>" + enCel + "</td><td>" + chipHash + "</td><td>" + firm + "</td></tr>";
       }).join("") + "</tbody></table></div>" +

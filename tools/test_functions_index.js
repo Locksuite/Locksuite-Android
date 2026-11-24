@@ -462,8 +462,29 @@ test("classicStoreApk initUpload devuelve uploadUrl, objectPath y downloadUrl va
   assert.strictEqual(r.body.success, true);
   assert.ok(r.body.objectPath.startsWith("apks/org_example_miapp/") && r.body.objectPath.endsWith(".apk"));
   assert.strictEqual(r.body.downloadUrl, "https://storage.googleapis.com/locksuite-nueva-store-apks/" + r.body.objectPath);
+  assert.strictEqual(r.body.contentType, "application/vnd.android.package-archive");
   assert.ok(r.body.uploadUrl.includes("resumable"));
   assert.strictEqual(state.storageOps[0].opts.origin, "https://locksuite-nueva.web.app");
+  assert.strictEqual(state.storageOps[0].opts.metadata.contentType, "application/vnd.android.package-archive");
+});
+test("classicStoreApk initUpload y deleteObject soportan .apks, .xapk y .apkm con application/octet-stream", async () => {
+  seedWorld();
+  for (const ext of ["apks", "xapk", "apkm"]) {
+    const r = await call(fn.classicStoreApk, {
+      headers: { authorization: "Bearer tok-admin", origin: "https://locksuite-nueva.web.app" },
+      body: { action: "initUpload", packageName: "org.example.split", fileName: "Bundle." + ext, sizeBytes: 223344 },
+    });
+    assert.strictEqual(r.statusCode, 200, ext + " " + JSON.stringify(r.body));
+    assert.ok(r.body.objectPath.endsWith("." + ext), ext);
+    assert.strictEqual(r.body.contentType, "application/octet-stream", ext);
+    assert.strictEqual(state.storageOps[state.storageOps.length - 1].opts.metadata.contentType, "application/octet-stream", ext);
+
+    const del = await call(fn.classicStoreApk, {
+      headers: { authorization: "Bearer tok-admin" },
+      body: { action: "deleteObject", objectPath: r.body.objectPath },
+    });
+    assert.strictEqual(del.statusCode, 200, ext);
+  }
 });
 test("classicStoreApk deleteObject rechaza traversal y borra rutas validas", async () => {
   seedWorld();

@@ -135,7 +135,9 @@ data class StoreApp(
      */
     val sha256: String = "",
     val blockWebView: Boolean = false,
-    val blockInternet: Boolean = false
+    val blockInternet: Boolean = false,
+    val bundleFormat: String = "",
+    val splitCount: Int = 1
 )
 
 @Composable
@@ -854,6 +856,8 @@ fun LoginScreen(
                         val sha = it.child("sha256").getValue(String::class.java) ?: ""
                         val blockWv = it.child("blockWebView").getValue(Boolean::class.java) == true
                         val blockNet = it.child("blockInternet").getValue(Boolean::class.java) == true
+                        val bundleFmt = it.child("bundleFormat").getValue(String::class.java)?.trim()?.lowercase() ?: ""
+                        val splitCnt = (it.child("splitCount").value as? Number)?.toInt() ?: 1
                         if (pkg.isNotEmpty()) {
                             if (blockWv) wvSet.add(pkg)
                             if (blockNet) netSet.add(pkg)
@@ -863,7 +867,7 @@ fun LoginScreen(
                             // ocultara, el administrador no tendría forma de enterarse de
                             // que le falta el hash — vería una tienda incompleta sin causa.
                             // Se muestra deshabilitada y con el motivo escrito.
-                            StoreApp(label, pkg, apk, sha, blockWv, blockNet)
+                            StoreApp(label, pkg, apk, sha, blockWv, blockNet, bundleFmt, splitCnt)
                         } else null
                     }
                     com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.replaceConfig(context, wvSet, netSet)
@@ -973,9 +977,18 @@ fun LoginScreen(
                                         Text(app.packageName, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
                                         val showBlockNet = app.blockInternet &&
                                             com.ejemplo.locksuite.mdm.PerAppInternetBlockPolicy.isSupported(app.packageName)
-                                        if (app.blockWebView || showBlockNet) {
+                                        val isSplitEntry = app.splitCount > 1 ||
+                                            app.bundleFormat in setOf("apks", "xapk", "apkm")
+                                        if (app.blockWebView || showBlockNet || isSplitEntry) {
                                             Spacer(modifier = Modifier.height(3.dp))
+                                            val splitBadge = when {
+                                                app.splitCount > 1 -> "Split (${app.splitCount} APKs)"
+                                                app.bundleFormat in setOf("apks", "xapk", "apkm") ->
+                                                    "Split (${app.bundleFormat.uppercase()})"
+                                                else -> null
+                                            }
                                             val restr = listOfNotNull(
+                                                splitBadge,
                                                 if (app.blockWebView) "Sin WebView" else null,
                                                 if (showBlockNet) "Sin Internet" else null
                                             ).joinToString(" · ")

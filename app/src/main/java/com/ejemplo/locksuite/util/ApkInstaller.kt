@@ -22,12 +22,21 @@ object ApkInstaller {
             }
 
             val pm = context.packageManager
-            val info = pm.getPackageArchiveInfo(tempFile.absolutePath, 0)
-            if (info == null) {
-                return "No se pudo leer el archivo APK. Asegúrate de que sea un archivo de instalación válido."
+            val prepared = SplitApkInstaller.prepareForInstall(context, tempFile, null)
+            if (prepared is SplitApkInstaller.PrepareResult.Error) {
+                return prepared.message
             }
 
-            val packageName = info.packageName
+            val packageName: String = if (prepared is SplitApkInstaller.PrepareResult.ReadySplits) {
+                prepared.packageName
+            } else {
+                val info = pm.getPackageArchiveInfo(tempFile.absolutePath, 0)
+                if (info == null) {
+                    return "No se pudo leer el archivo APK. Asegúrate de que sea un archivo de instalación válido."
+                }
+                info.packageName
+            }
+
             val prefs = PrefsHelper.getMdmPrefs(context)
             val allowed = prefs.getStringSet("allowed_packages", null) ?: emptySet()
             val isBlocked = prefs.getBoolean("install_apps_blocked_admin", false)
@@ -49,15 +58,26 @@ object ApkInstaller {
             // no tiene con qué compararse: ahí no se puede decidir nada por firma, y por eso
             // B.6 sigue necesitando el `sha256` publicado en `storeApps`. Se deja pasar,
             // porque negarlo rompería la Tienda administrada entera.
-            when (val v = ApkSignatureVerifier.verify(context, tempFile.absolutePath, packageName)) {
+            val verifyResult = if (prepared is SplitApkInstaller.PrepareResult.ReadySplits) {
+                val baseTmp = File(context.cacheDir, "temp_install_base.apk")
+                try {
+                    SplitApkInstaller.extractEntryToTempFile(tempFile, prepared.base.entryName, baseTmp)
+                    ApkSignatureVerifier.verify(context, baseTmp.absolutePath, packageName)
+                } finally {
+                    if (baseTmp.exists()) baseTmp.delete()
+                }
+            } else {
+                ApkSignatureVerifier.verify(context, tempFile.absolutePath, packageName)
+            }
+            when (verifyResult) {
                 is ApkSignatureVerifier.Result.Mismatch -> {
-                    Log.e("ApkInstaller", "Firma distinta para $packageName: instalada=${v.expected} apk=${v.actual}")
+                    Log.e("ApkInstaller", "Firma distinta para $packageName: instalada=${verifyResult.expected} apk=${verifyResult.actual}")
                     return "El archivo APK de $packageName está firmado por otro desarrollador " +
                         "que el que ya está instalado. No se instaló: puede ser una versión falsificada."
                 }
                 is ApkSignatureVerifier.Result.Unknown -> {
-                    Log.w("ApkInstaller", "No se pudo verificar la firma de $packageName: ${v.reason}")
-                    return "No se pudo verificar la firma del APK de $packageName (${v.reason}). " +
+                    Log.w("ApkInstaller", "No se pudo verificar la firma de $packageName: ${verifyResult.reason}")
+                    return "No se pudo verificar la firma del APK de $packageName (${verifyResult.reason}). " +
                         "No se instaló."
                 }
                 ApkSignatureVerifier.Result.NotInstalled -> {
@@ -79,55 +99,66 @@ object ApkInstaller {
                     temporaryInstallAccessPrepared = true
                 }
 
-                val packageInstaller = pm.packageInstaller
-                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-                params.setAppPackageName(packageName)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
-                }
-
-                val sessionId = packageInstaller.createSession(params)
-                val session = packageInstaller.openSession(sessionId)
-                // session.close() se mueve a un finally: antes, si algo fallaba a mitad
-                // de la copia (out.write/fis.read), el control saltaba directo al catch
-                // de más abajo sin cerrar nunca "fis", "out" ni la sesión de
-                // PackageInstaller — quedaban colgados hasta que el sistema los
-                // recolectara, y con instalaciones fallidas repetidas se puede llegar
-                // al límite de sesiones activas y bloquear instalaciones futuras sin
-                // ningún aviso claro. "out"/"fis" ahora usan use{} (que cierra incluso
-                // ante excepción).
-                try {
-                    val fileSize = tempFile.length().takeIf { it > 0L } ?: -1L
-                    session.openWrite("COSU", 0, fileSize).use { out ->
-                        FileInputStream(tempFile).use { fis ->
-                            val buffer = ByteArray(65536)
-                            var bytesRead: Int
-                            while (fis.read(buffer).also { bytesRead = it } != -1) {
-                                out.write(buffer, 0, bytesRead)
-                            }
-                            session.fsync(out)
-                        }
-                    }
-
-                    val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
-                    val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-                    } else {
-                        PendingIntent.FLAG_UPDATE_CURRENT
-                    }
-                    val pendingIntent = PendingIntent.getBroadcast(
-                        context,
-                        sessionId,
-                        intent,
-                        flags
+                if (prepared is SplitApkInstaller.PrepareResult.ReadySplits) {
+                    SplitApkInstaller.commitSplitSession(
+                        context = context,
+                        bundleFile = tempFile,
+                        packageName = packageName,
+                        splits = prepared.splits,
+                        totalBytes = prepared.totalBytes
                     )
-                    session.commit(pendingIntent.intentSender)
                     installCommitSubmitted = true
-                } finally {
-                    if (!installCommitSubmitted) {
-                        try { session.abandon() } catch (_: Exception) {}
+                } else {
+                    val packageInstaller = pm.packageInstaller
+                    val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+                    params.setAppPackageName(packageName)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
                     }
-                    try { session.close() } catch (_: Exception) {}
+
+                    val sessionId = packageInstaller.createSession(params)
+                    val session = packageInstaller.openSession(sessionId)
+                    // session.close() se mueve a un finally: antes, si algo fallaba a mitad
+                    // de la copia (out.write/fis.read), el control saltaba directo al catch
+                    // de más abajo sin cerrar nunca "fis", "out" ni la sesión de
+                    // PackageInstaller — quedaban colgados hasta que el sistema los
+                    // recolectara, y con instalaciones fallidas repetidas se puede llegar
+                    // al límite de sesiones activas y bloquear instalaciones futuras sin
+                    // ningún aviso claro. "out"/"fis" ahora usan use{} (que cierra incluso
+                    // ante excepción).
+                    try {
+                        val fileSize = tempFile.length().takeIf { it > 0L } ?: -1L
+                        session.openWrite("COSU", 0, fileSize).use { out ->
+                            FileInputStream(tempFile).use { fis ->
+                                val buffer = ByteArray(65536)
+                                var bytesRead: Int
+                                while (fis.read(buffer).also { bytesRead = it } != -1) {
+                                    out.write(buffer, 0, bytesRead)
+                                }
+                                session.fsync(out)
+                            }
+                        }
+
+                        val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
+                        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                        } else {
+                            PendingIntent.FLAG_UPDATE_CURRENT
+                        }
+                        val pendingIntent = PendingIntent.getBroadcast(
+                            context,
+                            sessionId,
+                            intent,
+                            flags
+                        )
+                        session.commit(pendingIntent.intentSender)
+                        installCommitSubmitted = true
+                    } finally {
+                        if (!installCommitSubmitted) {
+                            try { session.abandon() } catch (_: Exception) {}
+                        }
+                        try { session.close() } catch (_: Exception) {}
+                    }
                 }
                 return null // Iniciado con éxito
             } catch (e: Exception) {

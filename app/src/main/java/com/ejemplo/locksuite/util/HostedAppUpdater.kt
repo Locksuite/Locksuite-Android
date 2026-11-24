@@ -292,30 +292,49 @@ object HostedAppUpdater {
         UpdateFlowManager.step(ctx, UpdateStepLog.OK, "Descarga completa ($mb MB): la huella sha256 coincide con la publicada.")
         UpdateFlowManager.setStage(ctx, UpdateRoutePlanner.STAGE_HOSTED_VERIFYING)
 
-        val info = try {
-            ctx.packageManager.getPackageArchiveInfo(file.path, 0)
-        } catch (e: Exception) {
-            null
-        }
-        val archivePkg = info?.packageName
-        val archiveVc = when {
-            info == null -> -1L
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.P -> info.longVersionCode
-            else -> @Suppress("DEPRECATION") info.versionCode.toLong()
-        }
-        val archiveVn = info?.versionName ?: "?"
-        val minSdk = info?.applicationInfo?.minSdkVersion ?: 0
-        val abis = try {
-            ZipFile(file).use { z -> UpdateRoutePlanner.abisFromZipEntries(z.entries().asSequence().map { it.name }.toList()) }
-        } catch (e: Exception) {
-            emptySet()
-        }
+        val isSplit = SplitApkInstaller.isSplitBundle(file)
+        val splitInsp = if (isSplit) SplitApkInstaller.inspectForHostedJudge(ctx, file, pkg) else null
+
+        val archivePkg: String?
+        val archiveVc: Long
+        val archiveVn: String
+        val minSdk: Int
+        val abis: Set<String>
         val deviceAbis = Build.SUPPORTED_ABIS?.toList().orEmpty()
-        val firma = when (ApkSignatureVerifier.verify(ctx, file.path, pkg)) {
-            ApkSignatureVerifier.Result.Match -> Firma.COINCIDE
-            ApkSignatureVerifier.Result.NotInstalled -> Firma.NO_INSTALADA
-            is ApkSignatureVerifier.Result.Mismatch -> Firma.DISTINTA
-            is ApkSignatureVerifier.Result.Unknown -> Firma.DESCONOCIDA
+        val firma: Firma
+
+        if (splitInsp != null) {
+            archivePkg = splitInsp.archivePkg
+            archiveVc = splitInsp.archiveVc
+            archiveVn = splitInsp.archiveVn
+            minSdk = splitInsp.minSdk
+            abis = splitInsp.availableAbis
+            firma = splitInsp.firma
+        } else {
+            val info = try {
+                ctx.packageManager.getPackageArchiveInfo(file.path, 0)
+            } catch (e: Exception) {
+                null
+            }
+            archivePkg = info?.packageName
+            archiveVc = when {
+                info == null -> -1L
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P -> info.longVersionCode
+                else -> @Suppress("DEPRECATION") info.versionCode.toLong()
+            }
+            archiveVn = info?.versionName ?: "?"
+            minSdk = info?.applicationInfo?.minSdkVersion ?: 0
+            abis = try {
+                ZipFile(file).use { z -> UpdateRoutePlanner.abisFromZipEntries(z.entries().asSequence().map { it.name }.toList()) }
+            } catch (e: Exception) {
+                emptySet()
+            }
+            firma = when (ApkSignatureVerifier.verify(ctx, file.path, pkg)) {
+                ApkSignatureVerifier.Result.Match -> Firma.COINCIDE
+                ApkSignatureVerifier.Result.NotInstalled -> Firma.NO_INSTALADA
+                is ApkSignatureVerifier.Result.Mismatch -> Firma.DISTINTA
+                is ApkSignatureVerifier.Result.Unknown -> Firma.DESCONOCIDA
+            }
         }
 
         // La versión de esta copia queda anotada SIEMPRE (sirva o no): la próxima vez que se
@@ -329,6 +348,15 @@ object HostedAppUpdater {
         }
 
         val installedVc = UpdateFlowManager.versionCodeOf(ctx, pkg)
+        if (splitInsp?.error != null) {
+            val porVersion = archivePkg == pkg && archiveVc in 0L..installedVc
+            UpdateFlowManager.step(
+                ctx, UpdateStepLog.WARN,
+                "La copia split de la Tienda no se instala: ${splitInsp.error}."
+            )
+            return Juicio(HostedVerdict.Reject(splitInsp.error, true), porVersion)
+        }
+
         val veredicto = UpdateRoutePlanner.judgeHostedApk(
             pkg, archivePkg, archiveVc, installedVc, minSdk, Build.VERSION.SDK_INT, abis, deviceAbis, firma
         )
@@ -337,9 +365,10 @@ object HostedAppUpdater {
                 val firmaTxt = if (firma == Firma.COINCIDE) "misma firma que la instalada"
                 else "la firma no se pudo comparar (la verifica Android al instalar)"
                 val abiTxt = if (abis.isEmpty()) "sin código nativo" else "arquitectura compatible (${abis.sorted().joinToString(", ")})"
+                val splitTxt = if (splitInsp != null) " [paquete split: ${splitInsp.selectedCount} APKs]" else ""
                 UpdateFlowManager.step(
                     ctx, UpdateStepLog.OK,
-                    "La copia sirve: versión $archiveVn (código $archiveVc) contra código $installedVc instalado; $firmaTxt; $abiTxt."
+                    "La copia sirve: versión $archiveVn (código $archiveVc) contra código $installedVc instalado; $firmaTxt; $abiTxt$splitTxt."
                 )
                 UpdateFlowManager.setStage(ctx, UpdateRoutePlanner.STAGE_HOSTED_INSTALLING)
                 UpdateFlowManager.notifyUser(ctx, "Actualizando $label", "Instalando en silencio…", -1, ongoing = true)

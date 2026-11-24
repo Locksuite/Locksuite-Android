@@ -1,15 +1,16 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * tienda_clasica.js — sección discreta de "Tienda clásica de APKs" en tienda.html.
  *
- * Permite ver las entradas de `storeApps`, eliminarlas, subir un .apk directo desde la PC
- * (sin pasar por el límite de 32 MB de Cloud Functions: sube a Cloud Storage por URL
- * resumible y calcula SHA-256 + packageName en el navegador con ApkReader) y marcar
- * `blockWebView` / `blockInternet` por app (aplicados por ClassicStorePolicyManager).
+ * Permite ver las entradas de `storeApps`, eliminarlas, subir un .apk o Split APK
+ * (.apks, .xapk, .apkm o varios .apk juntos empaquetados en el navegador) directo
+ * desde la PC (sube a Cloud Storage por URL resumible y calcula SHA-256 + packageName
+ * con ApkReader) y marcar `blockWebView` / `blockInternet` por app.
  * ═══════════════════════════════════════════════════════════════════════════ */
 (function () {
   "use strict";
 
   const MAX_APK_BYTES = 512 * 1024 * 1024;
+  const BUNDLE_EXT_RE = /\.(apk|apks|xapk|apkm)$/i;
   const $ = (id) => document.getElementById(id);
   const esc = LS.esc;
   const T = window.TiendaLogic;
@@ -82,7 +83,7 @@
     const inp = $("tc-file");
     if (inp) inp.value = "";
     const info = $("tc-file-info");
-    if (info) info.textContent = "Elegí un archivo .apk de tu PC (se lee paquete y huella SHA-256 automáticamente).";
+    if (info) info.textContent = "Elegí un archivo (.apk, .apks, .xapk, .apkm) o varios .apk juntos (se lee paquete y huella SHA-256 automáticamente).";
     const clearBtn = $("tc-clear-file");
     if (clearBtn) clearBtn.style.display = "none";
     syncBlockNetVisibility();
@@ -95,78 +96,172 @@
     return window.ApkReader.sha256Hex(ab);
   }
 
-  async function onFilePicked(file) {
-    if (!file) {
-      resetPickedFile();
-      return;
+  function inferFormatFromUrl(url) {
+    try {
+      const pathname = new URL(url).pathname || "";
+      const m = /\.(apks|xapk|apkm)$/i.exec(pathname);
+      return m ? m[1].toLowerCase() : null;
+    } catch (_) {
+      const clean = String(url || "").split(/[?#]/)[0];
+      const m = /\.(apks|xapk|apkm)$/i.exec(clean);
+      return m ? m[1].toLowerCase() : null;
     }
-    if (!/\.apk$/i.test(file.name)) {
-      LS.toast("El archivo elegido no termina en .apk.", "error");
-      resetPickedFile();
-      return;
-    }
-    if (file.size <= 0 || file.size > MAX_APK_BYTES) {
-      LS.toast("Tamaño de APK inválido (máximo 512 MB).", "error");
+  }
+
+  async function onFilesPicked(fileList) {
+    const files = Array.from(fileList || []).filter(Boolean);
+    if (!files.length) {
       resetPickedFile();
       return;
     }
 
     const infoEl = $("tc-file-info");
-    if (infoEl) infoEl.textContent = "Analizando " + file.name + " (" + formatMb(file.size) + ")…";
-    $("tc-clear-file").style.display = "";
-    setBusy(true);
-    try {
-      const ab = await file.arrayBuffer();
-      const [sha256, apkInfo] = await Promise.all([
-        window.ApkReader.sha256Hex(ab),
-        window.ApkReader.parseApkInfo(ab),
-      ]);
-
-      S.picked = {
-        file,
-        sizeBytes: file.size,
-        sha256,
-        detectedPkg: apkInfo && apkInfo.packageName ? apkInfo.packageName : null,
-        detectedVersionName: apkInfo && apkInfo.versionName ? apkInfo.versionName : null,
-        detectedVersionCode: apkInfo && apkInfo.versionCode ? apkInfo.versionCode : null,
-      };
-
-      const urlInput = $("tc-url");
-      if (urlInput) urlInput.value = "";
-
-      if (S.picked.detectedPkg) {
-        $("tc-pkg").value = S.picked.detectedPkg;
+    const clearBtn = $("tc-clear-file");
+    if (files.length === 1) {
+      const file = files[0];
+      if (!BUNDLE_EXT_RE.test(file.name)) {
+        LS.toast("El archivo elegido debe terminar en .apk, .apks, .xapk o .apkm.", "error");
+        resetPickedFile();
+        return;
       }
-      syncBlockNetVisibility();
-      const labelEl = $("tc-label");
-      const suggested = window.ApkReader.labelFromFilename(file.name);
-      if (labelEl && (!labelEl.value.trim() || labelEl.value.trim() === S.lastAutoLabel) && suggested) {
-        labelEl.value = suggested;
-        S.lastAutoLabel = suggested;
+      if (file.size <= 0 || file.size > MAX_APK_BYTES) {
+        LS.toast("Tamaño de paquete inválido (máximo 512 MB).", "error");
+        resetPickedFile();
+        return;
       }
 
-      const existingKey = S.picked.detectedPkg ? LS.pkgKey(S.picked.detectedPkg) : null;
-      const existing = existingKey ? S.storeApps[existingKey] : null;
-      if (existing && labelEl && existing.label && labelEl.value.trim() === suggested) {
-        labelEl.value = existing.label;
+      if (infoEl) infoEl.textContent = "Analizando " + file.name + " (" + formatMb(file.size) + ")…";
+      if (clearBtn) clearBtn.style.display = "";
+      setBusy(true);
+      try {
+        const ab = await file.arrayBuffer();
+        const [sha256, bundleInfo] = await Promise.all([
+          window.ApkReader.sha256Hex(ab),
+          window.ApkReader.parsePackageBundle(ab, file.name),
+        ]);
+        if (!bundleInfo || !bundleInfo.ok) {
+          LS.toast((bundleInfo && bundleInfo.error) || "No se pudo leer el paquete.", "error");
+          resetPickedFile();
+          return;
+        }
+
+        S.picked = {
+          file,
+          fileName: file.name,
+          displayTitle: file.name,
+          sizeBytes: file.size,
+          sha256,
+          detectedPkg: bundleInfo.packageName || null,
+          detectedVersionName: bundleInfo.versionName || null,
+          detectedVersionCode: bundleInfo.versionCode != null ? bundleInfo.versionCode : null,
+          isSplitBundle: Boolean(bundleInfo.isSplitBundle),
+          bundleFormat: bundleInfo.bundleFormat || "apk",
+          splitCount: bundleInfo.splitCount || 1,
+          abis: Array.isArray(bundleInfo.abis) ? bundleInfo.abis : [],
+          hasObb: Boolean(bundleInfo.hasObb),
+        };
+      } catch (e) {
+        LS.toast("No se pudo leer el paquete: " + e.message, "error");
+        resetPickedFile();
+        setBusy(false);
+        return;
+      } finally {
+        setBusy(false);
+      }
+    } else {
+      for (const f of files) {
+        if (!/\.apk$/i.test(f.name)) {
+          LS.toast("Al seleccionar varios archivos juntos, todos deben terminar en .apk (" + f.name + ").", "error");
+          resetPickedFile();
+          return;
+        }
+      }
+      const rawTotal = files.reduce((acc, f) => acc + (f.size || 0), 0);
+      if (rawTotal <= 0 || rawTotal > MAX_APK_BYTES) {
+        LS.toast("Tamaño total de los APKs inválido (máximo 512 MB).", "error");
+        resetPickedFile();
+        return;
       }
 
-      const ver = S.picked.detectedVersionName
-        ? " · v" + S.picked.detectedVersionName + (S.picked.detectedVersionCode ? " (" + S.picked.detectedVersionCode + ")" : "")
-        : "";
-      const pkgText = S.picked.detectedPkg ? S.picked.detectedPkg : "paquete no detectado (ingresalo manual)";
-      const replaceNote = existing ? " · ya existe en tienda clásica (se reemplazará)" : "";
-      if (infoEl) {
-        infoEl.innerHTML =
-          "<b>" + esc(file.name) + "</b> (" + esc(formatMb(file.size)) + esc(ver) + ") · " +
-          "<code>" + esc(pkgText) + "</code> · SHA-256 <code>" + esc(sha256.slice(0, 12)) + "…</code>" +
-          (replaceNote ? '<span style="color:var(--warning-yellow)">' + esc(replaceNote) + "</span>" : "");
+      if (infoEl) infoEl.textContent = "Empaquetando " + files.length + " APKs divididos en .apks…";
+      if (clearBtn) clearBtn.style.display = "";
+      setBusy(true);
+      try {
+        const packed = await window.ApkReader.packSplitApksToZip(files);
+        const ab = packed.bytes.buffer.slice(packed.bytes.byteOffset, packed.bytes.byteOffset + packed.bytes.byteLength);
+        const sha256 = await window.ApkReader.sha256Hex(ab);
+        const safePkgName = String(packed.packageName || "app").replace(/[^a-zA-Z0-9._-]/g, "_");
+        const outName = safePkgName + "_splits.apks";
+        const outBlob = new Blob([packed.bytes], { type: "application/octet-stream" });
+
+        S.picked = {
+          file: outBlob,
+          fileName: outName,
+          displayTitle: files.length + " .apk → " + outName,
+          sizeBytes: packed.bytes.byteLength,
+          sha256,
+          detectedPkg: packed.packageName || null,
+          detectedVersionName: packed.versionName || null,
+          detectedVersionCode: packed.versionCode != null ? packed.versionCode : null,
+          isSplitBundle: true,
+          bundleFormat: "apks",
+          splitCount: packed.splitCount || files.length,
+          abis: Array.isArray(packed.abis) ? packed.abis : [],
+          hasObb: false,
+        };
+      } catch (e) {
+        LS.toast("No se pudieron empaquetar los Split APKs: " + e.message, "error");
+        resetPickedFile();
+        setBusy(false);
+        return;
+      } finally {
+        setBusy(false);
       }
-    } catch (e) {
-      LS.toast("No se pudo leer el archivo APK: " + e.message, "error");
-      resetPickedFile();
-    } finally {
-      setBusy(false);
+    }
+
+    const urlInput = $("tc-url");
+    if (urlInput) urlInput.value = "";
+
+    if (S.picked.detectedPkg) {
+      $("tc-pkg").value = S.picked.detectedPkg;
+    }
+    syncBlockNetVisibility();
+    const labelEl = $("tc-label");
+    const baseNameHint = files.length === 1
+      ? files[0].name
+      : (files.find((f) => !/^(split_|config\.)/i.test(f.name) && !/^base\.apk$/i.test(f.name)) || {}).name ||
+        (S.picked.detectedPkg ? S.picked.detectedPkg.split(".").pop() : "");
+    const suggested = window.ApkReader.labelFromFilename(baseNameHint);
+    if (labelEl && (!labelEl.value.trim() || labelEl.value.trim() === S.lastAutoLabel) && suggested) {
+      labelEl.value = suggested;
+      S.lastAutoLabel = suggested;
+    }
+
+    const existingKey = S.picked.detectedPkg ? LS.pkgKey(S.picked.detectedPkg) : null;
+    const existing = existingKey ? S.storeApps[existingKey] : null;
+    if (existing && labelEl && existing.label && labelEl.value.trim() === suggested) {
+      labelEl.value = existing.label;
+    }
+
+    const ver = S.picked.detectedVersionName
+      ? " · v" + S.picked.detectedVersionName + (S.picked.detectedVersionCode ? " (" + S.picked.detectedVersionCode + ")" : "")
+      : "";
+    const pkgText = S.picked.detectedPkg ? S.picked.detectedPkg : "paquete no detectado (ingresalo manual)";
+    const splitChip = S.picked.isSplitBundle
+      ? ' <span class="ls-chip">Split (' + esc(String(S.picked.splitCount)) + " APKs · " + esc(S.picked.bundleFormat.toUpperCase()) + ")</span>"
+      : "";
+    const abiText = S.picked.abis.length ? " · ABIs: <code>" + esc(S.picked.abis.join(", ")) + "</code>" : "";
+    const obbWarn = S.picked.hasObb
+      ? ' <span style="color:var(--warning-yellow)">· ⚠ Incluye archivos OBB (solo se instalan los APKs; los OBB no se copian solos)</span>'
+      : "";
+    const replaceNote = existing ? " · ya existe en tienda clásica (se reemplazará)" : "";
+    if (infoEl) {
+      infoEl.innerHTML =
+        "<b>" + esc(S.picked.displayTitle) + "</b> (" + esc(formatMb(S.picked.sizeBytes)) + esc(ver) + ")" +
+        splitChip + " · " +
+        "<code>" + esc(pkgText) + "</code>" + abiText + " · SHA-256 <code>" + esc(S.picked.sha256.slice(0, 12)) + "…</code>" +
+        obbWarn +
+        (replaceNote ? '<span style="color:var(--warning-yellow)">' + esc(replaceNote) + "</span>" : "");
     }
   }
 
@@ -198,7 +293,7 @@
     const label = rawLabel ? T.cleanLabel(rawLabel, rawPkg) : T.cleanLabel("", rawPkg);
 
     if (!S.picked && !rawUrl) {
-      LS.toast("Elegí un archivo .apk desde tu PC o pegá una URL HTTPS directa.", "error");
+      LS.toast("Elegí un archivo (.apk/.apks/.xapk/.apkm) desde tu PC o pegá una URL HTTPS directa.", "error");
       return;
     }
     if (!S.picked && !/^https:\/\/\S+$/i.test(rawUrl)) {
@@ -209,7 +304,7 @@
     const key = LS.pkgKey(rawPkg);
     const existing = S.storeApps[key] || null;
     if (existing) {
-      if (!confirm("«" + (existing.label || rawPkg) + "» ya está en la tienda clásica.\n\n¿Reemplazar su APK y configuración por este nuevo?")) {
+      if (!confirm("«" + (existing.label || rawPkg) + "» ya está en la tienda clásica.\n\n¿Reemplazar su paquete y configuración por este nuevo?")) {
         return;
       }
     }
@@ -225,12 +320,17 @@
         setProgress(0, "Preparando subida a Cloud Storage…");
         const init = await LS.classicStoreInitUpload({
           packageName: rawPkg,
-          fileName: S.picked.file.name,
+          fileName: S.picked.fileName,
           sizeBytes: S.picked.sizeBytes,
         });
-        await LS.uploadToSignedUrl(init.uploadUrl, S.picked.file, (pct) => {
-          setProgress(pct, "Subiendo APK… " + pct + "%");
-        });
+        await LS.uploadToSignedUrl(
+          init.uploadUrl,
+          S.picked.file,
+          (pct) => {
+            setProgress(pct, (S.picked.isSplitBundle ? "Subiendo Split APK… " : "Subiendo APK… ") + pct + "%");
+          },
+          init.contentType
+        );
         apkUrl = init.downloadUrl;
         sha256 = S.picked.sha256;
         storagePath = init.objectPath;
@@ -245,7 +345,7 @@
             ""
           );
           if (!manual || !/^[0-9a-fA-F]{64}$/.test(manual.trim())) {
-            LS.toast("Cancelado: sin huella SHA-256 el celular no instala el APK.", "warn");
+            LS.toast("Cancelado: sin huella SHA-256 el celular no instala el paquete.", "warn");
             return;
           }
           sha256 = manual.trim().toLowerCase();
@@ -266,6 +366,18 @@
         uploadedBy: (user && user.email) || "",
       };
       if (storagePath) record.storagePath = storagePath;
+      if (S.picked) {
+        if (S.picked.isSplitBundle) {
+          record.bundleFormat = S.picked.bundleFormat;
+          record.splitCount = S.picked.splitCount;
+        }
+        if (S.picked.abis && S.picked.abis.length) {
+          record.abis = S.picked.abis;
+        }
+      } else {
+        const urlFmt = inferFormatFromUrl(rawUrl);
+        if (urlFmt) record.bundleFormat = urlFmt;
+      }
 
       await LS.db.ref("storeApps/" + key).set(record);
       if (allowGlobal) {
@@ -335,6 +447,9 @@
       const wv = a.blockWebView === true;
       const supportsNet = LS.supportsAppInternetBlock(pkg);
       const net = supportsNet && a.blockInternet === true;
+      const splitCount = Number(a.splitCount) || 1;
+      const fmt = String(a.bundleFormat || "").toLowerCase();
+      const isSplit = splitCount > 1 || (fmt && fmt !== "apk");
 
       const chips = [
         '<span class="ls-chip">' + esc(originLabel(a)) + "</span>",
@@ -342,6 +457,15 @@
           ? '<span class="ls-chip ok" title="' + esc(a.sha256) + '">✓ SHA-256</span>'
           : '<span class="ls-chip bad">⚠ Sin huella</span>',
       ];
+      if (isSplit) {
+        const splitText = splitCount > 1
+          ? "Split (" + splitCount + " APKs)"
+          : "Split (" + fmt.toUpperCase() + ")";
+        const abisTip = Array.isArray(a.abis) && a.abis.length
+          ? ' title="Arquitecturas: ' + esc(a.abis.join(", ")) + '"'
+          : "";
+        chips.push('<span class="ls-chip"' + abisTip + ">" + esc(splitText) + "</span>");
+      }
       if (isStub) {
         chips.push('<span class="ls-chip">Stub Android Auto</span>');
       } else if (!inAllowed) {
@@ -382,7 +506,7 @@
     const fileInp = $("tc-file");
     if (fileInp) {
       fileInp.addEventListener("change", () => {
-        onFilePicked(fileInp.files && fileInp.files[0]);
+        onFilesPicked(fileInp.files);
       });
     }
     const clearBtn = $("tc-clear-file");

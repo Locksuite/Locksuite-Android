@@ -41,6 +41,8 @@ SUITES=(
   # 7/11/2026 (B.112) — autorreparación del zombi de accesibilidad y red para hilos de trabajo
   "com.ejemplo.locksuite.util.ZombieHealPolicyTest|util/ZombieHealPolicy.kt|util/ZombieHealPolicyTest.kt"
   "com.ejemplo.locksuite.util.CrashNetPolicyTest|util/CrashNetPolicy.kt|util/CrashNetPolicyTest.kt"
+  # 24/11/2026 (B.128) — Split APKs (.apks, .xapk, .apkm) en tienda clásica y ruta silenciosa
+  "com.ejemplo.locksuite.mdm.SplitApkBundleTest|mdm/BinaryManifestParser.kt mdm/UpdateRoutePlanner.kt mdm/SplitApkBundle.kt|mdm/SplitApkBundleTest.kt"
 )
 
 declare -A SEEN=()

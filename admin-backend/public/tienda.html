@@ -165,24 +165,24 @@
         <summary>
           <span>📦 Tienda clásica de APKs directos</span>
           <span class="ls-chip" id="tc-count">cargando…</span>
-          <small style="font-weight:400; color:var(--text-muted); font-size:12px;">ver, eliminar, subir APK desde PC o bloquear WebView / Internet</small>
+          <small style="font-weight:400; color:var(--text-muted); font-size:12px;">ver, eliminar, subir APK / Split APK (.apks, .xapk, .apkm) desde PC o bloquear WebView / Internet</small>
         </summary>
 
         <p class="ls-hint" style="margin-top:0">
           Esta lista (<code>storeApps</code>) alimenta la tienda de APKs directos en el celular. Acá podés ver cada app,
-          subir un <code>.apk</code> directo desde tu PC, eliminar entradas o activar <b>Sin WebView</b> / <b>Sin Internet</b>.
+          subir un <code>.apk</code>, un paquete dividido (<code>.apks</code>, <code>.xapk</code>, <code>.apkm</code> sin cifrar) o varios <code>.apk</code> sueltos juntos desde tu PC, eliminar entradas o activar <b>Sin WebView</b> / <b>Sin Internet</b>.
         </p>
 
         <div class="tc-upload-box">
           <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-            <label for="tc-file" style="font-size:12.5px; font-weight:700;">Subir APK desde tu PC:</label>
-            <input type="file" id="tc-file" accept=".apk,application/vnd.android.package-archive" style="font-size:12.5px; color:var(--text-light);" />
+            <label for="tc-file" style="font-size:12.5px; font-weight:700;">Subir APK o Split APK desde tu PC:</label>
+            <input type="file" id="tc-file" multiple accept=".apk,.apks,.xapk,.apkm,application/vnd.android.package-archive,application/octet-stream" style="font-size:12.5px; color:var(--text-light);" />
             <button type="button" class="ls-btn ls-btn-sm" id="tc-clear-file" style="display:none">Quitar archivo</button>
             <div class="ls-top-spacer"></div>
             <button type="button" class="ls-btn ls-btn-sm" id="tc-toggle-url" style="font-size:12px;">O pegar URL externa manualmente</button>
           </div>
           <div id="tc-file-info" class="ls-hint" style="margin:0 0 8px 0;">
-            Elegí un archivo .apk de tu PC (se lee paquete y huella SHA-256 automáticamente).
+            Elegí un archivo (.apk, .apks, .xapk, .apkm) o varios .apk juntos (se lee paquete y huella SHA-256 automáticamente).
           </div>
 
           <div class="tc-grid">
@@ -246,10 +246,10 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
   <script src="catalog.js?v=2"></script>
-  <script src="comun.js?v=9"></script>
-  <script src="apk_reader.js?v=1"></script>
+  <script src="comun.js?v=10"></script>
+  <script src="apk_reader.js?v=2"></script>
   <script src="tienda_logic.js?v=3"></script>
   <script src="tienda.js?v=2"></script>
-  <script src="tienda_clasica.js?v=2"></script>
+  <script src="tienda_clasica.js?v=3"></script>
 </body>
 </html>
