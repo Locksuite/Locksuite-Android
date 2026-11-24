@@ -1838,6 +1838,36 @@ fun AppManagerTabContent(context: Context) {
         }
     }
 
+    fun ensureVpnActiveAfterBlock() {
+        try {
+            val prepareIntent = android.net.VpnService.prepare(context)
+            if (prepareIntent != null) {
+                // Pedir confirmación de conexión VPN al usuario (solo la primera vez)
+                if (context is Activity) {
+                    DashboardActivity.isLaunchingInternalFlow = true
+                    context.startActivityForResult(prepareIntent, 1024)
+                }
+            } else {
+                // Permiso ya concedido, arrancar servicio directo
+                val startServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(startServiceIntent)
+                } else {
+                    context.startService(startServiceIntent)
+                }
+                // Bloquear la configuración de VPN automáticamente para que no la desactive
+                policyManager.setVpnConfigBlocked(true)
+                Toast.makeText(
+                    context,
+                    "VPN activa y configuración bloqueada automáticamente (Lockdown).",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     LaunchedEffect(Unit) {
         refreshApps()
     }
@@ -1866,7 +1896,8 @@ fun AppManagerTabContent(context: Context) {
                     app.packageName.lowercase().contains(searchQuery.lowercase())
             val matchesFilter = when (selectedFilter) {
                 "Todas" -> true
-                "Bloqueadas" -> app.isHidden || app.isSuspended || app.isWebViewBlocked || app.isInternetBlocked
+                "Bloqueadas" -> app.isHidden || app.isSuspended || app.isWebViewBlocked ||
+                    (app.isInternetBlocked && com.ejemplo.locksuite.mdm.PerAppInternetBlockPolicy.isSupported(app.packageName))
                 "Usuario" -> app.appType == "Usuario"
                 "Sistema" -> app.appType == "Sistema"
                 "Preinstaladas" -> app.appType == "Preinstalada"
@@ -2041,7 +2072,10 @@ fun AppManagerTabContent(context: Context) {
             // Fila de chips de filtro (Scrolleable horizontalmente)
             item(key = "cab_filtros") {
                 val blockedCount = remember(appsList) {
-                    appsList.count { it.isHidden || it.isSuspended || it.isWebViewBlocked || it.isInternetBlocked }
+                    appsList.count {
+                        it.isHidden || it.isSuspended || it.isWebViewBlocked ||
+                            (it.isInternetBlocked && com.ejemplo.locksuite.mdm.PerAppInternetBlockPolicy.isSupported(it.packageName))
+                    }
                 }
                 val filterOptions = remember(blockedCount) {
                     listOf(
@@ -2154,51 +2188,26 @@ fun AppManagerTabContent(context: Context) {
                                 }
                             },
                             onWebViewChange = { block, onComplete ->
-                                 scope.launch(Dispatchers.IO) {
-                                     val success = com.ejemplo.locksuite.mdm.WebViewBlockManager.setBlocked(context, app.packageName, block)
-                                     withContext(Dispatchers.Main) {
-                                         onComplete(success)
-                                         if (success && block) {
-                                             // Asegurarnos de que KosherVpnService esté corriendo al bloquear WebView
-                                             try {
-                                                 val prepareIntent = android.net.VpnService.prepare(context)
-                                                 if (prepareIntent != null) {
-                                                     // Pedir confirmación de conexión VPN al usuario (solo la primera vez)
-                                                     if (context is Activity) {
-                                                         context.startActivityForResult(prepareIntent, 1024)
-                                                     }
-                                                 } else {
-                                                     // Permiso ya concedido, arrancar servicio directo
-                                                     val startServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
-                                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                                         context.startForegroundService(startServiceIntent)
-                                                     } else {
-                                                         context.startService(startServiceIntent)
-                                                     }
-                                                 
-                                                     // Bloquear la configuración de VPN automáticamente para que no la desactive
-                                                     val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
-                                                     policyManager.setVpnConfigBlocked(true)
-                                                 
-                                                     Toast.makeText(
-                                                         context,
-                                                         "VPN activa y configuración bloqueada automáticamente (Lockdown).",
-                                                         Toast.LENGTH_LONG
-                                                     ).show()
-                                                 }
-                                             } catch (e: Exception) {
-                                                 e.printStackTrace()
-                                             }
-                                         }
-                                         refreshApps()
-                                     }
-                                 }
-                             },
-                             onInternetChange = { block ->
                                 scope.launch(Dispatchers.IO) {
-                                    val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
-                                    policyManager.setPerAppInternetBlocked(app.packageName, block)
-                                    refreshApps()
+                                    val success = com.ejemplo.locksuite.mdm.WebViewBlockManager.setBlocked(context, app.packageName, block)
+                                    withContext(Dispatchers.Main) {
+                                        onComplete(success)
+                                        if (success && block) {
+                                            ensureVpnActiveAfterBlock()
+                                        }
+                                        refreshApps()
+                                    }
+                                }
+                            },
+                            onInternetChange = { block ->
+                                scope.launch(Dispatchers.IO) {
+                                    val success = policyManager.setPerAppInternetBlocked(app.packageName, block)
+                                    withContext(Dispatchers.Main) {
+                                        if (success && block) {
+                                            ensureVpnActiveAfterBlock()
+                                        }
+                                        refreshApps()
+                                    }
                                 }
                             },
                             onUninstallClick = {
@@ -2261,6 +2270,7 @@ fun AppRowItem(
     var webviewState by remember { mutableStateOf(app.isWebViewBlocked) }
     var perAppNetState by remember { mutableStateOf(app.isInternetBlocked) }
     var expanded by remember { mutableStateOf(false) }
+    val supportsInternetBlock = com.ejemplo.locksuite.mdm.PerAppInternetBlockPolicy.isSupported(app.packageName)
     val context = LocalContext.current
 
     LaunchedEffect(app) {
@@ -2330,19 +2340,21 @@ fun AppRowItem(
                 )
             }
 
-            // Botón de desinstalar y Configuración Avanzada - Solo si no es crítica
+            // Botón de desinstalar y Configuración Avanzada (solo bloqueo por dominios para apps soportadas)
             if (!app.isCritical) {
-                IconButton(onClick = {
-                    // Se quitó un Toast de depuración ("Engranaje presionado: $expanded")
-                    // que quedó de pruebas: le mostraba al admin un mensaje interno cada
-                    // vez que tocaba el engranaje de cada app en la lista.
-                    expanded = !expanded
-                }) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Configuración Avanzada",
-                        tint = if (perAppNetState) Color(0xFFF5C438) else Color.White
-                    )
+                if (supportsInternetBlock) {
+                    IconButton(onClick = {
+                        // Se quitó un Toast de depuración ("Engranaje presionado: $expanded")
+                        // que quedó de pruebas: le mostraba al admin un mensaje interno cada
+                        // vez que tocaba el engranaje de cada app en la lista.
+                        expanded = !expanded
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Configuración Avanzada",
+                            tint = if (perAppNetState) Color(0xFFF5C438) else Color.White
+                        )
+                    }
                 }
 
                 IconButton(onClick = onUninstallClick) {
@@ -2462,7 +2474,7 @@ fun AppRowItem(
                 }
             }
 
-            if (expanded) {
+            if (expanded && supportsInternetBlock) {
                 HorizontalDivider(color = Color(0xFF0E141B), thickness = 1.dp)
                 Column(
                     modifier = Modifier
@@ -2476,8 +2488,8 @@ fun AppRowItem(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Bloqueo Total de Internet", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            Text("Corta el acceso a internet para esta app por completo.", color = Color.LightGray, fontSize = 11.sp)
+                            Text("Bloqueo de Internet (por dominios)", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Text("Bloquea los dominios de esta app en el filtro DNS (y datos móviles en Android 9+).", color = Color.LightGray, fontSize = 11.sp)
                         }
                         Switch(
                             checked = perAppNetState,

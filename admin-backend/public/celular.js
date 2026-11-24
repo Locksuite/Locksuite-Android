@@ -1326,8 +1326,12 @@
       ayuda: "Corta las páginas web que la app abre adentro suyo (enlaces, publicidad)." },
     { id: "internet", campo: "isInternetBlocked", on: "BLOCK_APP_INTERNET", off: "UNBLOCK_APP_INTERNET",
       hacer: "Cortarle internet", deshacer: "Devolverle internet", chip: "sin internet", cls: "warn",
-      ayuda: "La app sigue abriendo, pero sin conexión." }
+      ayuda: "Bloquea los dominios de esta app en el filtro DNS (y datos móviles en Android 9+). Solo disponible para Pulsar y Subway Surfers." }
   ];
+
+  function accionAplicaA(def, pkg) {
+    return !!def && (def.id !== "internet" || LS.supportsAppInternetBlock(pkg));
+  }
 
   function leerInstaladas() {
     const inv = S.device.apps || (S.device.info && S.device.info.apps) ||
@@ -1382,7 +1386,9 @@
     const chips = [];
     if (a.isCritical) chips.push('<span class="ls-chip">crítica</span>');
     ACCIONES_APP.forEach((d) => {
-      if (a[d.campo] === true) chips.push('<span class="ls-chip ' + d.cls + '">' + d.chip + "</span>");
+      if (accionAplicaA(d, a.packageName) && a[d.campo] === true) {
+        chips.push('<span class="ls-chip ' + d.cls + '">' + d.chip + "</span>");
+      }
     });
     const st = estadoDe(a.packageName);
     if (st === "block") chips.push('<span class="ls-chip bad">prohibida en el filtro</span>');
@@ -1418,7 +1424,7 @@
     else if (filtro === "sistema") apps = apps.filter((a) => a.appType === "Sistema");
     else if (filtro === "restringidas") {
       apps = apps.filter((a) => a.isHidden || a.isSuspended || a.isWebViewBlocked ||
-        a.isInternetBlocked);
+        (a.isInternetBlocked && LS.supportsAppInternetBlock(a.packageName)));
     }
     apps.sort((a, b) => (a.label || a.packageName).localeCompare(b.label || b.packageName, "es"));
 
@@ -1463,7 +1469,7 @@
         (abierta
           ? '<div class="ls-ibody">' +
             (a.isCritical ? "" :
-              ACCIONES_APP.slice(2).map((d) =>
+              ACCIONES_APP.slice(2).filter((d) => accionAplicaA(d, pkg)).map((d) =>
                 '<div class="ls-kv"><span>' + esc(d.ayuda) + "</span><span>" + botonRapido(d) + "</span></div>").join("")) +
             '<div class="ls-kv"><span>Actualizar esta app' +
               '<br><small>Camino: ' + esc(nombreRuta(S.ui.rutaUpd)) + ' · <a href="#" data-ir="actualizaciones">cambiar</a></small></span>' +
@@ -1504,6 +1510,7 @@
     const acc = e.target.closest("[data-acc]");
     if (acc) {
       const def = ACCIONES_APP.find((d) => d.id === acc.dataset.acc);
+      if (!def || !accionAplicaA(def, pkg)) return;
       const encender = acc.dataset.quiere === "1";
       if (def.id === "oculta" && encender && !confirm("¿Ocultar «" + (a.label || pkg) + "»?\n\n" +
         "Desaparece del celular por completo hasta que se la vuelva a mostrar desde acá.")) return;

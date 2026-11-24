@@ -825,6 +825,16 @@ function getAppIconUrl(packageName) {
     return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a0aec0'><path d='M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z'/></svg>";
 }
 
+const PER_APP_INTERNET_SUPPORTED = new Set([
+    "com.rhmsoft.pulsar",
+    "com.rhmsoft.pulsar.pro",
+    "com.kiloo.subwaysurf",
+]);
+
+function supportsAppInternetBlock(pkg) {
+    return PER_APP_INTERNET_SUPPORTED.has(String(pkg || "").trim());
+}
+
 let currentSearchQuery = "", currentAppFilter = "all", lastAppsListSignature = "";
 
 function renderAppsList(e) {
@@ -835,14 +845,16 @@ function renderAppsList(e) {
     // Update blocked count display
     const blockedCountEl = document.getElementById("blocked-apps-count");
     if (blockedCountEl) {
-        const totalBlocked = t.filter(app => app.isHidden || app.isSuspended || app.isWebViewBlocked || app.isInternetBlocked).length;
+        const totalBlocked = t.filter(app => app.isHidden || app.isSuspended || app.isWebViewBlocked ||
+            (app.isInternetBlocked && supportsAppInternetBlock(app.packageName))).length;
         blockedCountEl.textContent = totalBlocked;
     }
 
     // Filter by type
     let filtered = t;
     if (currentAppFilter === "blocked") {
-        filtered = t.filter(app => app.isHidden || app.isSuspended || app.isWebViewBlocked || app.isInternetBlocked);
+        filtered = t.filter(app => app.isHidden || app.isSuspended || app.isWebViewBlocked ||
+            (app.isInternetBlocked && supportsAppInternetBlock(app.packageName)));
     } else if (currentAppFilter === "user") {
         filtered = t.filter(app => app.appType === "Usuario");
     } else if (currentAppFilter === "system") {
@@ -920,12 +932,13 @@ function renderAppsList(e) {
                 runCommandOnDevice(selectedDeviceId, t, [e.packageName], aBtn)
             });
             
+            const canBlockInternet = supportsAppInternetBlock(e.packageName);
             const gearBtn = document.createElement("button");
             gearBtn.className = "app-toggle-btn gear-btn";
             gearBtn.textContent = "⚙️";
             gearBtn.style.padding = "4px 6px";
             gearBtn.style.fontSize = "12px";
-            if (e.isInternetBlocked) {
+            if (canBlockInternet && e.isInternetBlocked) {
                 gearBtn.style.borderColor = "var(--accent-orange)";
                 gearBtn.style.color = "var(--accent-orange)";
                 gearBtn.style.boxShadow = "0 0 5px rgba(241, 196, 15, 0.4)";
@@ -946,40 +959,44 @@ function renderAppsList(e) {
             advancedPanel.style.flexDirection = "column";
             advancedPanel.style.gap = "8px";
 
-            // Bloqueo Total de Internet por App
-            const netRow = document.createElement("div");
-            netRow.style.display = "flex";
-            netRow.style.alignItems = "center";
-            netRow.style.justifyContent = "space-between";
-            netRow.style.width = "100%";
-            netRow.style.marginTop = "4px";
+            if (canBlockInternet) {
+                // Bloqueo de Internet por dominios (solo Pulsar y Subway Surfers)
+                const netRow = document.createElement("div");
+                netRow.style.display = "flex";
+                netRow.style.alignItems = "center";
+                netRow.style.justifyContent = "space-between";
+                netRow.style.width = "100%";
+                netRow.style.marginTop = "4px";
 
-            const netLabel = document.createElement("span");
-            netLabel.textContent = "Bloqueo Total de Internet:";
-            netLabel.style.fontSize = "11px";
-            netLabel.style.color = "var(--text-gray)";
+                const netLabel = document.createElement("span");
+                netLabel.textContent = "Bloqueo de Internet (dominios):";
+                netLabel.style.fontSize = "11px";
+                netLabel.style.color = "var(--text-gray)";
 
-            const netBtn = document.createElement("button");
-            netBtn.className = "app-toggle-btn" + (e.isInternetBlocked ? " active-block" : "");
-            netBtn.style.fontSize = "11px";
-            netBtn.style.padding = "4px 8px";
-            netBtn.textContent = e.isInternetBlocked ? "🚫 Sin Internet (Bloqueado)" : "🌐 Internet Permitido";
-            netBtn.addEventListener("click", () => {
-                const cmd = e.isInternetBlocked ? "UNBLOCK_APP_INTERNET" : "BLOCK_APP_INTERNET";
-                runCommandOnDevice(selectedDeviceId, cmd, [e.packageName], netBtn);
-            });
+                const netBtn = document.createElement("button");
+                netBtn.className = "app-toggle-btn" + (e.isInternetBlocked ? " active-block" : "");
+                netBtn.style.fontSize = "11px";
+                netBtn.style.padding = "4px 8px";
+                netBtn.textContent = e.isInternetBlocked ? "🚫 Sin Internet (Bloqueado)" : "🌐 Internet Permitido";
+                netBtn.addEventListener("click", () => {
+                    const cmd = e.isInternetBlocked ? "UNBLOCK_APP_INTERNET" : "BLOCK_APP_INTERNET";
+                    runCommandOnDevice(selectedDeviceId, cmd, [e.packageName], netBtn);
+                });
 
-            netRow.appendChild(netLabel);
-            netRow.appendChild(netBtn);
-            advancedPanel.appendChild(netRow);
+                netRow.appendChild(netLabel);
+                netRow.appendChild(netBtn);
+                advancedPanel.appendChild(netRow);
+            }
             // Fila 3: Actualizar App
             const updateRow = document.createElement("div");
             updateRow.style.display = "flex";
             updateRow.style.alignItems = "center";
             updateRow.style.justifyContent = "space-between";
             updateRow.style.width = "100%";
-            updateRow.style.borderTop = "1px solid rgba(255, 255, 255, 0.05)";
-            updateRow.style.paddingTop = "6px";
+            if (canBlockInternet) {
+                updateRow.style.borderTop = "1px solid rgba(255, 255, 255, 0.05)";
+                updateRow.style.paddingTop = "6px";
+            }
 
             const updateLabel = document.createElement("span");
             updateLabel.textContent = "Actualizar Aplicación:";
@@ -2885,7 +2902,7 @@ function renderPresetsList(presets) {
         const d = preset.data || {};
         const restr = d.restrictions || {};
         const restrCount = Object.values(restr).filter(Boolean).length;
-        const perAppCount = (d.perAppInternetBlocked || []).length;
+        const perAppCount = (d.perAppInternetBlocked || []).filter(supportsAppInternetBlock).length;
 
         details.innerHTML = `
             <span>🔒 Restricciones de Sistema: <strong>${restrCount} activas</strong></span>
@@ -3059,7 +3076,9 @@ if (savePresetBtn) {
             whitelistEnabled: !!dev.whitelistEnabled,
             whitelistSimulation: dev.whitelistSimulation !== false,
             whitelistSharedCdn: dev.whitelistSharedCdn !== false,
-            perAppInternetBlocked: Object.values(dev.apps || {}).filter(a => a.isInternetBlocked).map(a => a.packageName)
+            perAppInternetBlocked: Object.values(dev.apps || {})
+                .filter(a => a.isInternetBlocked && supportsAppInternetBlock(a.packageName))
+                .map(a => a.packageName)
         };
 
         // ⚠️ 2/9/2026 — ESTE ERA EL BUG DE "LOS PRESETS NO ANDAN".

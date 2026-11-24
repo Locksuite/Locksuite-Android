@@ -68,6 +68,15 @@
     lbl.textContent = text || "";
   }
 
+  function syncBlockNetVisibility() {
+    const pkg = ($("tc-pkg") ? $("tc-pkg").value : "").trim();
+    const ok = LS.supportsAppInternetBlock(pkg);
+    const wrap = $("tc-block-net-wrap");
+    const chk = $("tc-block-net");
+    if (wrap) wrap.style.display = ok ? "" : "none";
+    if (!ok && chk) chk.checked = false;
+  }
+
   function resetPickedFile() {
     S.picked = null;
     const inp = $("tc-file");
@@ -76,6 +85,7 @@
     if (info) info.textContent = "Elegí un archivo .apk de tu PC (se lee paquete y huella SHA-256 automáticamente).";
     const clearBtn = $("tc-clear-file");
     if (clearBtn) clearBtn.style.display = "none";
+    syncBlockNetVisibility();
   }
 
   async function sha256FromUrl(url) {
@@ -127,6 +137,7 @@
       if (S.picked.detectedPkg) {
         $("tc-pkg").value = S.picked.detectedPkg;
       }
+      syncBlockNetVisibility();
       const labelEl = $("tc-label");
       const suggested = window.ApkReader.labelFromFilename(file.name);
       if (labelEl && (!labelEl.value.trim() || labelEl.value.trim() === S.lastAutoLabel) && suggested) {
@@ -173,7 +184,7 @@
     const rawLabel = ($("tc-label").value || "").trim();
     const rawUrl = ($("tc-url") ? $("tc-url").value : "").trim();
     const blockWebView = $("tc-block-wv").checked;
-    const blockInternet = $("tc-block-net").checked;
+    const blockInternet = LS.supportsAppInternetBlock(rawPkg) && $("tc-block-net").checked;
     const allowGlobal = $("tc-allow-global").checked;
 
     if (!T.isValidPackage(rawPkg)) {
@@ -271,6 +282,7 @@
       $("tc-block-wv").checked = false;
       $("tc-block-net").checked = false;
       $("tc-allow-global").checked = true;
+      syncBlockNetVisibility();
       S.lastAutoLabel = "";
       LS.toast("«" + label + "» guardada en la tienda clásica.", "ok");
     } catch (e) {
@@ -321,7 +333,8 @@
       const isStub = tieneSha && T.isAaStub(pkg, a.sha256);
       const inAllowed = S.allowedSet.has(pkg);
       const wv = a.blockWebView === true;
-      const net = a.blockInternet === true;
+      const supportsNet = LS.supportsAppInternetBlock(pkg);
+      const net = supportsNet && a.blockInternet === true;
 
       const chips = [
         '<span class="ls-chip">' + esc(originLabel(a)) + "</span>",
@@ -348,7 +361,9 @@
             "</div>" +
             '<div class="tc-actions">' +
               '<label class="tc-flag"><input type="checkbox" data-tc-flag="blockWebView"' + (wv ? " checked" : "") + ' /><span>Sin WebView</span></label>' +
-              '<label class="tc-flag"><input type="checkbox" data-tc-flag="blockInternet"' + (net ? " checked" : "") + ' /><span>Sin Internet</span></label>' +
+              (supportsNet
+                ? '<label class="tc-flag"><input type="checkbox" data-tc-flag="blockInternet"' + (net ? " checked" : "") + ' /><span>Sin Internet</span></label>'
+                : "") +
               (!isStub && !inAllowed
                 ? '<button type="button" class="ls-btn ls-btn-sm" data-tc-allow="1">Habilitar</button>'
                 : "") +
@@ -387,6 +402,11 @@
     if (submitBtn) {
       submitBtn.addEventListener("click", guardarAppClasica);
     }
+    const pkgInp = $("tc-pkg");
+    if (pkgInp) {
+      pkgInp.addEventListener("input", syncBlockNetVisibility);
+    }
+    syncBlockNetVisibility();
     const searchInp = $("tc-buscar");
     if (searchInp) {
       searchInp.addEventListener("input", render);
@@ -401,6 +421,13 @@
         const key = row.dataset.tckey;
         const flag = inp.dataset.tcFlag;
         const val = inp.checked;
+        const app = (S.storeApps || {})[key];
+        const pkg = (app && app.packageName) || LS.keyPkg(key);
+        if (flag === "blockInternet" && val && !LS.supportsAppInternetBlock(pkg)) {
+          inp.checked = false;
+          LS.toast("El bloqueo de internet por app solo está disponible para Pulsar y Subway Surfers.", "warn");
+          return;
+        }
         inp.disabled = true;
         try {
           await LS.db.ref("storeApps/" + key).update({ [flag]: val });

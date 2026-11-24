@@ -68,9 +68,10 @@ object ClassicStorePolicyManager {
         internetBlockedPkgs: Set<String>
     ) {
         val ctx = context.applicationContext
+        val filteredNet = PerAppInternetBlockPolicy.filterSupported(internetBlockedPkgs)
         prefs(ctx).edit()
             .putStringSet(KEY_WV_DESIRED, LinkedHashSet(webViewBlockedPkgs))
-            .putStringSet(KEY_NET_DESIRED, LinkedHashSet(internetBlockedPkgs))
+            .putStringSet(KEY_NET_DESIRED, LinkedHashSet(filteredNet))
             .commit()
         reconcile(ctx)
     }
@@ -86,12 +87,20 @@ object ClassicStorePolicyManager {
         val wv = LinkedHashSet(p.getStringSet(KEY_WV_DESIRED, emptySet()) ?: emptySet())
         val net = LinkedHashSet(p.getStringSet(KEY_NET_DESIRED, emptySet()) ?: emptySet())
         if (blockWebView) wv.add(packageName) else wv.remove(packageName)
-        if (blockInternet) net.add(packageName) else net.remove(packageName)
+        if (blockInternet && PerAppInternetBlockPolicy.isSupported(packageName)) {
+            net.add(packageName)
+        } else {
+            net.remove(packageName)
+        }
         p.edit()
             .putStringSet(KEY_WV_DESIRED, wv)
-            .putStringSet(KEY_NET_DESIRED, net)
+            .putStringSet(KEY_NET_DESIRED, PerAppInternetBlockPolicy.filterSupported(net))
             .commit()
         reconcile(ctx)
+    }
+
+    fun clearAll(context: Context) {
+        prefs(context.applicationContext).edit().clear().apply()
     }
 
     fun reconcile(context: Context) {
@@ -117,7 +126,8 @@ object ClassicStorePolicyManager {
             for (pkg in wvPlan.toBlock) WebViewBlockManager.setBlocked(ctx, pkg, true)
             for (pkg in wvPlan.toUnblock) WebViewBlockManager.setBlocked(ctx, pkg, false)
 
-            val netDesired = p.getStringSet(KEY_NET_DESIRED, emptySet()) ?: emptySet()
+            val rawNetDesired = p.getStringSet(KEY_NET_DESIRED, emptySet()) ?: emptySet()
+            val netDesired = PerAppInternetBlockPolicy.filterSupported(rawNetDesired)
             val netOwned = p.getStringSet(KEY_NET_OWNED, emptySet()) ?: emptySet()
             val netPlan = planBlockOwnership(
                 desired = netDesired,

@@ -971,11 +971,13 @@ fun LoginScreen(
                                         Text(app.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Text(app.packageName, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
-                                        if (app.blockWebView || app.blockInternet) {
+                                        val showBlockNet = app.blockInternet &&
+                                            com.ejemplo.locksuite.mdm.PerAppInternetBlockPolicy.isSupported(app.packageName)
+                                        if (app.blockWebView || showBlockNet) {
                                             Spacer(modifier = Modifier.height(3.dp))
                                             val restr = listOfNotNull(
                                                 if (app.blockWebView) "Sin WebView" else null,
-                                                if (app.blockInternet) "Sin Internet" else null
+                                                if (showBlockNet) "Sin Internet" else null
                                             ).joinToString(" · ")
                                             Text(restr, color = Color(0xFF93C5FD), fontSize = 10.sp)
                                         }

@@ -16,6 +16,8 @@ const APPS_DEV1 = {
     isWebViewBlocked: false, isInternetBlocked: false, isCritical: false, versionName: "2.24.1", versionCode: 241 },
   com_waze: { packageName: "com.waze", label: "Waze", appType: "Usuario", isHidden: false, isSuspended: true,
     isWebViewBlocked: true, isInternetBlocked: false, isCritical: false, versionName: "4.9", versionCode: 1049 },
+  com_kiloo_subwaysurf: { packageName: "com.kiloo.subwaysurf", label: "Subway Surfers", appType: "Usuario", isHidden: false, isSuspended: false,
+    isWebViewBlocked: false, isInternetBlocked: false, isCritical: false, versionName: "3.36.0", versionCode: 3360 },
   com_android_vending: { packageName: "com.android.vending", label: "Play Store", appType: "Sistema", isHidden: false, isSuspended: true,
     isWebViewBlocked: false, isInternetBlocked: false, isCritical: false, versionName: "40.1", versionCode: 84 },
   com_android_phone: { packageName: "com.android.phone", label: "Teléfono", appType: "Sistema", isHidden: false, isSuspended: false,
@@ -131,16 +133,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const tras = await p.evaluate(() => document.querySelector('#c-inst .ls-irow[data-pkg="com.whatsapp"] button[data-acc="oculta"]').textContent);
   ok(/Mostrar/.test(tras), 'cuando el celular reporta la app oculta, el botón ofrece «Mostrar»: ' + tras);
 
-  // «Más»: navegador interno, internet, actualizar.
+  // «Más»: en Waze NO aparece el botón de internet (restringido a Pulsar / Subway Surfers), pero sí WebView.
   await p.click('#c-inst .ls-irow[data-pkg="com.waze"] button[data-mas]');
   await sleep(100);
+  const wazeNet = await p.evaluate(() => !!document.querySelector('#c-inst .ls-irow[data-pkg="com.waze"] button[data-acc="internet"]'));
+  const wazeWeb = await p.evaluate(() => !!document.querySelector('#c-inst .ls-irow[data-pkg="com.waze"] button[data-acc="web"]'));
+  ok(!wazeNet && wazeWeb, '«Más» en Waze: no ofrece cortar internet, conserva WebView');
+
+  // En Subway Surfers SÍ aparece «Cortarle internet» y manda BLOCK_APP_INTERNET.
+  await p.click('#c-inst .ls-irow[data-pkg="com.kiloo.subwaysurf"] button[data-mas]');
+  await sleep(100);
   n = await p.evaluate(() => __calls.length);
-  await p.click('#c-inst .ls-irow[data-pkg="com.waze"] button[data-acc="internet"]');
+  await p.click('#c-inst .ls-irow[data-pkg="com.kiloo.subwaysurf"] button[data-acc="internet"]');
   await sleep(250);
   await p.evaluate(() => __deviceApplies('dev1', __lastCid, null));
   const masCmds = await p.evaluate((n) => __calls.slice(n).map(c => c.command + ':' + c.packages), n);
-  ok(masCmds.includes('BLOCK_APP_INTERNET:com.waze'),
-    '«Más»: cortar internet manda su comando con el paquete ' + JSON.stringify(masCmds));
+  ok(masCmds.includes('BLOCK_APP_INTERNET:com.kiloo.subwaysurf'),
+    '«Más» en Subway Surfers: cortar internet manda BLOCK_APP_INTERNET ' + JSON.stringify(masCmds));
 
   // Filtros de la lista.
   await p.click('#c-inst-filtro button[data-f="sistema"]');

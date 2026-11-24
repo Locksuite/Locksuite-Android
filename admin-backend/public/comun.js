@@ -28,6 +28,18 @@
   LS.pkgKey = (pkg) => String(pkg).replace(/\./g, "_");
   LS.keyPkg = (key) => String(key).replace(/_/g, ".");
 
+  /**
+   * Paquetes habilitados para bloqueo de internet por dominios (B.127).
+   * Mantener alineado con PerAppInternetBlockPolicy.SUPPORTED_PACKAGES en Android.
+   */
+  LS.PER_APP_INTERNET_SUPPORTED = new Set([
+    "com.rhmsoft.pulsar",
+    "com.rhmsoft.pulsar.pro",
+    "com.kiloo.subwaysurf",
+  ]);
+  LS.supportsAppInternetBlock = (pkg) =>
+    LS.PER_APP_INTERNET_SUPPORTED.has(String(pkg || "").trim());
+
   LS.esc = (s) =>
     String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"

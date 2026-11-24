@@ -203,7 +203,7 @@
 
           <div class="tc-flags-row">
             <label><input type="checkbox" id="tc-block-wv" /> Bloquear WebView</label>
-            <label><input type="checkbox" id="tc-block-net" /> Bloquear Internet</label>
+            <label id="tc-block-net-wrap" style="display:none"><input type="checkbox" id="tc-block-net" /> Bloquear Internet (dominios — solo Pulsar / Subway Surfers)</label>
             <label><input type="checkbox" id="tc-allow-global" checked /> Visible en la tienda clásica (agregar a permitidas globales)</label>
           </div>
 
@@ -246,10 +246,10 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
   <script src="catalog.js?v=2"></script>
-  <script src="comun.js?v=8"></script>
+  <script src="comun.js?v=9"></script>
   <script src="apk_reader.js?v=1"></script>
   <script src="tienda_logic.js?v=3"></script>
   <script src="tienda.js?v=2"></script>
-  <script src="tienda_clasica.js?v=1"></script>
+  <script src="tienda_clasica.js?v=2"></script>
 </body>
 </html>

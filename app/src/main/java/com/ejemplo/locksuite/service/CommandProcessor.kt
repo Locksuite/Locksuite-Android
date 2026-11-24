@@ -427,8 +427,16 @@ class CommandProcessor(private val context: Context) {
                     true
                 }
                 "BLOCK_APP_INTERNET" -> {
-                    packagesList.forEach { policyManager.setPerAppInternetBlocked(it, true) }
-                    true
+                    val supported = packagesList.filter {
+                        com.ejemplo.locksuite.mdm.PerAppInternetBlockPolicy.isSupported(it)
+                    }
+                    if (supported.isEmpty()) {
+                        commandErrorReason = "El bloqueo de internet por app solo está disponible para Pulsar y Subway Surfers."
+                        false
+                    } else {
+                        supported.forEach { policyManager.setPerAppInternetBlocked(it, true) }
+                        true
+                    }
                 }
                 "UNBLOCK_APP_INTERNET" -> {
                     packagesList.forEach { policyManager.setPerAppInternetBlocked(it, false) }

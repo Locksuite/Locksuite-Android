@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.ParcelFileDescriptor
 import android.os.Build
 import android.system.OsConstants
+import com.ejemplo.locksuite.mdm.PerAppInternetBlockPolicy
 import com.ejemplo.locksuite.mdm.WebViewBlockManager
 import com.ejemplo.locksuite.mdm.WebViewPolicy
 import com.ejemplo.locksuite.util.AdBlocker
@@ -189,6 +190,18 @@ class KosherVpnService : VpnService() {
          */
         @Volatile
         var isTunnelRunning: Boolean = false
+
+        /**
+         * Caché en memoria de los paquetes soportados con bloqueo de internet activo (B.127).
+         * Se invalida al modificar la política o recargar reglas sin reiniciar el túnel.
+         */
+        @Volatile
+        private var perAppBlockedPackagesCache: Set<String>? = null
+
+        @JvmStatic
+        fun invalidatePerAppInternetCache() {
+            perAppBlockedPackagesCache = null
+        }
 
         // ══════════════════════════════════════════════════════════════════════════
         // SALUD DEL TÚNEL  (6/9/2026 — ver B.49)
@@ -460,6 +473,17 @@ class KosherVpnService : VpnService() {
     @Volatile private var needsUidLookup = false
     @Volatile private var needsUidLookupAt = 0L
 
+    private fun activePerAppInternetBlocked(): Set<String> {
+        perAppBlockedPackagesCache?.let { return it }
+        val fresh = try {
+            policyManager.getPerAppInternetBlockedPackages()
+        } catch (e: Exception) {
+            emptySet()
+        }
+        perAppBlockedPackagesCache = fresh
+        return fresh
+    }
+
     override fun onCreate() {
         super.onCreate()
         // 7/11/2026 (B.112): la VPN siempre activa la arranca el sistema al desbloquear; si el
@@ -502,6 +526,7 @@ class KosherVpnService : VpnService() {
                 try {
                     com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.loadRules()
                     com.ejemplo.locksuite.mdm.WhitelistManager(applicationContext).reload()
+                    invalidatePerAppInternetCache()
                     android.util.Log.i("KosherVPN", "Reglas DNS recargadas en caliente (sin rehacer el tunel).")
                 } catch (e: Exception) {
                     android.util.Log.w("KosherVPN", "No se pudieron recargar reglas DNS: ${e.message}")
@@ -570,10 +595,11 @@ class KosherVpnService : VpnService() {
         try {
             startForeground(9002, buildNotification())
 
-            // Recargar reglas DNS y lista blanca desde SharedPrefs al (re)iniciar la VPN
+            // Recargar reglas DNS, lista blanca y bloqueo por app desde SharedPrefs al (re)iniciar la VPN
             try {
                 com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.loadRules()
                 com.ejemplo.locksuite.mdm.WhitelistManager(applicationContext).reload()
+                invalidatePerAppInternetCache()
             } catch (e: Exception) {
                 android.util.Log.w("KosherVPN", "No se pudieron recargar reglas DNS: ${e.message}")
             }
@@ -935,6 +961,30 @@ class KosherVpnService : VpnService() {
             else -> normalCustomRule = customRule
         }
 
+        // Bloqueo de internet por dominios para apps soportadas (B.127: Pulsar y Subway Surfers).
+        // Corre después de FORCE_BLOCK/FORCE_ALLOW (para conservar salida manual de emergencia)
+        // y antes de WhitelistCatalog.INFRASTRUCTURE (solo para subdominios puntuales de telemetría).
+        val activePerAppBlocked = activePerAppInternetBlocked()
+        if (activePerAppBlocked.isNotEmpty()) {
+            val matchedPerAppPkg = PerAppInternetBlockPolicy.matchedPackageForDomain(
+                queriedDomain,
+                activePerAppBlocked
+            )
+            if (matchedPerAppPkg != null) {
+                android.util.Log.i(
+                    "KosherVPN",
+                    "🚫 BLOQUEADO INTERNET POR DOMINIOS ($matchedPerAppPkg): $queriedDomain (solicitante=$logPackage)"
+                )
+                com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(
+                    queriedDomain,
+                    matchedPerAppPkg,
+                    com.ejemplo.locksuite.dns.DnsAction.BLOCKED
+                )
+                NetworkForwarder.sendBlockedDnsResponse(packet, output)
+                return
+            }
+        }
+
         // ─────────────────────────────────────────────────────────────────────
         // MODO LISTA BLANCA (8/9/2026). Ver mdm/WhitelistManager.kt.
         // ─────────────────────────────────────────────────────────────────────
@@ -1042,11 +1092,7 @@ class KosherVpnService : VpnService() {
         var otherPolicyDecided = false
 
         if (logPackage != "desconocido") {
-            if (policyManager.isPerAppInternetBlocked(logPackage)) {
-                isBlocked = true
-                otherPolicyDecided = true
-                android.util.Log.i("KosherVPN", "🚫 BLOQUEADO INTERNET TOTAL POR APP ($logPackage): $queriedDomain")
-            } else if (WebViewBlockManager.isBlocked(this, logPackage)) {
+            if (WebViewBlockManager.isBlocked(this, logPackage)) {
                 // El bloqueo de WebView, una vez activo para esta app, gobierna
                 // TODOS sus dominios (permitidos o no) - cuenta como decision
                 // propia aunque el resultado puntual sea "permitir".
@@ -1128,8 +1174,7 @@ class KosherVpnService : VpnService() {
         val now = android.os.SystemClock.elapsedRealtime()
         if (needsUidLookupAt != 0L && now - needsUidLookupAt < 10_000L) return needsUidLookup
         val fresh = try {
-            WebViewBlockManager.getBlockedPackages(applicationContext).isNotEmpty() ||
-                policyManager.getPerAppInternetBlockedPackages().isNotEmpty()
+            WebViewBlockManager.getBlockedPackages(applicationContext).isNotEmpty()
         } catch (e: Exception) {
             true // ante la duda, resolver: es más lento pero no cambia el resultado
         }

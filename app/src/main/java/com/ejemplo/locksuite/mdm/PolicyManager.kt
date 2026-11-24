@@ -1649,18 +1649,29 @@ class PolicyManager(private val context: Context) {
         PrefsHelper.getMdmPrefs(context).getString("google_account_web_seen", "") ?: ""
 
     // ─────────────────────────────────────────────
-    // BLOQUEO TOTAL DE INTERNET POR APP
+    // BLOQUEO DE INTERNET POR APP (SOLO PULSAR Y SUBWAY SURFERS — B.127)
     // ─────────────────────────────────────────────
 
-    fun setPerAppInternetBlocked(packageName: String, blocked: Boolean) {
+    fun setPerAppInternetBlocked(packageName: String, blocked: Boolean): Boolean {
+        if (blocked && !PerAppInternetBlockPolicy.isSupported(packageName)) {
+            android.util.Log.w(
+                "PolicyManager",
+                "setPerAppInternetBlocked ignorado: paquete no soportado ($packageName)"
+            )
+            return false
+        }
         val prefs = PrefsHelper.getMdmPrefs(context)
-        val currentSet = prefs.getStringSet("per_app_internet_blocked", emptySet())?.toMutableSet() ?: mutableSetOf()
+        val rawSet = prefs.getStringSet("per_app_internet_blocked", emptySet()) ?: emptySet()
+        val currentSet = PerAppInternetBlockPolicy.filterSupported(rawSet).toMutableSet()
         if (blocked) {
             currentSet.add(packageName)
         } else {
             currentSet.remove(packageName)
         }
         prefs.edit().putStringSet("per_app_internet_blocked", currentSet).apply()
+
+        com.ejemplo.locksuite.service.KosherVpnService.invalidatePerAppInternetCache()
+        syncMeteredDataDisabledPackages()
 
         if (blocked) {
             try {
@@ -1670,17 +1681,60 @@ class PolicyManager(private val context: Context) {
             }
         }
         com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+        return true
     }
 
     fun isPerAppInternetBlocked(packageName: String): Boolean {
-        val prefs = PrefsHelper.getMdmPrefs(context)
-        val currentSet = prefs.getStringSet("per_app_internet_blocked", emptySet()) ?: emptySet()
-        return currentSet.contains(packageName)
+        return PerAppInternetBlockPolicy.isSupported(packageName) &&
+            getPerAppInternetBlockedPackages().contains(packageName)
     }
 
     fun getPerAppInternetBlockedPackages(): Set<String> {
         val prefs = PrefsHelper.getMdmPrefs(context)
-        return prefs.getStringSet("per_app_internet_blocked", emptySet()) ?: emptySet()
+        val rawSet = prefs.getStringSet("per_app_internet_blocked", emptySet()) ?: emptySet()
+        return PerAppInternetBlockPolicy.filterSupported(rawSet)
+    }
+
+    /**
+     * Refuerza el bloqueo de internet por app en Android 9+ (API 28+) cortando datos móviles
+     * medidos a nivel de sistema (`NetworkPolicyManager` vía DPM). Compara contra el estado real
+     * antes de escribir (patrón B.89) y solo incluye paquetes soportados instalados.
+     */
+    fun syncMeteredDataDisabledPackages() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        if (isLockSuiteSuspended()) return
+        try {
+            val desiredInstalled = getPerAppInternetBlockedPackages().filterTo(LinkedHashSet()) { pkg ->
+                try {
+                    context.packageManager.getApplicationInfo(pkg, 0)
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            val current = try {
+                dpm.getMeteredDataDisabledPackages(adminComponent).toSet()
+            } catch (_: Exception) {
+                null
+            }
+            if (current == null || current != desiredInstalled) {
+                val rejected = dpm.setMeteredDataDisabledPackages(
+                    adminComponent,
+                    desiredInstalled.toList()
+                )
+                if (rejected.isNotEmpty()) {
+                    android.util.Log.w(
+                        "PolicyManager",
+                        "setMeteredDataDisabledPackages rechazó paquetes: $rejected"
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(
+                "PolicyManager",
+                "No se pudo sincronizar datos medidos bloqueados: ${e.message}"
+            )
+        }
     }
 
     // ─────────────────────────────────────────────
@@ -2024,9 +2078,14 @@ class PolicyManager(private val context: Context) {
                 val prefs = PrefsHelper.getMdmPrefs(context)
                 val set = mutableSetOf<String>()
                 for (i in 0 until perAppNetArr.length()) {
-                    set.add(perAppNetArr.getString(i))
+                    val pkg = perAppNetArr.optString(i, "").trim()
+                    if (PerAppInternetBlockPolicy.isSupported(pkg)) {
+                        set.add(pkg)
+                    }
                 }
                 prefs.edit().putStringSet("per_app_internet_blocked", set).apply()
+                com.ejemplo.locksuite.service.KosherVpnService.invalidatePerAppInternetCache()
+                syncMeteredDataDisabledPackages()
             }
 
             applyDeviceStateFromPreset(dataObj)
@@ -2830,6 +2889,12 @@ class PolicyManager(private val context: Context) {
         } catch (e: Exception) {
             android.util.Log.w("PolicyManager", "Tienda clásica: reconcile falló: ${e.message}")
         }
+        try {
+            syncMeteredDataDisabledPackages()
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "Datos medidos bloqueados: sync falló: ${e.message}")
+        }
+        com.ejemplo.locksuite.service.KosherVpnService.invalidatePerAppInternetCache()
 
         timer.mark("tiendas")
 
@@ -3248,6 +3313,13 @@ class PolicyManager(private val context: Context) {
         safely {
             context.stopService(Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java))
         }
+        // Datos móviles bloqueados por app (API 28+): liberar durante la suspensión (B.127)
+        safely {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                dpm.setMeteredDataDisabledPackages(adminComponent, emptyList())
+            }
+        }
+        safely { com.ejemplo.locksuite.service.KosherVpnService.invalidatePerAppInternetCache() }
 
         // Desbloquear TODAS las apps: des-suspender en un solo llamado (mucho más
         // rápido que uno por paquete) y des-ocultar solo las que están ocultas.
@@ -3458,6 +3530,21 @@ class PolicyManager(private val context: Context) {
             android.util.Log.w("PolicyManager", "Purga: no se pudo limpiar Always-on VPN: ${e.message}")
         }
 
+        // Datos móviles bloqueados por app (API 28+): liberar en purga/revocación (B.127)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                dpm.setMeteredDataDisabledPackages(adminComponent, emptyList())
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "Purga: no se pudieron limpiar datos medidos bloqueados: ${e.message}")
+        }
+
+        try {
+            ClassicStorePolicyManager.clearAll(context)
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "Purga: no se pudieron limpiar políticas de tienda clásica: ${e.message}")
+        }
+
         // Clear local preferences (incluida la marca de suspensión: tras la purga
         // no queda ninguna política que suspender)
         PrefsHelper.getMdmPrefs(context).edit().clear().apply()
@@ -3471,6 +3558,9 @@ class PolicyManager(private val context: Context) {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        try {
+            com.ejemplo.locksuite.service.KosherVpnService.invalidatePerAppInternetCache()
+        } catch (_: Exception) { }
     }
 
     private val KNOWN_BROWSER_PACKAGES = listOf(
