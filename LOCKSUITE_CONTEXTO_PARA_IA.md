@@ -12,6 +12,8 @@ Tiene tres partes que se tratan distinto:
 
 **Regla para toda sesión nueva:** puede haber más de un agente de IA trabajando sobre este mismo repo en paralelo — Claude vía el puente al dispositivo (sin compilar), Antigravity con terminal real en la PC (sí compila/despliega/commitea) — sin commits de por medio la mayor parte del tiempo. Releé el archivo actual antes de editarlo. No confíes en una copia leída minutos antes, ni en que este documento siga exacto línea por línea.
 
+**Regla de cierre de sesión (despliegue automático):** Al terminar cada sesión con cambios de código, panel o funciones, desplegar automáticamente todo ejecutando `.\deploy_all.ps1` (sube versión, compila el APK release, despliega Hosting, Database y Cloud Functions en Firebase, y hace commit + push a `origin/main`), **excepto que el usuario indique lo contrario**.
+
 ---
 
 ## A. ESTABLE
