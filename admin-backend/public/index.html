@@ -492,6 +492,31 @@
               </div>
             </div>
 
+            <!-- Ventana temporal para instalar apps y abrir Play Store -->
+            <div class="sidebar-card" id="temp-install-card">
+              <h3>⏱️ Permitir instalar apps (temporal)</h3>
+              <p class="hint-text" style="font-size:11.5px; color:var(--text-gray); margin:0 0 10px;">
+                Desbloquea Google Play y desactiva las restricciones de instalación durante el tiempo elegido. Al vencer, todo vuelve solo a su estado anterior.
+              </p>
+              <div id="temp-install-status" style="margin-bottom:10px;"></div>
+              <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">
+                <button type="button" class="action-btn temp-install-preset" data-amt="15" data-unit="60000" style="background:var(--navy-medium); color:var(--text-light); border:1px solid var(--navy-light); padding:5px 9px; border-radius:6px; font-size:11.5px; cursor:pointer;">15 min</button>
+                <button type="button" class="action-btn temp-install-preset" data-amt="30" data-unit="60000" style="background:var(--navy-medium); color:var(--text-light); border:1px solid var(--navy-light); padding:5px 9px; border-radius:6px; font-size:11.5px; cursor:pointer;">30 min</button>
+                <button type="button" class="action-btn temp-install-preset" data-amt="1" data-unit="3600000" style="background:var(--navy-medium); color:var(--text-light); border:1px solid var(--navy-light); padding:5px 9px; border-radius:6px; font-size:11.5px; cursor:pointer;">1 h</button>
+                <button type="button" class="action-btn temp-install-preset" data-amt="2" data-unit="3600000" style="background:var(--navy-medium); color:var(--text-light); border:1px solid var(--navy-light); padding:5px 9px; border-radius:6px; font-size:11.5px; cursor:pointer;">2 h</button>
+                <button type="button" class="action-btn temp-install-preset" data-amt="24" data-unit="3600000" style="background:var(--navy-medium); color:var(--text-light); border:1px solid var(--navy-light); padding:5px 9px; border-radius:6px; font-size:11.5px; cursor:pointer;">24 h</button>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <input type="number" id="temp-install-amount" min="1" max="43200" value="30" style="width:76px; background:var(--navy-medium); border:1px solid var(--navy-light); color:var(--text-light); padding:7px 9px; border-radius:8px; font-size:12.5px;" />
+                <select id="temp-install-unit" style="flex:1 1 100px; background:var(--navy-medium); border:1px solid var(--navy-light); color:var(--text-light); padding:7px 9px; border-radius:8px; font-size:12.5px;">
+                  <option value="60000">Minutos</option>
+                  <option value="3600000">Horas</option>
+                  <option value="86400000">Días</option>
+                </select>
+                <button type="button" id="temp-install-start-btn" class="action-btn" style="background:var(--accent); color:var(--navy-dark); font-weight:bold; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; font-size:12px;">🔓 Permitir</button>
+              </div>
+            </div>
+
             <!-- Políticas de Sistema -->
             <div class="sidebar-card">
               <h3>Políticas de Sistema (Device Owner)</h3>
@@ -1185,6 +1210,6 @@
        tienda.html (TiendaLogic.approveRequest). Si faltara, el resto del panel sigue igual y solo
        esos pedidos avisan que no se pueden aprobar desde acá. -->
   <script src="tienda_logic.js?v=2"></script>
-  <script src="app.js?v=54"></script>
+  <script src="app.js?v=55"></script>
 </body>
 </html>

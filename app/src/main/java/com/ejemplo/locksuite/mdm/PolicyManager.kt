@@ -86,6 +86,15 @@ class PolicyManager(private val context: Context) {
             android.util.Log.i("PolicyManager", "LockSuite suspendido: $restriction queda guardada pero sin aplicar")
             return true
         }
+        if (enable &&
+            (restriction == UserManager.DISALLOW_INSTALL_APPS ||
+                restriction == UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES) &&
+            TempInstallWindowManager.isActive(context)
+        ) {
+            saveState(restriction, true)
+            android.util.Log.i("PolicyManager", "Ventana temporal activa: $restriction queda guardada hasta su cierre")
+            return true
+        }
         return try {
             if (enable) {
                 dpm.addUserRestriction(adminComponent, restriction)
@@ -225,6 +234,10 @@ class PolicyManager(private val context: Context) {
             android.util.Log.i("PolicyManager", "Instalación MDM en progreso: omitiendo refreshInstallRestriction")
             return true
         }
+        if (TempInstallWindowManager.isActive(context)) {
+            android.util.Log.i("PolicyManager", "Ventana temporal de instalación activa: omitiendo refreshInstallRestriction")
+            return true
+        }
 
         val isBlocked = prefs.getBoolean("install_apps_blocked_admin", false)
         val allowed = prefs.getStringSet("allowed_packages", null) ?: emptySet()
@@ -334,6 +347,11 @@ class PolicyManager(private val context: Context) {
             android.util.Log.i("PolicyManager", "restoreInstallRestrictions: actualización por Google Play en curso; la restaura su cierre")
             return
         }
+        if (TempInstallWindowManager.isActive(context)) {
+            prefs.edit().putBoolean("mdm_install_in_progress", false).apply()
+            android.util.Log.i("PolicyManager", "restoreInstallRestrictions: ventana temporal activa; las restricciones se restauran al vencer")
+            return
+        }
         prefs.edit().putBoolean("mdm_install_in_progress", false).apply()
         if (prefs.getBoolean("locksuite_suspended", false)) {
             android.util.Log.i("PolicyManager", "LockSuite suspendido: no se re-imponen los bloqueos de instalación")
@@ -364,6 +382,44 @@ class PolicyManager(private val context: Context) {
             }
         } catch (e: Exception) {
             android.util.Log.w("PolicyManager", "No se pudo restaurar ocultamiento/suspension de Play Store: ${e.message}")
+        }
+    }
+
+    /**
+     * Levanta a nivel de sistema Play Store y las restricciones de instalación sin alterar
+     * las preferencias guardadas del administrador, para que al vencer la ventana vuelva todo
+     * exactamente a su configuración previa.
+     */
+    fun applyTempInstallWindowOpen() {
+        try {
+            dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_INSTALL_APPS)
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "No se pudo levantar DISALLOW_INSTALL_APPS: ${e.message}")
+        }
+        try {
+            dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "No se pudo levantar DISALLOW_INSTALL_UNKNOWN_SOURCES: ${e.message}")
+        }
+        try {
+            dpm.setApplicationHidden(adminComponent, AppController.PKG_PLAY_STORE, false)
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "No se pudo desocultar Play Store: ${e.message}")
+        }
+        try {
+            dpm.setPackagesSuspended(adminComponent, arrayOf(AppController.PKG_PLAY_STORE), false)
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "No se pudo desuspender Play Store: ${e.message}")
+        }
+        if (isKioskLockTaskEnabled()) {
+            applyKioskLockTask(true)
+        }
+    }
+
+    fun applyTempInstallWindowClosed() {
+        restoreInstallRestrictions()
+        if (isKioskLockTaskEnabled()) {
+            applyKioskLockTask(true)
         }
     }
 
@@ -659,7 +715,20 @@ class PolicyManager(private val context: Context) {
         } catch (_: Exception) {
             emptySet()
         }
-        return (allowed + dialerPkgs + extraEssential + porActualizacion + deLaTienda).toTypedArray()
+        val porVentanaTemporal = try {
+            if (TempInstallWindowManager.isActive(context)) {
+                setOf(
+                    "com.android.vending",
+                    "com.google.android.packageinstaller",
+                    "com.android.packageinstaller"
+                )
+            } else {
+                emptySet()
+            }
+        } catch (_: Exception) {
+            emptySet()
+        }
+        return (allowed + dialerPkgs + extraEssential + porActualizacion + deLaTienda + porVentanaTemporal).toTypedArray()
     }
 
     fun setKioskLockTaskEnabled(enable: Boolean): Boolean {
@@ -1065,7 +1134,13 @@ class PolicyManager(private val context: Context) {
                 UserManager.DISALLOW_APPS_CONTROL,
                 UserManager.DISALLOW_MODIFY_ACCOUNTS
             )
+            val tempInstallActive = TempInstallWindowManager.isActive(context)
             candidatas.distinct().filter { r ->
+                if (tempInstallActive &&
+                    (r == UserManager.DISALLOW_INSTALL_APPS || r == UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+                ) {
+                    return@filter false
+                }
                 // Solo interesa el caso peligroso: la pedimos y NO está puesta.
                 // Al revés (puesta sin pedirla) puede ser política de otro origen y no es
                 // un agujero de seguridad.
@@ -3008,7 +3083,11 @@ class PolicyManager(private val context: Context) {
         // Ver mdm/PolicySpec.kt.
         val todas = restrictions + PolicySpec.EXTRA_RESTRICTIONS.map { it.restriction }
 
+        try {
+            TempInstallWindowManager.checkAndExpire(context)
+        } catch (_: Exception) {}
         val isInstallInProgress = PrefsHelper.getMdmPrefs(context).getBoolean("mdm_install_in_progress", false)
+        val isTempInstallActive = TempInstallWindowManager.isActive(context)
 
         // 22/9/2026 — migración de la doble fuente de verdad de "bloquear instalación"
         // (ver importPolicyPresetJson): un equipo al que un perfil le dejó
@@ -3044,7 +3123,7 @@ class PolicyManager(private val context: Context) {
             // función (nativa o "programática" según haya apps permitidas). Aplicarla acá
             // también la ponía y la sacaba en la misma vuelta.
             if (restriction == UserManager.DISALLOW_INSTALL_APPS) return@forEach
-            if (isInstallInProgress && restriction == UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES) {
+            if ((isInstallInProgress || isTempInstallActive) && restriction == UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES) {
                 return@forEach
             }
             if (restriction == UserManager.DISALLOW_CONFIG_VPN && isTemporaryVpnUnlockActive()) {
@@ -3181,7 +3260,7 @@ class PolicyManager(private val context: Context) {
         // descarga a medias, Android mostraba "aplicación en pausa" debajo del
         // overlay negro, la automatización ya no encontraba ningún botón y la
         // pantalla quedaba trabada hasta el watchdog de 10 minutos.
-        if (!isInstallInProgress) {
+        if (!isInstallInProgress && !isTempInstallActive) {
             val shouldSuspendPlayStore = prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
             try {
                 appController.suspendApp("com.android.vending", shouldSuspendPlayStore)
@@ -3529,6 +3608,10 @@ class PolicyManager(private val context: Context) {
                     e.printStackTrace()
                 }
 
+                try {
+                    TempInstallWindowManager.clearSilent(context, "suspensión de LockSuite")
+                } catch (_: Exception) {}
+
                 // La marca va primero: los watchdogs (Foreground cada 20 s,
                 // Worker cada 15 min, BootReceiver) la leen para no volver a
                 // aplicar nada mientras dure la suspensión. Si se levantaran las
@@ -3738,6 +3821,10 @@ class PolicyManager(private val context: Context) {
         // desde la MISMA lista que las aplica. Este es el defecto P-3 del 1/9 llevado a su
         // conclusión: una restricción que la purga no limpia deja el equipo PEOR que antes
         // de instalar LockSuite, y sin ninguna app con Device Owner que pueda deshacerlo.
+
+        try {
+            TempInstallWindowManager.clearSilent(context, "purga total")
+        } catch (_: Exception) {}
 
         // ⚠️ ANTES QUE NADA. Un equipo purgado que quede en Lock Task no puede abrir
         // ninguna app fuera de la lista, y ya NO hay ninguna app con Device Owner que pueda

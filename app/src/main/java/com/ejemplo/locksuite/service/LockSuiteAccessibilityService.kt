@@ -57,6 +57,23 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         @Volatile var instance: LockSuiteAccessibilityService? = null
         private const val TAG = "LockSuite_WV"
 
+        fun onTempInstallWindowClosed() {
+            val svc = instance ?: return
+            svc.cachedFlags = null
+            svc.mainHandler.post {
+                com.ejemplo.locksuite.util.Safe.guard("a11y.tempInstallClosed") {
+                    val f = svc.flags()
+                    val topPkg = svc.getOriginApp()
+                    if (!f.suspended && !f.playUpdateActive && topPkg == PKG_PLAY_STORE &&
+                        (f.playStoreAccessibilityBlocked || svc.policyManager.isPlayStoreAppBlocked())
+                    ) {
+                        Log.i(TAG, "🔒 Ventana temporal cerrada con Play Store abierta: regresando a Home")
+                        svc.performGlobalAction(GLOBAL_ACTION_HOME)
+                    }
+                }
+            }
+        }
+
         /**
          * Logs de diagnóstico del camino caliente. Dejar en `false` para producción.
          * Al ser `const`, el compilador de Kotlin y R8 eliminan por completo los
@@ -271,7 +288,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         com.ejemplo.locksuite.util.Safe.guard("a11y.whatsappScan") {
             val f = flags()
             if (f.waStatus || f.waChannels) {
-                scanForUpdatesTab(f.waStatus, f.waChannels)
+                scanWhatsAppTree(f.waStatus, f.waChannels, lastWaPkgName, lastWaWindowClassName)
             }
         }
     }
@@ -356,6 +373,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val iabSimulation: Boolean,
         /** Bloquear cambio de idioma del sistema o por app (Android 13+). */
         val localeChangeBlocked: Boolean,
+        /** Ventana temporal para permitir instalar apps y abrir Play Store. */
+        val tempInstallActive: Boolean,
         val takenAt: Long
     ) {
         /** ¿Hay un flujo de actualización POR GOOGLE PLAY en curso? */
@@ -415,6 +434,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             iabFinder = p.getBoolean(EmbeddedBrowserDetector.KEY_ENABLED, false),
             iabSimulation = p.getBoolean(EmbeddedBrowserDetector.KEY_SIMULATION, true),
             localeChangeBlocked = policyManager.isLocaleChangeBlocked(),
+            tempInstallActive = p.getBoolean(com.ejemplo.locksuite.mdm.TempInstallWindowManager.KEY_ACTIVE, false),
             takenAt = SystemClock.elapsedRealtime()
         )
         cachedFlags = fresh
@@ -779,8 +799,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
 
         // Bloqueo de Google Play Store por Accesibilidad fuera del flujo de actualización
+        // y fuera de la ventana temporal de instalación.
         // (B.97: la ruta de la Tienda no abre Play Store, así que no la exime).
-        if (!f.playUpdateActive && packageName == PKG_PLAY_STORE && f.playStoreAccessibilityBlocked) {
+        val allowPlayTemp = f.tempInstallActive &&
+            com.ejemplo.locksuite.mdm.TempInstallWindowManager.isActive(applicationContext)
+        if (!f.playUpdateActive && !allowPlayTemp && packageName == PKG_PLAY_STORE && f.playStoreAccessibilityBlocked) {
             Log.w(TAG, "🚫 Bloqueo de Google Play Store por Accesibilidad activo. Bloqueando y regresando a Home...")
             Layer3Audit.anotar(
                 applicationContext, "play-store", packageName, null,
@@ -801,7 +824,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // ── Bloqueo de Estados y Canales en WhatsApp ──
         if ((f.waStatus || f.waChannels) &&
             (packageName == PKG_WHATSAPP || packageName == PKG_WHATSAPP_BUSINESS)) {
-            handleWhatsAppBlocking(eventType, ev, f.waStatus, f.waChannels)
+            handleWhatsAppBlocking(eventType, ev, packageName, f.waStatus, f.waChannels)
         }
 
         // ── Bloqueo de Ofertas en Mercado Pago ──
@@ -2452,110 +2475,234 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     private var lastWaWindowClassName: String? = null
+    private var lastWaPkgName: String = PKG_WHATSAPP
+    private var waBackoffUntil = 0L
+    private var waFailedBounces = 0
+    private var lastWaRedirectAt = 0L
+    private val waTempRect = Rect()
 
-    private enum class WhatsAppRestrictedContent { STATUS, CHANNEL, NONE }
-
-    // ──────────────────────────────────────────────────────────────
-    // Detección de contenido restringido de WhatsApp
-    //
-    // ⚠️ "mediaview" ESTABA ACÁ Y TAPABA DE MÁS (corregido el 17/8/2026).
-    // `com.whatsapp.MediaView` es el visor de fotos y videos de las CONVERSACIONES
-    // NORMALES, no el de Estados. Con "mediaview" en esta lista, activar "bloquear
-    // Estados" también impedía abrir una foto que te manda un contacto en un chat
-    // común — que es justamente el uso legítimo de la app. El visor de Estados real
-    // es `com.whatsapp.status.playback.StatusPlaybackActivity`, que ya queda cubierto
-    // por "status".
-    //
-    // Los Canales de WhatsApp se llaman "newsletter" internamente; ese es el nombre
-    // que aparece en las clases de actividad, en cualquier idioma.
-    // ──────────────────────────────────────────────────────────────
-    private val STATUS_ACTIVITY_HINTS = listOf("status", "stories")
-    private val CHANNEL_ACTIVITY_HINTS = listOf("newsletter", "channel")
-
-    // Etiquetas de pestaña, en minúscula y SIN tildes: el texto de pantalla se
-    // normaliza con foldAccents() antes de comparar (igual que en Mercado Pago).
-    // Antes solo estaban en español e inglés, así que en un equipo en hebreo, ídish o
-    // portugués el bloqueo de la pestaña no funcionaba en absoluto.
-    private val UPDATES_TAB_LABELS = listOf(
-        "novedades", "actualizaciones", "estados",          // es
-        "updates", "status",                                // en
-        "novidades", "atualizacoes",                        // pt
-        "actualites", "mises a jour",                       // fr
-        "aktuelles", "neuigkeiten",                         // de
-        "aggiornamenti",                                    // it
-        "canales", "channels", "canais", "chaines", "kanale",
-        "עדכונים", "סטטוס", "ערוצים",                        // he
-        "דערהייַנטיקונגען"                                    // yi
-    )
-
-    private val CHATS_TAB_LABELS = listOf(
-        "Chats", "Conversaciones", "Conversas", "Unterhaltungen",
-        "Discussions", "Chat", "צ'אטים", "שמועסן"
-    )
-
-    private fun classifyWhatsAppContent(className: String?): WhatsAppRestrictedContent {
-        val c = className?.lowercase() ?: return WhatsAppRestrictedContent.NONE
-        return when {
-            STATUS_ACTIVITY_HINTS.any { c.contains(it) } -> WhatsAppRestrictedContent.STATUS
-            CHANNEL_ACTIVITY_HINTS.any { c.contains(it) } -> WhatsAppRestrictedContent.CHANNEL
-            else -> WhatsAppRestrictedContent.NONE
-        }
+    private class WaTreeScanState(val rootHeight: Int) {
+        val viewIds = HashSet<String>(32)
+        val tabs = ArrayList<com.ejemplo.locksuite.mdm.WhatsAppPolicy.TabCandidate>(6)
+        var conversationSubtitle: String? = null
+        var remainingBudget = 220
     }
 
     private fun handleWhatsAppBlocking(
         eventType: Int,
         event: AccessibilityEvent,
+        pkg: String,
         blockStatus: Boolean,
         blockChannels: Boolean
     ) {
+        lastWaPkgName = pkg
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val className = event.className?.toString() ?: ""
-            lastWaWindowClassName = className
-            val category = classifyWhatsAppContent(className)
-            if (category == WhatsAppRestrictedContent.STATUS && blockStatus) {
-                triggerWhatsAppBlock("Estado")
-            } else if (category == WhatsAppRestrictedContent.CHANNEL && blockChannels) {
-                triggerWhatsAppBlock("Canal")
+            val eventCls = event.className?.toString()
+            if (!eventCls.isNullOrBlank() && eventCls.startsWith("com.whatsapp", ignoreCase = true)) {
+                lastWaWindowClassName = eventCls
             }
-            // Escaneo inmediato al cambiar de actividad/pantalla
-            scanForUpdatesTab(blockStatus, blockChannels)
+            val effectiveCls = eventCls?.takeIf { it.startsWith("com.whatsapp", ignoreCase = true) }
+                ?: lastWaWindowClassName
+
+            // Paso 1 (costo cero): decisión rápida por nombre de Activity sin recorrer el árbol.
+            val actCat = com.ejemplo.locksuite.mdm.WhatsAppPolicy.classifyActivity(effectiveCls)
+            when (actCat) {
+                com.ejemplo.locksuite.mdm.WhatsAppPolicy.ActivityCategory.SAFE -> return
+                com.ejemplo.locksuite.mdm.WhatsAppPolicy.ActivityCategory.STATUS -> {
+                    if (blockStatus) {
+                        triggerWhatsAppBlock(
+                            pkg, effectiveCls,
+                            com.ejemplo.locksuite.mdm.WhatsAppPolicy.Decision(
+                                com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_STATUS,
+                                "activity:status"
+                            )
+                        )
+                        return
+                    }
+                }
+                com.ejemplo.locksuite.mdm.WhatsAppPolicy.ActivityCategory.CHANNEL -> {
+                    if (blockChannels) {
+                        triggerWhatsAppBlock(
+                            pkg, effectiveCls,
+                            com.ejemplo.locksuite.mdm.WhatsAppPolicy.Decision(
+                                com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_CHANNEL,
+                                "activity:channel"
+                            )
+                        )
+                        return
+                    }
+                }
+                com.ejemplo.locksuite.mdm.WhatsAppPolicy.ActivityCategory.CHANNEL_STATUS -> {
+                    if (blockChannels || blockStatus) {
+                        val action = if (blockChannels) {
+                            com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_CHANNEL
+                        } else {
+                            com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_STATUS
+                        }
+                        triggerWhatsAppBlock(
+                            pkg, effectiveCls,
+                            com.ejemplo.locksuite.mdm.WhatsAppPolicy.Decision(action, "activity:channel_status")
+                        )
+                        return
+                    }
+                }
+                else -> Unit
+            }
+
+            // Paso 2: evaluación estructural acotada (Novedades, Canales en Conversation, visores embebidos).
+            scanWhatsAppTree(blockStatus, blockChannels, pkg, effectiveCls)
+            return
         }
 
         if (eventType == AccessibilityEvent.TYPE_VIEW_SELECTED) {
-            // Escaneo inmediato al tocar una pestaña/vista
-            scanForUpdatesTab(blockStatus, blockChannels)
+            scanWhatsAppTree(blockStatus, blockChannels, pkg, lastWaWindowClassName)
+            return
         }
 
         if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
-            // Debounce de 400ms para evitar ráfagas de escaneos al desplazarse o actualizarse la vista
             mainHandler.removeCallbacks(whatsappScanRunnable)
-            mainHandler.postDelayed(whatsappScanRunnable, 400)
+            mainHandler.postDelayed(whatsappScanRunnable, 350)
         }
     }
 
-    /**
-     * ¿Este nodo, o alguno de sus ancestros cercanos, está marcado como seleccionado?
-     *
-     * Es como se reconoce la pestaña activa: WhatsApp pone `isSelected` sobre el
-     * contenedor de la pestaña, no sobre la etiqueta de texto.
-     *
-     * A diferencia de la versión anterior (`isNodeOrParentSelected`), esta NO recicla
-     * el nodo que recibe: durante un recorrido, ese nodo es propiedad de quien llama y
-     * reciclarlo dejaba un puntero muerto en manos del recorrido.
-     */
-    private fun isSelectedNodeOrAncestor(node: AccessibilityNodeInfo): Boolean {
-        if (node.isSelected) return true
-        var current = node.parent
-        var depth = 0
-        while (current != null && depth < 4) {
-            val selected = current.isSelected
-            val parent = current.parent
-            current.recycle()
-            if (selected) return true
-            current = parent
-            depth++
+    private fun scanWhatsAppTree(
+        blockStatus: Boolean,
+        blockChannels: Boolean,
+        pkg: String,
+        activityClass: String?
+    ) {
+        if (com.ejemplo.locksuite.mdm.WhatsAppPolicy.classifyActivity(activityClass) ==
+            com.ejemplo.locksuite.mdm.WhatsAppPolicy.ActivityCategory.SAFE
+        ) {
+            return
         }
-        return false
+
+        val root = rootInActiveWindow ?: return
+        try {
+            val rootPkg = root.packageName?.toString() ?: ""
+            if (rootPkg != PKG_WHATSAPP && rootPkg != PKG_WHATSAPP_BUSINESS) return
+
+            val snapshot = buildWhatsAppSnapshot(root, activityClass)
+            val decision = com.ejemplo.locksuite.mdm.WhatsAppPolicy.evaluate(
+                snapshot, blockStatus, blockChannels
+            )
+            when (decision.action) {
+                com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.ALLOW -> {
+                    waFailedBounces = 0
+                }
+                com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.REDIRECT_TO_CHATS -> {
+                    redirectAwayFromUpdatesTab(root, rootPkg, decision.reason)
+                }
+                com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_STATUS,
+                com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_CHANNEL -> {
+                    triggerWhatsAppBlock(rootPkg, activityClass, decision)
+                }
+            }
+        } finally {
+            root.recycle()
+        }
+    }
+
+    private fun buildWhatsAppSnapshot(
+        root: AccessibilityNodeInfo,
+        activityClass: String?
+    ): com.ejemplo.locksuite.mdm.WhatsAppPolicy.ScreenSnapshot {
+        root.getBoundsInScreen(waTempRect)
+        val rootHeight = if (waTempRect.height() > 0) waTempRect.height() else resources.displayMetrics.heightPixels.coerceAtLeast(1)
+        val state = WaTreeScanState(rootHeight)
+        collectWhatsAppNode(root, 0, inNavChrome = false, insideList = false, inSelectedNavTab = false, state = state)
+        return com.ejemplo.locksuite.mdm.WhatsAppPolicy.ScreenSnapshot(
+            activityClass = activityClass,
+            viewIds = state.viewIds,
+            tabs = state.tabs,
+            conversationSubtitle = state.conversationSubtitle
+        )
+    }
+
+    private fun collectWhatsAppNode(
+        node: AccessibilityNodeInfo,
+        depth: Int,
+        inNavChrome: Boolean,
+        insideList: Boolean,
+        inSelectedNavTab: Boolean,
+        state: WaTreeScanState
+    ) {
+        if (depth > 18 || state.remainingBudget-- <= 0) return
+        if (depth > 0 && !node.isVisibleToUser) return
+
+        val shortId = com.ejemplo.locksuite.mdm.WhatsAppPolicy.normalizeViewId(node.viewIdResourceName)
+        if (shortId.isNotEmpty() && state.viewIds.size < 64) {
+            state.viewIds.add(shortId)
+        }
+
+        if (shortId == com.ejemplo.locksuite.mdm.WhatsAppPolicy.ID_CONVERSATION_SUBTITLE_RAW &&
+            state.conversationSubtitle == null
+        ) {
+            val sub = node.text?.toString()?.trim()
+            if (!sub.isNullOrEmpty()) state.conversationSubtitle = sub
+        }
+
+        val cls = node.className?.toString() ?: ""
+        val nowInsideList = insideList ||
+            cls.endsWith("RecyclerView") ||
+            cls.endsWith("ListView") ||
+            shortId == "list" ||
+            shortId == com.ejemplo.locksuite.mdm.WhatsAppPolicy.normalizeViewId("updates_list")
+
+        val isNavContainer = shortId in com.ejemplo.locksuite.mdm.WhatsAppPolicy.NAV_CONTAINER_IDS ||
+            shortId.startsWith("tabbarbutton_") ||
+            shortId.startsWith("navigation_bar_item_")
+        val nowInNav = inNavChrome || (!nowInsideList && isNavContainer)
+
+        var nowSelectedNavTab = inSelectedNavTab && nowInNav
+        if (!nowInsideList && state.tabs.size < 16) {
+            val selected = node.isSelected
+            val labelText = node.text?.toString()?.trim().orEmpty()
+                .ifEmpty { node.contentDescription?.toString()?.trim().orEmpty() }
+            if (nowInNav) {
+                if (selected) nowSelectedNavTab = true
+                if (selected || shortId.startsWith("tabbarbutton_") || (nowSelectedNavTab && labelText.isNotEmpty())) {
+                    state.tabs.add(
+                        com.ejemplo.locksuite.mdm.WhatsAppPolicy.TabCandidate(
+                            viewId = shortId,
+                            label = labelText,
+                            isSelected = selected || nowSelectedNavTab,
+                            inNavChrome = true
+                        )
+                    )
+                }
+            } else if (selected) {
+                node.getBoundsInScreen(waTempRect)
+                val inChromeBand = !waTempRect.isEmpty && (
+                    waTempRect.bottom >= (state.rootHeight * 0.84f).toInt() ||
+                        waTempRect.top <= (state.rootHeight * 0.20f).toInt()
+                    )
+                if (inChromeBand) {
+                    nowSelectedNavTab = true
+                    if (labelText.isNotEmpty()) {
+                        state.tabs.add(
+                            com.ejemplo.locksuite.mdm.WhatsAppPolicy.TabCandidate(
+                                viewId = shortId,
+                                label = labelText,
+                                isSelected = true,
+                                inNavChrome = true
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
+            if (state.remainingBudget <= 0) return
+            val child = node.getChild(i) ?: continue
+            try {
+                collectWhatsAppNode(child, depth + 1, nowInNav, nowInsideList, nowSelectedNavTab, state)
+            } finally {
+                child.recycle()
+            }
+        }
     }
 
     private fun clickNodeOrClickableParent(node: AccessibilityNodeInfo?): Boolean {
@@ -2568,102 +2715,72 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 clicked = current.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             }
             current.recycle()
-            if (clicked) return true
+            if (clicked) {
+                parent?.recycle()
+                return true
+            }
             current = parent
             depth++
         }
+        current?.recycle()
         return false
     }
 
-    private class WaTabScanState {
-        var onUpdatesTab = false
-    }
+    private fun findChatsButtonInNav(node: AccessibilityNodeInfo, depth: Int, inNav: Boolean, insideList: Boolean): AccessibilityNodeInfo? {
+        if (depth > 14 || nodeBudget-- <= 0) return null
+        val shortId = com.ejemplo.locksuite.mdm.WhatsAppPolicy.normalizeViewId(node.viewIdResourceName)
+        val cls = node.className?.toString() ?: ""
+        val nowList = insideList || cls.endsWith("RecyclerView") || cls.endsWith("ListView")
+        if (nowList) return null
 
-    /**
-     * Rebote de la pestaña "Novedades" completa.
-     *
-     * DOS CORRECCIONES DEL 17/8/2026 — las dos eran de las que el dueño pidió mirar
-     * ("que no tape de más ni de menos"):
-     *
-     *  1. TAPABA DE MÁS. En WhatsApp moderno, Estados y Canales viven JUNTOS en la
-     *     misma pestaña "Novedades". Esta función recibía `blockStatus` y
-     *     `blockChannels` y NO LOS USABA NUNCA: bastaba con tener uno de los dos
-     *     interruptores encendido para que al usuario lo sacaran de la pestaña
-     *     entera, o sea también de la mitad que sí tenía permitida. Ahora la pestaña
-     *     completa solo se rebota si están bloqueadas LAS DOS cosas. Si el
-     *     administrador bloqueó una sola, la pestaña se puede abrir y el bloqueo
-     *     actúa recién al abrir el estado o el canal concreto, por el nombre de la
-     *     actividad (`classifyWhatsAppContent`), que sí distingue una cosa de la otra.
-     *
-     *  2. TAPABA DE MENOS Y COSTABA CARO. Se hacía un `findAccessibilityNodeInfosByText`
-     *     por cada etiqueta: seis búsquedas completas del árbol en el caso normal
-     *     (el negativo, que es el 99 % de las veces), y solo en español e inglés — en
-     *     un equipo en hebreo, ídish o portugués no bloqueaba nada. Ahora es UN solo
-     *     recorrido, con tope de profundidad y de nodos, que compara contra la lista
-     *     de etiquetas en diez idiomas ya normalizada.
-     */
-    private fun scanForUpdatesTab(blockStatus: Boolean, blockChannels: Boolean) {
-        if (!blockStatus || !blockChannels) return
+        val nowNav = inNav ||
+            shortId in com.ejemplo.locksuite.mdm.WhatsAppPolicy.NAV_CONTAINER_IDS ||
+            shortId.startsWith("tabbarbutton_") ||
+            shortId.startsWith("navigation_bar_item_")
 
-        val root = rootInActiveWindow ?: return
-        try {
-            val rootPkg = root.packageName?.toString() ?: ""
-            if (rootPkg != PKG_WHATSAPP && rootPkg != PKG_WHATSAPP_BUSINESS) return
-
-            val state = WaTabScanState()
-            nodeBudget = MAX_NODES_PER_SCAN
-            scanWhatsAppTabNode(root, 0, state)
-            if (state.onUpdatesTab) {
-                redirectAwayFromUpdatesTab(root)
-            }
-        } finally {
-            root.recycle()
-        }
-    }
-
-    private fun scanWhatsAppTabNode(node: AccessibilityNodeInfo, depth: Int, state: WaTabScanState) {
-        if (state.onUpdatesTab || depth > MAX_TREE_DEPTH) return
-        if (nodeBudget-- <= 0) return
-
-        var matched = false
-        val text = node.text
-        if (text != null && text.isNotEmpty()) {
-            val folded = foldAccents(text)
-            matched = UPDATES_TAB_LABELS.any { containsWholeWord(folded, it) }
-        }
-        if (!matched) {
-            val desc = node.contentDescription
-            if (desc != null && desc.isNotEmpty()) {
-                val folded = foldAccents(desc)
-                matched = UPDATES_TAB_LABELS.any { containsWholeWord(folded, it) }
+        if (nowNav) {
+            val label = node.text?.toString() ?: node.contentDescription?.toString()
+            if (com.ejemplo.locksuite.mdm.WhatsAppPolicy.isChatsTabLabel(label)) {
+                return AccessibilityNodeInfo.obtain(node)
             }
         }
-        // La coincidencia sola no alcanza: la palabra "Estados" también aparece en el
-        // cuerpo de un mensaje. Lo que identifica la pestaña ACTIVA es `isSelected`.
-        if (matched && isSelectedNodeOrAncestor(node)) {
-            state.onUpdatesTab = true
-            return
-        }
 
-        val childCount = node.childCount
-        for (i in 0 until childCount) {
+        val count = node.childCount
+        for (i in 0 until count) {
+            if (nodeBudget <= 0) return null
             val child = node.getChild(i) ?: continue
-            try {
-                scanWhatsAppTabNode(child, depth + 1, state)
+            val hit = try {
+                findChatsButtonInNav(child, depth + 1, nowNav, nowList)
             } finally {
                 child.recycle()
             }
-            if (state.onUpdatesTab) return
+            if (hit != null) return hit
         }
+        return null
     }
 
-    private fun redirectAwayFromUpdatesTab(root: AccessibilityNodeInfo) {
+    private fun redirectAwayFromUpdatesTab(root: AccessibilityNodeInfo, pkg: String, reason: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastWaRedirectAt < 500L) return
+        lastWaRedirectAt = now
+
+        Layer3Audit.anotar(
+            applicationContext, "whatsapp", pkg, "Novedades",
+            "pestaña Novedades restringida ($reason)", true
+        )
+
         var chatsNode: AccessibilityNodeInfo? = null
-        for (label in CHATS_TAB_LABELS) {
-            if (chatsNode != null) break
-            for (node in root.findAccessibilityNodeInfosByText(label)) {
-                if (chatsNode == null) chatsNode = node else node.recycle()
-            }
+        val byId = try {
+            root.findAccessibilityNodeInfosByViewId("$pkg:id/${com.ejemplo.locksuite.mdm.WhatsAppPolicy.ID_TAB_CHATS_RAW}")
+        } catch (_: Exception) {
+            emptyList()
+        }
+        for (n in byId) {
+            if (chatsNode == null) chatsNode = n else n.recycle()
+        }
+        if (chatsNode == null) {
+            nodeBudget = 180
+            chatsNode = findChatsButtonInNav(root, 0, inNav = false, insideList = false)
         }
 
         val clickOk = clickNodeOrClickableParent(chatsNode)
@@ -2672,26 +2789,72 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun triggerWhatsAppBlock(type: String) {
-        if (waBlockInProgress) return
+    private fun triggerWhatsAppBlock(
+        pkg: String,
+        activityClass: String?,
+        decision: com.ejemplo.locksuite.mdm.WhatsAppPolicy.Decision
+    ) {
+        val now = SystemClock.elapsedRealtime()
+        if (waBlockInProgress || now < waBackoffUntil) return
         waBlockInProgress = true
+
+        val tipoLabel = when (decision.action) {
+            com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_CHANNEL -> "Canal"
+            else -> "Estado"
+        }
+        val detail = activityClass?.substringAfterLast('.')?.takeIf { it.isNotEmpty() } ?: tipoLabel
         Layer3Audit.anotar(
-            applicationContext, "whatsapp", PKG_WHATSAPP, null,
-            "sección restringida de WhatsApp: $type", true
+            applicationContext, "whatsapp", pkg, detail,
+            "sección restringida de WhatsApp ($tipoLabel · ${decision.reason})", true
         )
         mainHandler.post {
-            Toast.makeText(applicationContext, "$type bloqueado por políticas del MDM", Toast.LENGTH_SHORT).show()
+            Toast.makeText(applicationContext, "$tipoLabel bloqueado por políticas del MDM", Toast.LENGTH_SHORT).show()
         }
         performGlobalAction(GLOBAL_ACTION_BACK)
+
         mainHandler.postDelayed({
-            val currentRoot = rootInActiveWindow
-            val currentClassName = currentRoot?.className?.toString() ?: lastWaWindowClassName ?: ""
-            currentRoot?.recycle()
-            if (classifyWhatsAppContent(currentClassName) != WhatsAppRestrictedContent.NONE) {
-                performGlobalAction(GLOBAL_ACTION_HOME)
+            try {
+                com.ejemplo.locksuite.util.Safe.guard("a11y.waPostBack") {
+                    val f = flags()
+                    val currentRoot = rootInActiveWindow
+                    val stillBlocked = if (currentRoot == null) {
+                        false
+                    } else {
+                        try {
+                            val currentPkg = currentRoot.packageName?.toString() ?: ""
+                            if (currentPkg != PKG_WHATSAPP && currentPkg != PKG_WHATSAPP_BUSINESS) {
+                                false
+                            } else {
+                                val currentCls = lastWaWindowClassName
+                                val snap = buildWhatsAppSnapshot(currentRoot, currentCls)
+                                val postDec = com.ejemplo.locksuite.mdm.WhatsAppPolicy.evaluate(
+                                    snap, f.waStatus, f.waChannels
+                                )
+                                postDec.action == com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_STATUS ||
+                                    postDec.action == com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_CHANNEL
+                            }
+                        } finally {
+                            currentRoot.recycle()
+                        }
+                    }
+
+                    if (stillBlocked) {
+                        waFailedBounces++
+                        if (waFailedBounces == 1) {
+                            performGlobalAction(GLOBAL_ACTION_BACK)
+                        } else if (waFailedBounces >= 2) {
+                            performGlobalAction(GLOBAL_ACTION_HOME)
+                            waFailedBounces = 0
+                            waBackoffUntil = SystemClock.elapsedRealtime() + 2_500L
+                        }
+                    } else {
+                        waFailedBounces = 0
+                    }
+                }
+            } finally {
+                waBlockInProgress = false
             }
-            waBlockInProgress = false
-        }, 700)
+        }, 500)
     }
 
     // ──────────────────────────────────────────────

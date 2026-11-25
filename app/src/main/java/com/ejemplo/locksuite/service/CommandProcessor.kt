@@ -529,6 +529,26 @@ class CommandProcessor(private val context: Context) {
                     com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
                     true
                 }
+                "START_TEMP_INSTALL_WINDOW" -> {
+                    val durationMs = data["durationMs"]?.toLongOrNull() ?: 0L
+                    if (!com.ejemplo.locksuite.mdm.TempInstallWindowClock.validateDuration(durationMs)) {
+                        commandErrorReason = "Duración inválida (debe ser entre 1 minuto y 30 días)."
+                        false
+                    } else {
+                        val ok = com.ejemplo.locksuite.mdm.TempInstallWindowManager.start(context, durationMs, "panel")
+                        if (!ok) {
+                            commandErrorReason = "No se pudo habilitar la instalación temporal (¿LockSuite suspendido?)."
+                        } else {
+                            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+                        }
+                        ok
+                    }
+                }
+                "STOP_TEMP_INSTALL_WINDOW" -> {
+                    val ok = com.ejemplo.locksuite.mdm.TempInstallWindowManager.stop(context, "cancelado desde el panel")
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+                    ok
+                }
                 "APPLY_PROFILE" -> {
                     val profileId = data["profileId"]
                     if (profileId.isNullOrBlank()) {

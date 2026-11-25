@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
@@ -48,6 +49,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -1224,6 +1226,14 @@ fun PoliciesTabContent(context: Context) {
             if (matchingItems.isEmpty()) null else section.copy(items = matchingItems)
         }
     }
+    val isTempInstallActiveNow = com.ejemplo.locksuite.mdm.TempInstallWindowManager.isActive(context)
+    val showTempInstallCard = isTempInstallActiveNow || (
+        !onlyEnabledPolicies && (
+            normalizedQuery.isBlank() ||
+                normalizePolicySearch("Permitir instalar apps temporal Play Store tiempo desbloquear")
+                    .contains(normalizedQuery)
+            )
+        )
     val showSuspendCard = (normalizedQuery.isBlank() ||
         normalizePolicySearch("Suspender LockSuite Suspensión activa locksuiteSuspended").contains(normalizedQuery)) &&
         (!onlyEnabledPolicies || isSuspendedNow)
@@ -1537,7 +1547,7 @@ fun PoliciesTabContent(context: Context) {
         }
         }
 
-        if (filteredSections.isEmpty() && !showSuspendCard) {
+        if (filteredSections.isEmpty() && !showSuspendCard && !showTempInstallCard) {
             item(key = "policy_empty_state") {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
@@ -1551,6 +1561,12 @@ fun PoliciesTabContent(context: Context) {
                         modifier = Modifier.padding(16.dp)
                     )
                 }
+            }
+        }
+
+        if (showTempInstallCard) {
+            item(key = "temp_install_window") {
+                TempInstallWindowCard(refreshKey = refreshKey, onChanged = { refreshKey++ })
             }
         }
 
@@ -2569,6 +2585,216 @@ private fun InterruptorCompacto(etiqueta: String, activo: Boolean, alCambiar: (B
             labelColor = Color.White
         )
     )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun TempInstallWindowCard(refreshKey: Int, onChanged: () -> Unit) {
+    val context = LocalContext.current
+    var status by remember(refreshKey) {
+        mutableStateOf(com.ejemplo.locksuite.mdm.TempInstallWindowManager.statusForSync(context))
+    }
+    var remainingMs by remember(status.active, status.deadlineWall, refreshKey) {
+        mutableLongStateOf(status.remainingMs)
+    }
+    var amountText by remember { mutableStateOf("30") }
+    var unitMultiplierMs by remember { mutableLongStateOf(60_000L) } // 60_000 = Min, 3_600_000 = H, 86_400_000 = D
+
+    LaunchedEffect(status.active, status.deadlineWall, refreshKey) {
+        while (status.active) {
+            val rem = com.ejemplo.locksuite.mdm.TempInstallWindowManager.remainingMs(context)
+            remainingMs = rem
+            if (rem <= 0L) {
+                com.ejemplo.locksuite.mdm.TempInstallWindowManager.checkAndExpire(context)
+                status = com.ejemplo.locksuite.mdm.TempInstallWindowManager.statusForSync(context)
+                onChanged()
+                break
+            }
+            kotlinx.coroutines.delay(1_000L)
+        }
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = if (status.active) Color(0xFF1D2C24) else Color(0xFF1A222C)
+        ),
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = if (status.active) "⏱️ Instalación temporal ACTIVA" else "⏱️ Permitir instalar apps (temporal)",
+                    color = if (status.active) Color(0xFF58D68D) else Color(0xFFF5C438),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Text(
+                text = "Desbloquea Play Store y desactiva las restricciones de instalación durante el tiempo elegido. Al finalizar, todo vuelve automáticamente a su configuración anterior.",
+                color = Color.White.copy(alpha = 0.75f),
+                fontSize = 12.sp
+            )
+
+            if (status.active) {
+                val formattedDeadline = remember(status.deadlineWall) {
+                    java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+                        .format(java.util.Date(status.deadlineWall))
+                }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF27AE60).copy(alpha = 0.18f))
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "Restante: ${com.ejemplo.locksuite.mdm.TempInstallWindowClock.formatRemaining(remainingMs)}",
+                        color = Color(0xFF82E0AA),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = "Se vuelve a bloquear: $formattedDeadline",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 12.sp
+                    )
+                }
+                Button(
+                    onClick = {
+                        com.ejemplo.locksuite.mdm.TempInstallWindowManager.stop(context, "cancelado desde el celular")
+                        Toast.makeText(context, "Instalación temporal cerrada. Restricciones restauradas.", Toast.LENGTH_SHORT).show()
+                        onChanged()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC0392B), contentColor = Color.White),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("🔒 Bloquear ahora", fontWeight = FontWeight.Bold)
+                }
+            } else if (status.lastCloseReason.isNotBlank()) {
+                Text(
+                    text = "Último cierre: ${status.lastCloseReason}",
+                    color = Color.White.copy(alpha = 0.55f),
+                    fontSize = 11.sp
+                )
+            }
+
+            // Presets rápidos
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                val presets = listOf(
+                    Triple("15 min", "15", 60_000L),
+                    Triple("30 min", "30", 60_000L),
+                    Triple("1 h", "1", 3_600_000L),
+                    Triple("2 h", "2", 3_600_000L),
+                    Triple("24 h", "24", 3_600_000L)
+                )
+                presets.forEach { (label, amt, mult) ->
+                    val selected = amountText == amt && unitMultiplierMs == mult
+                    FilterChip(
+                        selected = selected,
+                        onClick = {
+                            amountText = amt
+                            unitMultiplierMs = mult
+                        },
+                        label = { Text(label, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = Color(0xFF0E141B),
+                            labelColor = Color.White.copy(alpha = 0.85f),
+                            selectedContainerColor = Color(0xFFF5C438),
+                            selectedLabelColor = Color(0xFF0E141B)
+                        )
+                    )
+                }
+            }
+
+            // Cantidad + Unidad
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { raw ->
+                        val digits = raw.filter { it.isDigit() }
+                        if (digits.length <= 5) amountText = digits
+                    },
+                    label = { Text("Tiempo", fontSize = 11.sp) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFFF5C438),
+                        unfocusedBorderColor = Color.White.copy(alpha = 0.4f),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+                listOf(
+                    "Min" to 60_000L,
+                    "Hs" to 3_600_000L,
+                    "Días" to 86_400_000L
+                ).forEach { (uLabel, mult) ->
+                    FilterChip(
+                        selected = unitMultiplierMs == mult,
+                        onClick = { unitMultiplierMs = mult },
+                        label = { Text(uLabel, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = Color(0xFF0E141B),
+                            labelColor = Color.White.copy(alpha = 0.85f),
+                            selectedContainerColor = Color(0xFFF5C438),
+                            selectedLabelColor = Color(0xFF0E141B)
+                        )
+                    )
+                }
+            }
+
+            Button(
+                onClick = {
+                    val amount = amountText.toLongOrNull() ?: 0L
+                    val durationMs = amount * unitMultiplierMs
+                    if (!com.ejemplo.locksuite.mdm.TempInstallWindowClock.validateDuration(durationMs)) {
+                        Toast.makeText(
+                            context,
+                            "Elegí una duración entre 1 minuto y 30 días.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        val ok = com.ejemplo.locksuite.mdm.TempInstallWindowManager.start(context, durationMs, "celular")
+                        if (ok) {
+                            Toast.makeText(
+                                context,
+                                "🔓 Play Store e instalación habilitados por ${com.ejemplo.locksuite.mdm.TempInstallWindowClock.formatRemaining(durationMs)}.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            onChanged()
+                        } else {
+                            Toast.makeText(
+                                context,
+                                "No se pudo habilitar (¿LockSuite está suspendido?).",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C438), contentColor = Color(0xFF0E141B)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    if (status.active) "🔄 Reiniciar con este tiempo" else "🔓 Permitir instalar apps",
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
 }
 
 /**

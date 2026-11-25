@@ -1063,14 +1063,32 @@
         (exitTs ? " (" + LS.fecha(exitTs) + ")" : "") + (det ? " — " + det : "")]);
     }
     const alta = campo("enrollmentPending", false) === true;
+    const tempInstActiva = campo("tempInstallActive", false) === true;
+    const tempInstHasta = campo("tempInstallDeadline", 0);
+    const tempInstRem = campo("tempInstallRemainingMs", tempInstHasta ? Math.max(0, tempInstHasta - Date.now()) : 0);
+    const tempInstVisible = tempInstActiva && (!tempInstHasta || tempInstHasta > Date.now());
     $("c-alertas").innerHTML = avisos.map(([cls, txt]) =>
       '<div class="ls-card ls-alert ' + cls + '">' + esc(txt) + "</div>").join("") +
+      (tempInstVisible
+        ? '<div class="ls-card ls-alert warn">⏱️ <b>Instalación temporal activa</b>: Google Play y la instalación de apps están habilitadas' +
+          (tempInstRem > 0 ? " por <b>" + esc(hace(tempInstRem)) + "</b>" : "") +
+          (tempInstHasta ? " (vence " + esc(LS.fecha(tempInstHasta)) + ")" : "") +
+          '. <button class="ls-btn ls-btn-sm" id="c-temp-inst-alerta-stop" style="margin-left:8px">🔒 Bloquear ahora</button></div>'
+        : "") +
       // B.98: "Terminar un alta" estaba solo en la pestaña de QR del panel.
       (alta
         ? '<div class="ls-card ls-alert warn">Este equipo tiene un <b>alta a medio terminar</b>: falta ' +
           'bloquear el cambio de cuentas y de idioma. Hacelo cuando la cuenta de Google y el idioma ya ' +
           'estén como tienen que quedar. <button class="ls-btn ls-btn-sm" id="c-alta-btn" style="margin-left:8px">✔ Terminar alta</button></div>'
         : "");
+    if (tempInstVisible) {
+      $("c-temp-inst-alerta-stop").addEventListener("click", async function () {
+        this.disabled = true;
+        const r = await LS.sendCommand(deviceId, "STOP_TEMP_INSTALL_WINDOW", null, null, opc());
+        this.disabled = false;
+        LS.toast(...LS.resultado(r, "Instalación temporal cerrada. Restricciones restauradas."));
+      });
+    }
     if (alta) {
       $("c-alta-btn").addEventListener("click", async function () {
         if (!confirm("¿Terminar el alta de " + nombreDispositivo() + "?\n\nSe bloquea el cambio de cuentas y de idioma.")) return;
@@ -1276,6 +1294,81 @@
       LS.toast(...LS.resultado(r, "Vencimiento cancelado."));
     });
   }
+
+  function pintarTempInstall() {
+    const cont = $("c-pol-temp-install");
+    if (!cont) return;
+    const activa = campo("tempInstallActive", false) === true;
+    const hasta = campo("tempInstallDeadline", 0);
+    const remRaw = campo("tempInstallRemainingMs", null);
+    const faltan = activa
+      ? Math.max(0, hasta ? Math.min(hasta - Date.now(), remRaw != null ? Number(remRaw) : Infinity) : Number(remRaw) || 0)
+      : 0;
+    const ultimoCierre = campo("tempInstallLastCloseReason", "");
+    if (!cambio("tempInstall", [activa, hasta, Math.floor(faltan / 15000), ultimoCierre])) return;
+
+    const amtPrev = $("c-ti-amt") ? $("c-ti-amt").value : "30";
+    const unitPrev = $("c-ti-unit") ? $("c-ti-unit").value : "60000";
+
+    cont.innerHTML =
+      "<h3>" + (activa ? "⏱️ Instalación temporal ACTIVA" : "⏱️ Permitir instalar apps (temporal)") + "</h3>" +
+      '<p class="ls-hint">Desbloquea Google Play Store y desactiva las restricciones de instalación durante el tiempo que elijas. Al vencer ese tiempo, todo vuelve automáticamente a su configuración anterior.</p>' +
+      (activa && faltan > 0
+        ? '<div class="ls-card ls-alert warn" style="margin:0 0 12px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap">' +
+          '<span>Faltan <b>' + esc(hace(faltan)) + "</b>" +
+          (hasta ? " · vence " + esc(LS.fecha(hasta)) : "") + "</span>" +
+          '<button class="ls-btn ls-btn-danger ls-btn-sm" id="c-ti-stop">🔒 Bloquear ahora</button></div>'
+        : (ultimoCierre ? '<p class="ls-hint" style="margin:-4px 0 10px">Último cierre: ' + esc(String(ultimoCierre)) + "</p>" : "")) +
+      '<div class="ls-row" style="gap:6px; margin-bottom:10px; flex-wrap:wrap">' +
+      '<button type="button" class="ls-btn ls-btn-sm" data-ti-amt="15" data-ti-unit="60000">15 min</button>' +
+      '<button type="button" class="ls-btn ls-btn-sm" data-ti-amt="30" data-ti-unit="60000">30 min</button>' +
+      '<button type="button" class="ls-btn ls-btn-sm" data-ti-amt="1" data-ti-unit="3600000">1 h</button>' +
+      '<button type="button" class="ls-btn ls-btn-sm" data-ti-amt="2" data-ti-unit="3600000">2 h</button>' +
+      '<button type="button" class="ls-btn ls-btn-sm" data-ti-amt="24" data-ti-unit="3600000">24 h</button>' +
+      "</div>" +
+      '<div class="ls-row">' +
+      '<input class="ls-input" id="c-ti-amt" type="number" min="1" max="43200" value="' + esc(amtPrev) + '" style="width:96px" />' +
+      '<select class="ls-select" id="c-ti-unit">' +
+      '<option value="60000"' + (unitPrev === "60000" ? " selected" : "") + ">Minutos</option>" +
+      '<option value="3600000"' + (unitPrev === "3600000" ? " selected" : "") + ">Horas</option>" +
+      '<option value="86400000"' + (unitPrev === "86400000" ? " selected" : "") + ">Días</option>" +
+      "</select>" +
+      '<button type="button" class="ls-btn ls-btn-primary" id="c-ti-start">' +
+      (activa ? "🔄 Reiniciar tiempo" : "🔓 Permitir instalación temporal") + "</button>" +
+      "</div>";
+  }
+
+  $("c-pol-temp-install").addEventListener("click", async (e) => {
+    const preset = e.target.closest("[data-ti-amt]");
+    if (preset) {
+      if ($("c-ti-amt")) $("c-ti-amt").value = preset.dataset.tiAmt;
+      if ($("c-ti-unit")) $("c-ti-unit").value = preset.dataset.tiUnit;
+      return;
+    }
+    if (e.target.id === "c-ti-stop") {
+      e.target.disabled = true;
+      const r = await LS.sendCommand(deviceId, "STOP_TEMP_INSTALL_WINDOW", null, null, opc());
+      e.target.disabled = false;
+      LS.toast(...LS.resultado(r, "Instalación temporal cerrada. Restricciones restauradas."));
+      return;
+    }
+    if (e.target.id === "c-ti-start") {
+      const amt = Number(($("c-ti-amt") || {}).value);
+      const unit = Number(($("c-ti-unit") || {}).value);
+      const durationMs = Math.round(amt * unit);
+      if (!Number.isFinite(durationMs) || durationMs < 60000 || durationMs > 30 * 24 * 3600000) {
+        LS.toast("Elegí una duración entre 1 minuto y 30 días.", "error");
+        return;
+      }
+      if (!confirm("¿Desbloquear Google Play Store y permitir instalar apps durante " + hace(durationMs) + "?\n\nAl vencer ese tiempo todo vuelve solo a su bloqueo anterior.")) {
+        return;
+      }
+      e.target.disabled = true;
+      const r = await LS.sendCommand(deviceId, "START_TEMP_INSTALL_WINDOW", null, { durationMs: durationMs }, opc());
+      e.target.disabled = false;
+      LS.toast(...LS.resultado(r, "Instalación temporal habilitada por " + hace(durationMs) + "."));
+    }
+  });
 
   function pintarPresets() {
     const keys = Object.keys(S.presets);
@@ -1548,9 +1641,11 @@
     const vend = S.instaladas[PKG_PLAY] || null;
     const bloqueoInstalacion = campo("installAppsBlocked", false) === true;
     const ocultarIconos = campo("hideSuspendedApps", false) === true;
+    const tempInstActiva = campo("tempInstallActive", false) === true;
+    const tempInstHasta = campo("tempInstallDeadline", 0);
     const espera = Object.keys(S.ui.esperando).filter((k) => k.startsWith(PKG_PLAY + "|") || k === "hideSuspended")
       .map((k) => [k, S.ui.esperando[k].quiere]);
-    if (!cambio("play", [vend, bloqueoInstalacion, ocultarIconos, espera]) && !forzar) return;
+    if (!cambio("play", [vend, bloqueoInstalacion, ocultarIconos, espera, tempInstActiva, tempInstHasta]) && !forzar) return;
 
     const fila = (def) => {
       // Sin datos de la app se muestra lo que implica el bloqueo de instalación, como la vista rápida.
@@ -1567,6 +1662,11 @@
     const eIco = esperandoDe("hideSuspended", "x", ocultarIconos);
     $("c-play").innerHTML =
       "<h3>Google Play Store</h3>" +
+      (tempInstActiva
+        ? '<p class="ls-alert warn" style="padding:8px 10px; border-radius:8px; margin-bottom:10px">⏱️ <b>Abierta temporalmente</b>' +
+          (tempInstHasta ? " hasta " + esc(LS.fecha(tempInstHasta)) : "") +
+          '. <a href="#politicas" data-ir="politicas">Gestionar en Políticas</a></p>'
+        : "") +
       '<p class="ls-hint">Se controla aparte del resto porque es la puerta de entrada de todas las apps. ' +
       "Mientras dura una actualización por Google Play, LockSuite la destapa sola y la vuelve a cerrar al terminar." +
       (vend && versionDe(vend) ? " Versión en el equipo: " + esc(versionDe(vend)) + "." : "") + "</p>" +
@@ -2855,6 +2955,7 @@
     pintarEspeciales();
     pintarPerfiles();
     pintarGracia();
+    pintarTempInstall();
     pintarPresets();
     pintarPlayStore();
     pintarInstaladas();

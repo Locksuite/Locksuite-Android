@@ -226,6 +226,11 @@ class WatchdogForegroundService : Service() {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+            try {
+                com.ejemplo.locksuite.mdm.TempInstallWindowManager.checkAndExpire(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
 
             // ── BATERÍA (2/9/2026) ────────────────────────────────────────────────────
             // Los dos bloques de abajo hacían un startForegroundService() en CADA ciclo de

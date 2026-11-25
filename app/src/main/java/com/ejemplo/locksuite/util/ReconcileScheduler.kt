@@ -111,6 +111,11 @@ object ReconcileScheduler {
             android.util.Log.e("ReconcileScheduler", "checkAndHarden: ${e.message}")
         }
         try {
+            com.ejemplo.locksuite.mdm.TempInstallWindowManager.checkAndExpire(app)
+        } catch (e: Exception) {
+            android.util.Log.e("ReconcileScheduler", "tempInstall: ${e.message}")
+        }
+        try {
             FirebaseDeviceSync.requestSync(app)
         } catch (e: Exception) {
             android.util.Log.e("ReconcileScheduler", "requestSync: ${e.message}")

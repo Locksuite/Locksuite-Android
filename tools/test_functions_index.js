@@ -503,6 +503,28 @@ test("classicStoreApk deleteObject rechaza traversal y borra rutas validas", asy
   assert.strictEqual(state.storageOps[0].op, "delete");
   assert.strictEqual(state.storageOps[0].bucketName, "locksuite-nueva-store-apks");
 });
+test("START_TEMP_INSTALL_WINDOW y STOP_TEMP_INSTALL_WINDOW exigen PIN, validan duracion y comparten familia en buzon", async () => {
+  seedWorld();
+  const bad = await send({ deviceId: DEV, devicePin: PIN, command: "START_TEMP_INSTALL_WINDOW", durationMs: 5000 });
+  assert.strictEqual(bad.statusCode, 400);
+
+  const noPin = await send({ deviceId: DEV, command: "START_TEMP_INSTALL_WINDOW", durationMs: 30 * 60 * 1000 });
+  assert.strictEqual(noPin.statusCode, 412);
+
+  const okStart = await send({ deviceId: DEV, devicePin: PIN, command: "START_TEMP_INSTALL_WINDOW", durationMs: 30 * 60 * 1000 });
+  assert.strictEqual(okStart.statusCode, 200, JSON.stringify(okStart.body));
+  assert.strictEqual(state.fcm[state.fcm.length - 1].data.durationMs, "1800000");
+
+  const pend1 = Object.values(getAt(state.db, `devices/${DEV}/pendingCommands`) || {});
+  assert.strictEqual(pend1.filter(x => x.family === "TEMP_INSTALL_WINDOW").length, 1);
+
+  const okStop = await send({ deviceId: DEV, devicePin: PIN, command: "STOP_TEMP_INSTALL_WINDOW" });
+  assert.strictEqual(okStop.statusCode, 200, JSON.stringify(okStop.body));
+  const pend2 = Object.values(getAt(state.db, `devices/${DEV}/pendingCommands`) || {});
+  const fam2 = pend2.filter(x => x.family === "TEMP_INSTALL_WINDOW");
+  assert.strictEqual(fam2.length, 1);
+  assert.strictEqual(fam2[0].data.command, "STOP_TEMP_INSTALL_WINDOW");
+});
 
 (async () => {
   for (const t of pending) await t();

@@ -187,7 +187,8 @@ class AppController(private val context: Context) {
             val browsersSuspended = prefs.getBoolean("browsers_suspended", false)
             val webViewSuspended = prefs.getBoolean("system_webview_suspended", false)
             val installInProgress = prefs.getBoolean("mdm_install_in_progress", false)
-            val playStoreSuspended = !installInProgress &&
+            val tempInstallActive = TempInstallWindowManager.isActive(context)
+            val playStoreSuspended = !installInProgress && !tempInstallActive &&
                 prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
             val browserPackages = if (browsersSuspended) {
                 PolicyManager(context).getBrowserPackagesForReconcile()
@@ -262,10 +263,11 @@ class AppController(private val context: Context) {
         // curso — ocultarla la cierra en el acto y el flujo queda reabriéndola sin fin. Se
         // anota la intención y la aplica el cierre del flujo (restoreInstallRestrictions).
         if (hide && packageName == PKG_PLAY_STORE &&
-            com.ejemplo.locksuite.util.UpdateFlowManager.mustKeepPlayStoreOpen(context)
+            (com.ejemplo.locksuite.util.UpdateFlowManager.mustKeepPlayStoreOpen(context) ||
+                TempInstallWindowManager.isActive(context))
         ) {
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("hide_$packageName", true).apply()
-            android.util.Log.i("AppController", "Ocultar Google Play: diferido hasta que termine la actualización en curso")
+            android.util.Log.i("AppController", "Ocultar Google Play: diferido hasta que termine la actualización o ventana temporal")
             return true
         }
         if (isCritical(packageName) || isPartialBlockOnly(packageName)) {
@@ -325,10 +327,11 @@ class AppController(private val context: Context) {
         // actualización por Google Play ("app en pausa" en vez de la ficha). Queda la
         // intención; la aplica el cierre del flujo.
         if (suspend && packageName == PKG_PLAY_STORE &&
-            com.ejemplo.locksuite.util.UpdateFlowManager.mustKeepPlayStoreOpen(context)
+            (com.ejemplo.locksuite.util.UpdateFlowManager.mustKeepPlayStoreOpen(context) ||
+                TempInstallWindowManager.isActive(context))
         ) {
             prefs.edit().putBoolean("suspend_$packageName", true).apply()
-            android.util.Log.i("AppController", "Suspender Google Play: diferido hasta que termine la actualización en curso")
+            android.util.Log.i("AppController", "Suspender Google Play: diferido hasta que termine la actualización o ventana temporal")
             return true
         }
         if (isCritical(packageName) || isPartialBlockOnly(packageName)) {

@@ -76,6 +76,16 @@ class PackageReceiver : BroadcastReceiver() {
         
             val prefs = PrefsHelper.getMdmPrefs(context)
 
+            if (action == com.ejemplo.locksuite.mdm.TempInstallWindowManager.ACTION_EXPIRED) {
+                Log.i("PackageReceiver", "🔒 Alarma de ventana temporal de instalación alcanzada. Cerrando...")
+                try {
+                    com.ejemplo.locksuite.mdm.TempInstallWindowManager.checkAndExpire(context)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                return
+            }
+
             if (action == "INSTALL_SAFETY_TIMEOUT") {
                 Log.w("PackageReceiver", "⏰ Timeout de seguridad de instalación alcanzado. Restaurando restricciones MDM...")
                 try {
@@ -133,7 +143,8 @@ class PackageReceiver : BroadcastReceiver() {
 
             if (action == Intent.ACTION_PACKAGE_ADDED && !isReplacing) {
                 val isInstallBlocked = prefs.getBoolean("install_apps_blocked_admin", false) || prefs.getBoolean("install_blocked_programmatic", false)
-                if (isInstallBlocked) {
+                val isTempInstallActive = com.ejemplo.locksuite.mdm.TempInstallWindowManager.isActive(context)
+                if (isInstallBlocked && !isTempInstallActive) {
                     val allowed = prefs.getStringSet("allowed_packages", null) ?: emptySet()
                     val appController = AppController(context)
                     val isSystemApp = try {
@@ -215,9 +226,10 @@ class PackageReceiver : BroadcastReceiver() {
                 // "hiding pkg" en 2 minutos). Mientras dura una actualización por Google Play no
                 // se toca: la vuelve a bloquear el cierre del flujo, como siempre.
                 val playStoreDelFlujo = packageName == "com.android.vending" &&
-                    UpdateFlowManager.mustKeepPlayStoreOpen(context)
+                    (UpdateFlowManager.mustKeepPlayStoreOpen(context) ||
+                        com.ejemplo.locksuite.mdm.TempInstallWindowManager.isActive(context))
                 if (playStoreDelFlujo) {
-                    Log.i("PackageReceiver", "Google Play destapada por la actualización en curso: no se re-bloquea ahora")
+                    Log.i("PackageReceiver", "Google Play destapada por actualización o ventana temporal: no se re-bloquea ahora")
                 }
 
                 // Re-suspender de forma inmediata el paquete si fue instalado o actualizado y debe estar suspendido

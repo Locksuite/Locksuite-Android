@@ -101,6 +101,7 @@ const ALLOWED_COMMANDS = new Set([
   // Cancelar el periodo de gracia (Nivel 4) sin aplicar el perfil de cierre. Ver
   // app/mdm/GracePeriodManager.kt. Exige PIN como el resto.
   "CANCEL_GRACE_PERIOD",
+  "START_TEMP_INSTALL_WINDOW", "STOP_TEMP_INSTALL_WINDOW",
   // ── SOLICITUDES DE APPS (10/9/2026, B.59) — ver app/mdm/AppRequestManager.kt ──
   // Avisa al equipo de que un pedido suyo fue contestado, para que le muestre el
   // aviso al usuario. NO cambia ninguna politica por si mismo: lo que abre una app
@@ -294,6 +295,7 @@ function commandFamily(command, packages) {
     [/^SET_WHITELIST_(SIMULATION|ENFORCE)$/, "SET_WHITELIST_SIM"],
     [/^(SET_DOMAIN_RULE_.*|REMOVE_DOMAIN_RULE)$/, "DOMAIN_RULE"],
     [/^APPLY_(PRESET_PROFILE|MASTER_PROFILE|PROFILE)$/, "APPLY_ANY_PROFILE"],
+    [/^(START|STOP)_TEMP_INSTALL_WINDOW$/, "TEMP_INSTALL_WINDOW"],
   ];
   let fam = String(command);
   for (const [re, rep] of reglas) {
@@ -314,6 +316,7 @@ const ACTION_COMMANDS = new Set([
   "SYNC_WHITELIST", "SYNC_APP_REQUESTS", "CLEAR_WHITELIST_AUDIT", "CLEAR_IAB_AUDIT",
   // "Releé la tienda": el equipo lee el catálogo VIGENTE, no el de cuando se mandó.
   "SYNC_PLAY_STORE",
+  "START_TEMP_INSTALL_WINDOW", "STOP_TEMP_INSTALL_WINDOW",
   // Un diagnóstico pedido y no levantado en un día ya no describe el problema que se reportó.
   "COLLECT_DIAGNOSTICS",
 ]);
@@ -444,7 +447,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
 
     const {
       deviceId, command, packages, devicePin, rememberDevice, newPin,
-      enabled, presetJson, profileId, level, graceMs, graceTarget, route, storeMode
+      enabled, presetJson, profileId, level, graceMs, graceTarget, durationMs, route, storeMode
     } = req.body || {};
 
     if (!deviceId || typeof deviceId !== "string" || !DEVICE_ID_RE.test(deviceId)) {
@@ -614,6 +617,17 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
         payload.graceMs = String(Math.round(ms));
         payload.graceTarget = destino;
       }
+    } else if (command === "START_TEMP_INSTALL_WINDOW") {
+      const ms = Number(durationMs);
+      const UN_MINUTO = 60 * 1000;
+      const TREINTA_DIAS = 30 * 24 * 60 * 60 * 1000;
+      if (!Number.isFinite(ms) || ms < UN_MINUTO || ms > TREINTA_DIAS) {
+        res.status(400).json({
+          error: "La duracion para permitir instalar apps debe estar entre 1 minuto y 30 dias.",
+        });
+        return;
+      }
+      payload.durationMs = String(Math.round(ms));
     } else if (command === "APPLY_PROFILE") {
       // Solo el id: el perfil se lee de globalSettings/profiles/<id> desde el
       // celular. El formato se valida para no armar una ruta de Firebase invalida

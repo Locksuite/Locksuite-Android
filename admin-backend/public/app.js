@@ -592,6 +592,11 @@ function updateSidebarUI(e, t) {
     } catch (err) {
         console.warn("canal de comandos: no se pudo dibujar", err);
     }
+    try {
+        updateTempInstallUI(t);
+    } catch (err) {
+        console.warn("temp install ui: no se pudo dibujar", err);
+    }
 
     // ── Resumen y auditoría de la lista blanca ──
     try {
@@ -1935,6 +1940,87 @@ if (sidebarDiagUploadToggle) {
         runCommandOnDevice(selectedDeviceId, "SET_DIAGNOSTICS_UPLOAD", null, sidebarDiagUploadToggle, () => {
             sidebarDiagUploadToggle.checked = !e;
         }, { enabled: e });
+    });
+}
+
+function formatTempInstallRemaining(ms) {
+    const s = Math.max(0, Math.floor(Number(ms) / 1000));
+    if (s < 60) return `${s} s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m} min`;
+    const h = Math.floor(m / 60);
+    const remM = m % 60;
+    if (h < 24) return remM ? `${h} h ${remM} min` : `${h} h`;
+    const d = Math.floor(h / 24);
+    const remH = h % 24;
+    return remH ? `${d} d ${remH} h` : `${d} d`;
+}
+
+function updateTempInstallUI(deviceData) {
+    const box = document.getElementById("temp-install-status");
+    const startBtn = document.getElementById("temp-install-start-btn");
+    if (!box) return;
+    const activa = field(deviceData, "tempInstallActive", false) === true;
+    const deadline = Number(field(deviceData, "tempInstallDeadline", 0)) || 0;
+    const remRaw = field(deviceData, "tempInstallRemainingMs", null);
+    const rem = activa
+        ? (deadline > 0 ? Math.max(0, Math.min(deadline - Date.now(), remRaw != null ? Number(remRaw) : Infinity)) : Number(remRaw) || 0)
+        : 0;
+    const lastReason = field(deviceData, "tempInstallLastCloseReason", "");
+
+    if (activa && rem > 0) {
+        const vence = deadline > 0 ? new Date(deadline).toLocaleString("es-AR", {
+            day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"
+        }) : "";
+        box.innerHTML =
+            `<div style="background:rgba(46,204,113,0.14); border:1px solid rgba(46,204,113,0.4); border-radius:8px; padding:9px; font-size:12px;">` +
+            `<div style="color:#58D68D; font-weight:bold;">🔓 Habilitado ahora — faltan ${escapeHtml(formatTempInstallRemaining(rem))}</div>` +
+            (vence ? `<div style="color:var(--text-gray); font-size:11px; margin-top:2px;">Se cierra solo: ${escapeHtml(vence)}</div>` : "") +
+            `<button type="button" id="temp-install-stop-btn" class="action-btn" style="margin-top:8px; width:100%; background:#c0392b; color:#fff; border:none; padding:7px 10px; border-radius:7px; cursor:pointer; font-size:12px; font-weight:bold;">🔒 Bloquear ahora</button>` +
+            `</div>`;
+        if (startBtn) startBtn.textContent = "🔄 Reiniciar";
+        const stopBtn = document.getElementById("temp-install-stop-btn");
+        if (stopBtn) {
+            stopBtn.addEventListener("click", () => {
+                if (!selectedDeviceId) return;
+                runCommandOnDevice(selectedDeviceId, "STOP_TEMP_INSTALL_WINDOW", null, stopBtn);
+            });
+        }
+    } else {
+        box.innerHTML = lastReason
+            ? `<div style="font-size:11px; color:var(--text-gray);">Inactivo · último cierre: ${escapeHtml(String(lastReason))}</div>`
+            : "";
+        if (startBtn) startBtn.textContent = "🔓 Permitir";
+    }
+}
+
+document.querySelectorAll(".temp-install-preset").forEach(btn => {
+    btn.addEventListener("click", () => {
+        const amtEl = document.getElementById("temp-install-amount");
+        const unitEl = document.getElementById("temp-install-unit");
+        if (amtEl) amtEl.value = btn.getAttribute("data-amt") || "30";
+        if (unitEl) unitEl.value = btn.getAttribute("data-unit") || "60000";
+    });
+});
+
+const tempInstallStartBtn = document.getElementById("temp-install-start-btn");
+if (tempInstallStartBtn) {
+    tempInstallStartBtn.addEventListener("click", () => {
+        if (!selectedDeviceId) return;
+        const amt = Number((document.getElementById("temp-install-amount") || {}).value);
+        const unit = Number((document.getElementById("temp-install-unit") || {}).value);
+        const durationMs = Math.round(amt * unit);
+        const MIN = 60 * 1000;
+        const MAX = 30 * 24 * 60 * 60 * 1000;
+        if (!Number.isFinite(durationMs) || durationMs < MIN || durationMs > MAX) {
+            alert("Elegí una duración entre 1 minuto y 30 días.");
+            return;
+        }
+        const legible = formatTempInstallRemaining(durationMs);
+        if (!confirm(`¿Desbloquear Google Play Store y permitir instalar apps durante ${legible}?\n\nAl vencer ese tiempo todo vuelve automáticamente a su bloqueo anterior.`)) {
+            return;
+        }
+        runCommandOnDevice(selectedDeviceId, "START_TEMP_INSTALL_WINDOW", null, tempInstallStartBtn, null, { durationMs });
     });
 }
 const quickPolicySearch = document.getElementById("quick-policy-search");

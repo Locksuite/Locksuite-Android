@@ -775,6 +775,7 @@ object FirebaseDeviceSync {
 
     fun syncDeviceInfo(context: Context) {
         val policyManager = PolicyManager(context)
+        val tempInstall = com.ejemplo.locksuite.mdm.TempInstallWindowManager.statusForSync(context)
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
         val prefs = PrefsHelper.getMdmPrefs(context)
 
@@ -961,6 +962,12 @@ object FirebaseDeviceSync {
                     "graceStartedAt" to com.ejemplo.locksuite.mdm.GracePeriodManager.startedAt(context),
                     "graceTargetProfile" to com.ejemplo.locksuite.mdm.GracePeriodManager.targetProfile(context),
                     "graceLastCloseReason" to com.ejemplo.locksuite.mdm.GracePeriodManager.lastCloseReason(context),
+                    "tempInstallActive" to tempInstall.active,
+                    "tempInstallRemainingMs" to tempInstall.remainingMs,
+                    "tempInstallDeadline" to tempInstall.deadlineWall,
+                    "tempInstallStartedAt" to tempInstall.startedAtWall,
+                    "tempInstallDurationMs" to tempInstall.durationMs,
+                    "tempInstallLastCloseReason" to tempInstall.lastCloseReason,
                     "captivePortalGuard" to policyManager.isCaptivePortalGuardEnabled(),
                     "captivePortalCoverImages" to policyManager.isCaptivePortalCoverImagesEnabled(),
                     "captivePortalOpens" to policyManager.getCaptivePortalOpens(),

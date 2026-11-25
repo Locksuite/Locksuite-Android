@@ -87,6 +87,11 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+            try {
+                com.ejemplo.locksuite.mdm.TempInstallWindowManager.checkAndExpire(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
