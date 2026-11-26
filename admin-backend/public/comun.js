@@ -448,6 +448,40 @@
     return callClassicStoreFn({ action: "deleteObject", objectPath });
   };
 
+  /* ─────────────────────────────────────────────────────────────────────────
+   * TIENDA AURORA — Descarga FDFE desde Google Play en servidor (B.132).
+   * ───────────────────────────────────────────────────────────────────────── */
+  const URL_AURORA_STORE = "https://aurorastore-5i52mt6h3q-uc.a.run.app";
+  LS.URL_AURORA_STORE = URL_AURORA_STORE;
+
+  async function callAuroraStoreFn(body) {
+    if (!LS.auth.currentUser) throw new Error("Sesión no iniciada.");
+    const idToken = await LS.auth.currentUser.getIdToken();
+    let res;
+    try {
+      res = await fetch(URL_AURORA_STORE, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + idToken },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      throw new Error("no se pudo hablar con el servidor: " + e.message);
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || ("HTTP " + res.status));
+    }
+    return data;
+  }
+
+  LS.auroraGetStatus = () => callAuroraStoreFn({ action: "getStatus" });
+  LS.auroraSaveConfig = (payload) => callAuroraStoreFn(Object.assign({ action: "saveConfig" }, payload || {}));
+  LS.auroraClearConfig = () => callAuroraStoreFn({ action: "clearConfig" });
+  LS.auroraTestAuth = (packageName) => callAuroraStoreFn({ action: "testAuth", packageName: packageName || "com.whatsapp" });
+  LS.auroraSyncPackage = (packageName, force) => callAuroraStoreFn({ action: "syncPackage", packageName, force: !!force });
+  LS.auroraSyncCatalog = (opts) => callAuroraStoreFn(Object.assign({ action: "syncCatalog" }, opts || {}));
+  LS.auroraDeletePackage = (packageName) => callAuroraStoreFn({ action: "deletePackage", packageName });
+
   LS.uploadToSignedUrl = function (uploadUrl, file, onProgress, contentType) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();

@@ -230,6 +230,77 @@
         </div>
       </details>
 
+      <!-- Tienda Aurora: tercera tienda con descarga oficial en servidor + instalación silenciosa -->
+      <section class="ls-card" id="secAurora" style="margin-top:24px; border-left:4px solid #06B6D4">
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+          <h3 style="margin:0">✨ Tienda Aurora (instalación directa silenciosa)</h3>
+          <span class="ls-chip warn" id="au-auth-chip">verificando…</span>
+          <div class="ls-top-spacer"></div>
+          <button type="button" class="ls-btn ls-btn-sm" id="au-refresh">↻ Actualizar estado</button>
+          <button type="button" class="ls-btn ls-btn-sm ls-btn-primary" id="au-sync-all">⬇ Sincronizar catálogo ahora</button>
+          <button type="button" class="ls-btn ls-btn-sm" id="au-sync-force" title="Volver a descargar todas las apps aunque la versión coincida">Forzar re-descarga</button>
+        </div>
+
+        <p class="ls-hint" style="margin:0 0 12px 0">
+          Tercera tienda independiente con su propio widget. Muestra exactamente las mismas apps y niveles que configuraste arriba en
+          <b>Tienda Play</b>, pero el servidor descarga los APK / Split APK oficiales de Google Play y los equipos los instalan o actualizan
+          <b>en silencio</b> (sin abrir Play Store ni tapar la pantalla). Cada app que agregues arriba se sincroniza sola al guardar.
+        </p>
+
+        <div id="au-meta" class="ls-hint" style="margin:0 0 10px 0"></div>
+        <div id="au-progress" class="ls-hint" style="margin:0 0 10px 0; display:none"></div>
+
+        <details id="au-config-details" style="margin-bottom:14px; background:var(--navy-dark); border:1px solid var(--navy-border); border-radius:10px; padding:12px 14px;">
+          <summary style="cursor:pointer; font-weight:700; font-size:13.5px; color:var(--text-light);">
+            ⚙ Configurar conexión con Google Play (cuenta dedicada o Dispenser)
+          </summary>
+          <p class="ls-hint" style="margin:10px 0 8px 0">
+            Usá una <b>cuenta Google secundaria dedicada</b> (nunca tu cuenta personal principal). Solo la lee la Cloud Function del servidor;
+            ningún celular ni el navegador vuelven a ver los tokens guardados.
+          </p>
+
+          <div class="tc-grid">
+            <div>
+              <label for="au-mode">Método de autenticación</label>
+              <select class="ls-select" id="au-mode" style="width:100%">
+                <option value="oauth">Cuenta Google dedicada (Email + OAuth EmbeddedSetup)</option>
+                <option value="aas">Cuenta Google dedicada (Email + Token AAS directo)</option>
+                <option value="dispenser">Token Dispenser propio (URL HTTPS)</option>
+              </select>
+            </div>
+            <div id="au-field-email">
+              <label for="au-email">Email Google dedicado</label>
+              <input class="ls-input" type="email" id="au-email" autocomplete="off" placeholder="tienda-locksuite@gmail.com" />
+            </div>
+            <div id="au-field-oauth">
+              <label for="au-oauth">Token OAuth (oauth2_4/...)</label>
+              <input class="ls-input" type="password" id="au-oauth" autocomplete="off" placeholder="oauth2_4/0A..." />
+            </div>
+            <div id="au-field-aas" style="display:none">
+              <label for="au-aas">Token AAS (aas_et/...)</label>
+              <input class="ls-input" type="password" id="au-aas" autocomplete="off" placeholder="aas_et/AK..." />
+            </div>
+            <div id="au-field-dispenser" style="display:none; grid-column:span 2">
+              <label for="au-dispenser">URL del Token Dispenser (HTTPS)</label>
+              <input class="ls-input" type="url" id="au-dispenser" autocomplete="off" placeholder="https://tu-dispenser.ejemplo.com/api/auth" />
+            </div>
+          </div>
+
+          <p class="ls-hint" id="au-oauth-help" style="margin:4px 0 10px 0">
+            Cómo sacar el token OAuth (una sola vez): abrí <code>https://accounts.google.com/EmbeddedSetup</code> en una ventana de incógnito con DevTools (F12 → Red / Cookies),
+            iniciá sesión con la cuenta dedicada y copiá el valor de la cookie <code>oauth_token</code> (empieza con <code>oauth2_4/</code>).
+          </p>
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <button type="button" class="ls-btn ls-btn-primary ls-btn-sm" id="au-save-config">Guardar y probar conexión</button>
+            <button type="button" class="ls-btn ls-btn-sm" id="au-test-config">Probar conexión actual</button>
+            <button type="button" class="ls-btn ls-btn-sm ls-btn-danger" id="au-clear-config">Borrar configuración</button>
+          </div>
+        </details>
+
+        <div id="au-list"><p class="ls-hint">Cargando caché de Tienda Aurora…</p></div>
+      </section>
+
     </main>
   </div>
 
@@ -246,10 +317,11 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
   <script src="catalog.js?v=4"></script>
-  <script src="comun.js?v=11"></script>
+  <script src="comun.js?v=12"></script>
   <script src="apk_reader.js?v=2"></script>
   <script src="tienda_logic.js?v=4"></script>
-  <script src="tienda.js?v=2"></script>
+  <script src="tienda.js?v=3"></script>
   <script src="tienda_clasica.js?v=3"></script>
+  <script src="tienda_aurora.js?v=1"></script>
 </body>
 </html>

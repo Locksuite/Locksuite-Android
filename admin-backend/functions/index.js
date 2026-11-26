@@ -5,6 +5,9 @@ const crypto = require("crypto");
 const playLookup = require("./play_lookup");
 const pinSecurity = require("./pin_security");
 const wakePolicy = require("./wake_policy");
+const auroraDevices = require("./aurora_devices");
+const auroraGPlay = require("./aurora_gplay");
+const auroraSync = require("./aurora_sync");
 
 const FUNCTION_OPTIONS = {
   region: "us-central1",
@@ -1133,5 +1136,342 @@ exports.despertarEquiposSilenciosos = onSchedule(
       }
     }
     console.log(`despertarEquiposSilenciosos: candidatos=${candidatos.length} enviados=${enviados} fallidos=${fallidos}`);
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TIENDA AURORA — Descarga directa desde Google Play FDFE hacia GCS + RTDB
+// para instalación y actualización 100% silenciosa en la flota (B.132).
+// ─────────────────────────────────────────────────────────────────────────────
+const AURORA_SECRET_PATH = "serverSecrets/aurora";
+const AURORA_META_PATH = "auroraStore/meta";
+
+async function testAuroraLogin(secret) {
+  if (secret.mode === "dispenser") {
+    const creds = await auroraGPlay.fetchFromDispenser({
+      dispenserUrl: secret.dispenserUrl,
+      profile: auroraDevices.DEVICE_PROFILES.arm64_v8a,
+    });
+    const client = new auroraGPlay.GPlayClient({
+      profile: auroraDevices.DEVICE_PROFILES.arm64_v8a,
+      email: creds.email,
+      aasToken: creds.aasToken,
+      authToken: creds.authToken,
+    });
+    await client.login();
+    return client;
+  }
+  const client = new auroraGPlay.GPlayClient({
+    profile: auroraDevices.DEVICE_PROFILES.arm64_v8a,
+    email: secret.email,
+    aasToken: secret.aasToken,
+  });
+  await client.login();
+  return client;
+}
+
+exports.auroraStore = onRequest(
+  { ...FUNCTION_OPTIONS, timeoutSeconds: 300, memory: "1GiB", maxInstances: 4 },
+  async (req, res) => {
+    applyAdminCors(req, res);
+    if (req.method === "OPTIONS") {
+      res.status(204).send("");
+      return;
+    }
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Método no permitido" });
+      return;
+    }
+    try {
+      await verifyAdminToken(req);
+
+      const db = admin.database();
+      const bucket = admin.storage().bucket(STORE_APKS_BUCKET);
+      const body = req.body || {};
+      const action = typeof body.action === "string" ? body.action.trim() : "";
+
+      if (action === "getStatus") {
+        const [secSnap, pkgSnap, metaSnap] = await Promise.all([
+          db.ref(AURORA_SECRET_PATH).once("value"),
+          db.ref("auroraStore/packages").once("value"),
+          db.ref(AURORA_META_PATH).once("value"),
+        ]);
+        res.json({
+          success: true,
+          auth: auroraSync.maskSecretStatus(secSnap.val()),
+          packages: pkgSnap.val() || {},
+          meta: metaSnap.val() || {},
+        });
+        return;
+      }
+
+      if (action === "saveConfig") {
+        const mode = typeof body.mode === "string" ? body.mode.trim().toLowerCase() : "";
+        const now = Date.now();
+        let newSecret;
+        try {
+          if (mode === "oauth") {
+            const email = typeof body.email === "string" ? body.email.trim() : "";
+            const oauthToken = typeof body.oauthToken === "string" ? body.oauthToken.trim() : "";
+            const aasToken = await auroraGPlay.exchangeOAuthForAas({ email, oauthToken });
+            newSecret = { mode: "aas", email, aasToken, updatedAt: now };
+            await testAuroraLogin(newSecret);
+          } else if (mode === "aas") {
+            const email = typeof body.email === "string" ? body.email.trim() : "";
+            const aasToken = typeof body.aasToken === "string" ? body.aasToken.trim() : "";
+            if (!email || !email.includes("@") || !aasToken) {
+              throw new Error("Falta email o token AAS.");
+            }
+            newSecret = { mode: "aas", email, aasToken, updatedAt: now };
+            await testAuroraLogin(newSecret);
+          } else if (mode === "dispenser") {
+            const dispenserUrl = auroraGPlay.validateDispenserUrl(body.dispenserUrl);
+            newSecret = { mode: "dispenser", dispenserUrl, updatedAt: now };
+            await testAuroraLogin(newSecret);
+          } else {
+            throw { status: 400, message: "Modo de configuración inválido (oauth, aas o dispenser)." };
+          }
+        } catch (err) {
+          if (err && err.status) throw err;
+          throw { status: 400, message: err && err.message ? err.message : String(err) };
+        }
+
+        await db.ref(AURORA_SECRET_PATH).set(newSecret);
+        res.json({ success: true, auth: auroraSync.maskSecretStatus(newSecret) });
+        return;
+      }
+
+      if (action === "clearConfig") {
+        await db.ref(AURORA_SECRET_PATH).remove();
+        res.json({ success: true, auth: auroraSync.maskSecretStatus(null) });
+        return;
+      }
+
+      if (action === "testAuth") {
+        const secSnap = await db.ref(AURORA_SECRET_PATH).once("value");
+        const secret = secSnap.val();
+        if (!secret) {
+          res.status(412).json({ error: "La conexión con Google Play aún no está configurada." });
+          return;
+        }
+        try {
+          const client = await testAuroraLogin(secret);
+          const samplePkg = typeof body.packageName === "string" && CLASSIC_PKG_RE.test(body.packageName.trim())
+            ? body.packageName.trim()
+            : "com.whatsapp";
+          const det = await client.details(samplePkg);
+          res.json({
+            success: true,
+            sample: {
+              packageName: det.packageName,
+              title: det.title,
+              versionCode: det.versionCode,
+              versionName: det.versionName,
+            },
+          });
+        } catch (err) {
+          throw { status: 400, message: err && err.message ? err.message : String(err) };
+        }
+        return;
+      }
+
+      if (action === "syncPackage") {
+        const pkg = typeof body.packageName === "string" ? body.packageName.trim() : "";
+        if (!pkg || pkg.length > 200 || !CLASSIC_PKG_RE.test(pkg)) {
+          res.status(400).json({ error: "Nombre de paquete inválido." });
+          return;
+        }
+        if (CLASSIC_NEVER_OFFERED.has(pkg)) {
+          res.status(400).json({ error: "Ese paquete del sistema o de LockSuite nunca se ofrece en la tienda." });
+          return;
+        }
+        const secSnap = await db.ref(AURORA_SECRET_PATH).once("value");
+        const secret = secSnap.val();
+        if (!secret) {
+          res.status(412).json({ error: "Configurá primero la cuenta o Dispenser de Google Play en Tienda Aurora." });
+          return;
+        }
+        let sessions;
+        try {
+          sessions = await auroraSync.createSessionsForSecret(secret);
+        } catch (err) {
+          throw { status: 400, message: "Error al iniciar sesión en Google Play: " + (err && err.message ? err.message : String(err)) };
+        }
+        const result = await auroraSync.syncSinglePackage({
+          packageName: pkg,
+          sessions,
+          db,
+          bucket,
+          force: !!body.force,
+        });
+        const savedSnap = await db.ref(`auroraStore/packages/${auroraSync.pkgKey(pkg)}`).once("value");
+        res.json({ success: !!result.ok, result, packageData: savedSnap.val() || null });
+        return;
+      }
+
+      if (action === "syncCatalog") {
+        const secSnap = await db.ref(AURORA_SECRET_PATH).once("value");
+        const secret = secSnap.val();
+        if (!secret) {
+          res.status(412).json({ error: "Configurá primero la cuenta o Dispenser de Google Play en Tienda Aurora." });
+          return;
+        }
+
+        const force = !!body.force;
+        const limitRaw = Number(body.limit);
+        const limit = Number.isFinite(limitRaw) && limitRaw >= 1 ? Math.min(25, Math.floor(limitRaw)) : 5;
+        const offsetRaw = Number(body.offset);
+        const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? Math.floor(offsetRaw) : 0;
+
+        let allPkgs;
+        if (Array.isArray(body.packages) && body.packages.length > 0) {
+          const uniq = new Set();
+          for (const raw of body.packages) {
+            const p = typeof raw === "string" ? raw.trim() : "";
+            if (p && p.length <= 200 && CLASSIC_PKG_RE.test(p) && !CLASSIC_NEVER_OFFERED.has(p)) {
+              uniq.add(p);
+            }
+          }
+          allPkgs = Array.from(uniq);
+        } else {
+          allPkgs = await auroraSync.collectCatalogPackages(db, CLASSIC_NEVER_OFFERED);
+        }
+
+        const batch = allPkgs.slice(offset, offset + limit);
+        if (batch.length === 0) {
+          res.json({
+            success: true,
+            total: allPkgs.length,
+            processed: 0,
+            synced: 0,
+            upToDate: 0,
+            failed: 0,
+            nextOffset: offset,
+            remaining: 0,
+            results: [],
+          });
+          return;
+        }
+
+        let sessions;
+        try {
+          sessions = await auroraSync.createSessionsForSecret(secret);
+        } catch (err) {
+          throw { status: 400, message: "Error al iniciar sesión en Google Play: " + (err && err.message ? err.message : String(err)) };
+        }
+
+        const results = [];
+        let synced = 0;
+        let upToDate = 0;
+        let failed = 0;
+        for (const pkg of batch) {
+          const r = await auroraSync.syncSinglePackage({
+            packageName: pkg,
+            sessions,
+            db,
+            bucket,
+            force,
+          });
+          results.push(r);
+          if (!r.ok) failed++;
+          else if (r.upToDate) upToDate++;
+          else synced++;
+        }
+
+        const nextOffset = offset + batch.length;
+        const remaining = Math.max(0, allPkgs.length - nextOffset);
+        await db.ref(AURORA_META_PATH).update({
+          lastManualSyncAt: Date.now(),
+          lastCatalogCount: allPkgs.length,
+        });
+
+        res.json({
+          success: true,
+          total: allPkgs.length,
+          processed: batch.length,
+          synced,
+          upToDate,
+          failed,
+          nextOffset,
+          remaining,
+          results,
+        });
+        return;
+      }
+
+      if (action === "deletePackage") {
+        const pkg = typeof body.packageName === "string" ? body.packageName.trim() : "";
+        if (!pkg || pkg.length > 200 || !CLASSIC_PKG_RE.test(pkg)) {
+          res.status(400).json({ error: "Nombre de paquete inválido." });
+          return;
+        }
+        await auroraSync.deletePackageArtifacts({ packageName: pkg, db, bucket });
+        res.json({ success: true });
+        return;
+      }
+
+      res.status(400).json({ error: "Acción no reconocida." });
+    } catch (e) {
+      sendError(res, e, "auroraStore");
+    }
+  }
+);
+
+exports.auroraSyncCatalogScheduled = onSchedule(
+  { region: "us-central1", schedule: "every 12 hours", timeoutSeconds: 540, memory: "1GiB" },
+  async () => {
+    const db = admin.database();
+    const bucket = admin.storage().bucket(STORE_APKS_BUCKET);
+    const secSnap = await db.ref(AURORA_SECRET_PATH).once("value");
+    const secret = secSnap.val();
+    if (!secret) {
+      console.log("auroraSyncCatalogScheduled: sin configuración en serverSecrets/aurora, omitido.");
+      return;
+    }
+
+    const catalogPkgs = await auroraSync.collectCatalogPackages(db, CLASSIC_NEVER_OFFERED);
+    const catalogSet = new Set(catalogPkgs);
+    let sessions;
+    try {
+      sessions = await auroraSync.createSessionsForSecret(secret);
+    } catch (err) {
+      const msg = err && err.message ? err.message : String(err);
+      console.error("auroraSyncCatalogScheduled login error:", msg);
+      await db.ref(AURORA_META_PATH).update({ lastAutoSyncAt: Date.now(), lastAutoError: msg });
+      return;
+    }
+
+    let synced = 0;
+    let upToDate = 0;
+    let failed = 0;
+    for (const pkg of catalogPkgs) {
+      try {
+        const r = await auroraSync.syncSinglePackage({ packageName: pkg, sessions, db, bucket, force: false });
+        if (!r.ok) failed++;
+        else if (r.upToDate) upToDate++;
+        else synced++;
+      } catch (e) {
+        failed++;
+        console.warn(`auroraSyncCatalogScheduled: fallo en ${pkg}:`, e && e.message ? e.message : e);
+      }
+    }
+
+    // Limpiar paquetes eliminados hace tiempo del catálogo global y de extras
+    const existingSnap = await db.ref("auroraStore/packages").once("value");
+    const existing = existingSnap.val() || {};
+    let removed = 0;
+    for (const [key, entry] of Object.entries(existing)) {
+      const pkg = (entry && entry.packageName) || key.replace(/_/g, ".");
+      if (!catalogSet.has(pkg)) {
+        await auroraSync.deletePackageArtifacts({ packageName: pkg, db, bucket });
+        removed++;
+      }
+    }
+
+    await db.ref(AURORA_META_PATH).set({
+      lastAutoSyncAt: Date.now(),
+      lastAutoSummary: { total: catalogPkgs.length, synced, upToDate, failed, removed },
+    });
+    console.log(`auroraSyncCatalogScheduled: total=${catalogPkgs.length} synced=${synced} upToDate=${upToDate} failed=${failed} removed=${removed}`);
   }
 );

@@ -46,6 +46,9 @@ SUITES=(
   # 24/11/2026 (B.129) — Auto-reencendido de accesibilidad y rebote selectivo en Ajustes
   "com.ejemplo.locksuite.mdm.AccessibilityBouncePolicyTest|mdm/AccessibilityBouncePolicy.kt|mdm/AccessibilityBouncePolicyTest.kt"
   "com.ejemplo.locksuite.mdm.WebViewProfileDefaultsTest|mdm/WebViewPolicy.kt mdm/PlayStoreCatalog.kt|mdm/WebViewProfileDefaultsTest.kt"
+  # 26/11/2026 (B.132) — Tienda Aurora (tercera tienda silenciosa)
+  "com.ejemplo.locksuite.mdm.AuroraStoreCatalogTest|mdm/PlayStoreCatalog.kt mdm/AuroraStoreCatalog.kt|mdm/AuroraStoreCatalogTest.kt"
+  "com.ejemplo.locksuite.ui.aurora.AuroraStoreUiLogicTest|mdm/PlayStoreCatalog.kt ui/aurora/AuroraStoreText.kt|ui/aurora/AuroraStoreUiLogicTest.kt"
 )
 
 declare -A SEEN=()

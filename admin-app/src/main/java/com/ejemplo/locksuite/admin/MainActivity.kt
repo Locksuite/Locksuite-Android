@@ -139,6 +139,9 @@ class MainActivity : AppCompatActivity() {
             "www.gstatic.com",                                  // SDK de Firebase
             "apis.google.com",                                  // iframe de Firebase Auth
             "sendcommandv8-687828714595.us-central1.run.app",   // Cloud Function sendCommandV8
+            "checkplayapps-5i52mt6h3q-uc.a.run.app",            // Cloud Function checkPlayApps
+            "classicstoreapk-5i52mt6h3q-uc.a.run.app",          // Cloud Function classicStoreApk
+            "aurorastore-5i52mt6h3q-uc.a.run.app",              // Cloud Function auroraStore
             "upload.wikimedia.org"                              // íconos de apps del panel
         )
 

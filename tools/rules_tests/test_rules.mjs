@@ -185,6 +185,20 @@ await check("B.131: admin SÍ escribe playStoreExtras", set(ref(adm, "devices/D1
 await check("B.131: admin SÍ escribe allowedPackages", set(ref(adm, "devices/D1/allowedPackages"), ["com.waze"]), true);
 await check("B.131: restaurar archivado CON pendingCommands se rechaza (.validate=false)", set(ref(adm, "devices/D9b"), { ownerUid: "devD9b", pendingCommands: { c9: { command: "X" } } }), false);
 
+// ── B.132: Tienda Aurora (serverSecrets y auroraStore) ──
+await env.withSecurityRulesDisabled(async (ctx) => {
+  const db = ctx.database();
+  await set(ref(db, "serverSecrets/aurora"), { mode: "aas", email: "b@example.com", aasToken: "secret" });
+  await set(ref(db, "auroraStore/packages/com_waze"), { packageName: "com.waze", versionCode: 100 });
+});
+await check("B.132: serverSecrets NO lo lee admin", get(ref(adm, "serverSecrets/aurora")), false);
+await check("B.132: serverSecrets NO lo lee celular", get(ref(dev, "serverSecrets/aurora")), false);
+await check("B.132: serverSecrets NO lo escribe admin", set(ref(adm, "serverSecrets/aurora"), { a: 1 }), false);
+await check("B.132: auroraStore SÍ lo lee celular", get(ref(dev, "auroraStore/packages/com_waze")), true);
+await check("B.132: auroraStore SÍ lo lee admin", get(ref(adm, "auroraStore/packages/com_waze")), true);
+await check("B.132: auroraStore NO lo escribe admin (solo Functions)", set(ref(adm, "auroraStore/packages/com_waze"), { evil: true }), false);
+await check("B.132: auroraStore NO lo escribe celular", set(ref(dev, "auroraStore/packages/com_waze"), { evil: true }), false);
+
 console.table(results);
 console.log(rojos === 0 ? "TODAS VERDES (" + results.length + ")" : "ROJAS: " + rojos);
 await env.cleanup();

@@ -108,6 +108,14 @@
     "storeApps": {
       ".read": true,
       ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())"
+    },
+    "auroraStore": {
+      ".read": true,
+      ".write": "false"
+    },
+    "serverSecrets": {
+      ".read": "false",
+      ".write": "false"
     }
   }
 }

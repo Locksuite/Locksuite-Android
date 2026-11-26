@@ -1493,7 +1493,8 @@ object FirebaseDeviceSync {
             var extrasJson: String? = null
             var classicWv: Set<String>? = null
             var classicNet: Set<String>? = null
-            val latch = java.util.concurrent.CountDownLatch(3)
+            var auroraJson: String? = null
+            val latch = java.util.concurrent.CountDownLatch(4)
             withAuth {
                 val db = FirebaseDatabase.getInstance()
                 db.getReference("globalSettings/playStore/apps").get()
@@ -1551,6 +1552,20 @@ object FirebaseDeviceSync {
                         android.util.Log.w("FirebaseDeviceSync", "Tienda clásica: fallo leyendo storeApps: ${e.message}")
                         latch.countDown()
                     }
+                db.getReference("auroraStore/packages").get()
+                    .addOnSuccessListener { snap ->
+                        try {
+                            auroraJson = auroraPackagesJson(snap)
+                        } catch (e: Exception) {
+                            android.util.Log.w("FirebaseDeviceSync", "Tienda Aurora: catálogo ilegible: ${e.message}")
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        android.util.Log.w("FirebaseDeviceSync", "Tienda Aurora: fallo leyendo auroraStore/packages: ${e.message}")
+                        latch.countDown()
+                    }
             }
             // Tope alto pero finito: corre en un hilo de IO lanzado por el propio comando
             // FCM, nunca en el hilo principal ni en el lector del túnel.
@@ -1559,11 +1574,53 @@ object FirebaseDeviceSync {
             if (classicWv != null && classicNet != null) {
                 com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.replaceConfig(ctx, classicWv!!, classicNet!!)
             }
+            if (auroraJson != null) {
+                com.ejemplo.locksuite.mdm.AuroraStoreManager.replacePackages(ctx, auroraJson)
+            }
             changed
         } catch (e: Exception) {
             android.util.Log.e("FirebaseDeviceSync", "Tienda Play: pullPlayStoreConfig falló: ${e.message}", e)
             false
         }
+    }
+
+    /** Serializa `auroraStore/packages` en JSON limpio para [AuroraStoreManager.replacePackages]. */
+    private fun auroraPackagesJson(node: com.google.firebase.database.DataSnapshot): String {
+        val arr = org.json.JSONArray()
+        node.children.forEach { child ->
+            val pkg = child.child("packageName").getValue(String::class.java)
+                ?: child.key?.replace("_", ".") ?: return@forEach
+            val o = org.json.JSONObject()
+            o.put("packageName", pkg)
+            child.child("title").getValue(String::class.java)?.let { o.put("title", it) }
+            child.child("versionCode").getValue(Long::class.java)?.let { o.put("versionCode", it) }
+            child.child("versionName").getValue(String::class.java)?.let { o.put("versionName", it) }
+            child.child("status").getValue(String::class.java)?.let { o.put("status", it) }
+            child.child("error").getValue(String::class.java)?.let { o.put("error", it) }
+            child.child("updatedAt").getValue(Long::class.java)?.let { o.put("updatedAt", it) }
+            o.put("hasObb", child.child("hasObb").getValue(Boolean::class.java) == true)
+            val variantsObj = org.json.JSONObject()
+            child.child("variants").children.forEach { vSnap ->
+                val vKey = vSnap.key ?: return@forEach
+                val vo = org.json.JSONObject()
+                vSnap.child("apkUrl").getValue(String::class.java)?.let { vo.put("apkUrl", it) }
+                vSnap.child("sha256").getValue(String::class.java)?.let { vo.put("sha256", it) }
+                vSnap.child("sizeBytes").getValue(Long::class.java)?.let { vo.put("sizeBytes", it) }
+                vSnap.child("versionCode").getValue(Long::class.java)?.let { vo.put("versionCode", it) }
+                vSnap.child("versionName").getValue(String::class.java)?.let { vo.put("versionName", it) }
+                vSnap.child("splitCount").getValue(Long::class.java)?.let { vo.put("splitCount", it.toInt()) }
+                vSnap.child("bundleFormat").getValue(String::class.java)?.let { vo.put("bundleFormat", it) }
+                val abisArr = org.json.JSONArray()
+                vSnap.child("abis").children.forEach { a ->
+                    a.getValue(String::class.java)?.let { abisArr.put(it) }
+                }
+                vo.put("abis", abisArr)
+                variantsObj.put(vKey, vo)
+            }
+            o.put("variants", variantsObj)
+            arr.put(o)
+        }
+        return arr.toString()
     }
 
     /** Un nodo de apps de la Tienda Play → arreglo JSON para `PlayStoreManager`. */

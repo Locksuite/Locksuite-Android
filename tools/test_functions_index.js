@@ -141,8 +141,10 @@ const fakeAdmin = {
   storage: () => ({
     bucket(bucketName) {
       return {
+        name: bucketName,
         file(objectPath) {
           return {
+            name: objectPath,
             async createResumableUpload(opts) {
               state.storageOps.push({ op: "createResumableUpload", bucketName, objectPath, opts });
               return ["https://storage.googleapis.com/upload/resumable/" + encodeURIComponent(objectPath)];
@@ -151,6 +153,9 @@ const fakeAdmin = {
               state.storageOps.push({ op: "delete", bucketName, objectPath, opts });
             },
           };
+        },
+        async getFiles() {
+          return [[]];
         },
       };
     },
@@ -568,6 +573,48 @@ test("START_TEMP_INSTALL_WINDOW y STOP_TEMP_INSTALL_WINDOW exigen PIN, validan d
   const fam2 = pend2.filter(x => x.family === "TEMP_INSTALL_WINDOW");
   assert.strictEqual(fam2.length, 1);
   assert.strictEqual(fam2[0].data.command, "STOP_TEMP_INSTALL_WINDOW");
+});
+
+test("auroraStore exige admin, enmascara serverSecrets/aurora, rechaza Dispenser privado y valida paquetes", async () => {
+  seedWorld();
+  const unauth = await call(fn.auroraStore, { body: { action: "getStatus" } });
+  assert.strictEqual(unauth.statusCode, 401);
+
+  const nonAdmin = await call(fn.auroraStore, {
+    headers: { authorization: "Bearer tok-intruso" },
+    body: { action: "getStatus" },
+  });
+  assert.strictEqual(nonAdmin.statusCode, 403);
+
+  state.db.serverSecrets = {
+    aurora: { mode: "aas", email: "burner@example.com", aasToken: "aas_et/TOP_SECRET_VALUE", updatedAt: 12345 },
+  };
+  state.db.auroraStore = {
+    packages: { com_waze: { packageName: "com.waze", versionCode: 55, status: "ready" } },
+  };
+  const st = await call(fn.auroraStore, {
+    headers: { authorization: "Bearer tok-admin" },
+    body: { action: "getStatus" },
+  });
+  assert.strictEqual(st.statusCode, 200);
+  assert.strictEqual(st.body.auth.configured, true);
+  assert.strictEqual(st.body.auth.hasAasToken, true);
+  assert.strictEqual(JSON.stringify(st.body).includes("TOP_SECRET_VALUE"), false);
+  assert.strictEqual(st.body.packages.com_waze.versionCode, 55);
+
+  const ssrf = await call(fn.auroraStore, {
+    headers: { authorization: "Bearer tok-admin" },
+    body: { action: "saveConfig", mode: "dispenser", dispenserUrl: "https://127.0.0.1/token" },
+  });
+  assert.strictEqual(ssrf.statusCode, 400);
+
+  for (const badPkg of ["invalid", "com.ejemplo.locksuite", "com.android.vending"]) {
+    const r = await call(fn.auroraStore, {
+      headers: { authorization: "Bearer tok-admin" },
+      body: { action: "syncPackage", packageName: badPkg },
+    });
+    assert.strictEqual(r.statusCode, 400, badPkg);
+  }
 });
 
 (async () => {

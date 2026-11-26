@@ -393,6 +393,25 @@
                 android:resource="@xml/play_store_widget_info" />
         </receiver>
 
+        <!-- TIENDA AURORA (B.132): tercera tienda con instalación directa silenciosa. -->
+        <activity
+            android:name=".ui.aurora.AuroraStoreActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.LockSuite" />
+
+        <receiver
+            android:name=".widget.AuroraStoreWidgetProvider"
+            android:label="@string/widget_aurora_store_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/aurora_store_widget_info" />
+        </receiver>
+
         <!-- GOOGLE VERIFICATION ACTIVITY (Microvisor Confinado de Verificaciones de Google - B.92)
              ⚠️ (22/10) En Android 12+ estos intent-filter NO reciben el link de la cámara del
              sistema: un link web va al navegador predeterminado salvo que la app esté aprobada

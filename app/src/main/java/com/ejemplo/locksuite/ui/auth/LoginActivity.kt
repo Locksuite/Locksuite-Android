@@ -460,6 +460,24 @@ fun LoginScreen(
                         )
                     }
 
+                    // Botón para Tienda Aurora (instalación directa silenciosa)
+                    Button(
+                        onClick = {
+                            context.startActivity(com.ejemplo.locksuite.ui.aurora.AuroraStoreActivity.intent(context))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0E7490), contentColor = Color.White),
+                        modifier = Modifier.fillMaxWidth(0.85f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = com.ejemplo.locksuite.ui.aurora.AuroraStoreText.t(
+                                com.ejemplo.locksuite.ui.aurora.AuroraStoreText.Key.TITLE,
+                                LocaleManager.getLang()
+                            ),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
                     // Botón discreto para Tienda clásica (APKs directos)
                     TextButton(
                         onClick = { showStoreDialog = true },

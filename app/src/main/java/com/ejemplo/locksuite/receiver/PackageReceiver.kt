@@ -220,6 +220,14 @@ class PackageReceiver : BroadcastReceiver() {
                     Log.w("PackageReceiver", "Tienda Play: no se pudo registrar el cambio de $packageName: ${e.message}")
                 }
             }
+            // B.132: Tienda Aurora reclama instalaciones nuevas y reconcilia tras updates silenciosos.
+            if (action == Intent.ACTION_PACKAGE_ADDED || action == Intent.ACTION_PACKAGE_REPLACED) {
+                try {
+                    com.ejemplo.locksuite.mdm.AuroraStoreManager.onPackageInstalled(context, packageName, isReplacing)
+                } catch (e: Exception) {
+                    Log.w("PackageReceiver", "Tienda Aurora: no se pudo registrar $packageName: ${e.message}")
+                }
+            }
 
             if (action == Intent.ACTION_PACKAGE_ADDED ||
                 action == Intent.ACTION_PACKAGE_REMOVED ||

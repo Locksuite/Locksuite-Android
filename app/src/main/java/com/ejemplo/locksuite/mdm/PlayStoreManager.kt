@@ -486,6 +486,19 @@ object PlayStoreManager {
         }
     }
 
+    /**
+     * Registra una app instalada desde Tienda Aurora como administrada por la tienda
+     * para que herede pausa al bajar de perfil, "Sin web", dominios y kiosco.
+     */
+    fun claimInstalledByStore(context: Context, packageName: String) {
+        val ctx = context.applicationContext
+        if (isInstalled(ctx, packageName)) {
+            claim(ctx, packageName)
+            reconcile(ctx)
+            notifyChanged(ctx)
+        }
+    }
+
     /** Paquetes que instaló la tienda y siguen en el equipo. */
     fun installedByStore(context: Context): Set<String> {
         val ctx = context.applicationContext
@@ -640,6 +653,10 @@ object PlayStoreManager {
         // enciende (abierta) sin esperar a la actualización diaria del sistema.
         try {
             com.ejemplo.locksuite.widget.PlayStoreWidgetProvider.refreshAll(ctx)
+        } catch (_: Exception) {
+        }
+        try {
+            com.ejemplo.locksuite.widget.AuroraStoreWidgetProvider.refreshAll(ctx)
         } catch (_: Exception) {
         }
         try {

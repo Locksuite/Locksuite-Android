@@ -9,6 +9,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * 19/11/2026 (B.125, T4) — INSTALACIONES DE LA TIENDA Y AUTOACTUALIZACIÓN DESDE EL CELULAR,
@@ -92,6 +94,125 @@ object StoreInstallManager {
                 }
             }
         )
+    }
+
+    data class AuroraBatchItem(
+        val apkUrl: String,
+        val packageName: String,
+        val label: String,
+        val sha256: String,
+        val isUpdate: Boolean
+    )
+
+    private fun verifyAuroraUpdateSignature(app: Context, file: File, packageName: String): String? {
+        return try {
+            if (SplitApkInstaller.isSplitBundle(file)) {
+                val insp = SplitApkInstaller.inspectForHostedJudge(app, file, packageName)
+                if (insp.error != null) return insp.error
+                if (insp.firma == com.ejemplo.locksuite.mdm.UpdateRoutePlanner.Firma.DISTINTA) {
+                    return "La app instalada tiene otra firma digital; desinstalala primero o actualizala desde la misma fuente."
+                }
+            } else {
+                val sig = ApkSignatureVerifier.verify(app, file.path, packageName)
+                if (sig is ApkSignatureVerifier.Result.Mismatch) {
+                    return "La app instalada tiene otra firma digital; desinstalala primero o actualizala desde la misma fuente."
+                }
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Instala o actualiza en silencio una app de Tienda Aurora (con SHA-256 obligatorio).
+     * @return false si ya hay una instalación en curso.
+     */
+    fun installAuroraApp(
+        context: Context,
+        apkUrl: String,
+        packageName: String,
+        label: String,
+        sha256: String,
+        isUpdate: Boolean
+    ): Boolean {
+        val app = context.applicationContext ?: context
+        return core.start(
+            key = packageName,
+            work = { report ->
+                SelfUpdater.downloadAndInstallApk(
+                    context = app,
+                    apkUrl = apkUrl,
+                    packageName = packageName,
+                    label = label,
+                    sha256 = sha256,
+                    preInstallCheck = { file ->
+                        if (isUpdate) verifyAuroraUpdateSignature(app, file, packageName) else null
+                    }
+                ) { progress ->
+                    report(progress)
+                    reportProgress(app, progress)
+                }
+            },
+            onFinished = { err ->
+                clearProgress(app)
+                if (err != null) {
+                    com.ejemplo.locksuite.mdm.AuroraStoreManager.clearPendingClaim(app, packageName)
+                    toast(app, err)
+                } else {
+                    val verb = if (isUpdate) "Actualización de $label" else "Instalación de $label"
+                    toast(app, "$verb en curso…")
+                }
+            }
+        )
+    }
+
+    /**
+     * Encola actualizaciones secuenciales de Tienda Aurora en segundo plano.
+     */
+    fun installAuroraBatch(context: Context, items: List<AuroraBatchItem>): Boolean {
+        if (items.isEmpty() || core.isBusy()) return false
+        val app = context.applicationContext ?: context
+        if (items.size == 1) {
+            val one = items[0]
+            return installAuroraApp(app, one.apkUrl, one.packageName, one.label, one.sha256, one.isUpdate)
+        }
+        scope.launch {
+            for (item in items) {
+                var guard = 0
+                while (core.isBusy() && guard < 180) {
+                    kotlinx.coroutines.delay(500L)
+                    guard++
+                }
+                if (core.isBusy()) break
+                val latch = java.util.concurrent.CountDownLatch(1)
+                val started = core.start(
+                    key = item.packageName,
+                    work = { report ->
+                        SelfUpdater.downloadAndInstallApk(
+                            context = app,
+                            apkUrl = item.apkUrl,
+                            packageName = item.packageName,
+                            label = item.label,
+                            sha256 = item.sha256,
+                            preInstallCheck = { file ->
+                                if (item.isUpdate) verifyAuroraUpdateSignature(app, file, item.packageName) else null
+                            }
+                        ) { progress ->
+                            report(progress)
+                            reportProgress(app, progress)
+                        }
+                    },
+                    onFinished = { err ->
+                        clearProgress(app)
+                        if (err != null) toast(app, "${item.label}: $err")
+                        latch.countDown()
+                    }
+                )
+                if (started) latch.await()
+            }
+        }
+        return true
     }
 
     /** Busca e instala la versión nueva de LockSuite. false si ya hay una instalación en curso. */

@@ -431,6 +431,9 @@
     S.filas = S.guardadas.map((r) => { const c = clonar(r); c.play = play[r.pkg] || null; return c; });
     S.desdeLaVieja = false;
     S.omitidas = [];
+    if (window.TiendaAurora && typeof window.TiendaAurora.onPlayStoreSaved === "function") {
+      try { window.TiendaAurora.onPlayStoreSaved(p.apps); } catch (_) {}
+    }
     LS.toast("Guardado (" + p.count + " apps). Los celulares lo leen con «Enviar a todos» o en su próxima " +
       "sincronización (hasta 1 hora).", "ok");
   }
