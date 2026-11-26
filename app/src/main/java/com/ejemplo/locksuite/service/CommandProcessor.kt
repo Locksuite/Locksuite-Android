@@ -47,6 +47,9 @@ class CommandProcessor(private val context: Context) {
         /** Timestamp más alto ya aceptado. Piso monotónico anti-repetición. */
         private const val KEY_LAST_CMD_TIMESTAMP = "last_command_timestamp"
 
+        /** Timestamp (ms) de la última rotación de PIN remoto (`CHANGE_PIN`). */
+        internal const val KEY_PIN_CHANGED_AT = "pin_changed_at_ms"
+
         /** Desorden tolerado en la entrega de FCM antes de considerar el mensaje repetido. */
         private const val REORDER_SLACK_MS = 10 * 60 * 1000L
 
@@ -83,6 +86,44 @@ class CommandProcessor(private val context: Context) {
             val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(context)
             val processed = prefs.getStringSet("processed_command_ids", emptySet()) ?: emptySet()
             return processed.any { it.substringBeforeLast(':', "") == commandId }
+        }
+
+        /**
+         * Validación temporal pura (unit-testable) compartida por FCM y MAILBOX:
+         *  - Rechaza comandos firmados antes del último CHANGE_PIN (con tolerancia REORDER_SLACK_MS).
+         *  - Exige vigencia `expiresAt` si viene firmada (en MAILBOX cuando el reloj es creíble).
+         *  - Aplica piso monotónico y ventana absoluta de 24h en comandos FCM.
+         */
+        internal fun checkCommandTemporalValidity(
+            source: Source,
+            timeMs: Long,
+            expiresAtMs: Long?,
+            expiresAtMalformed: Boolean,
+            nowMs: Long,
+            lastAcceptedMs: Long,
+            pinChangedAtMs: Long
+        ): String? {
+            if (timeMs <= 0L) return "INVALID_TIMESTAMP"
+            if (pinChangedAtMs > 0L && timeMs < pinChangedAtMs - REORDER_SLACK_MS) {
+                return "STALE_PRE_PIN_CHANGE"
+            }
+            if (expiresAtMalformed) return "INVALID_EXPIRES_AT"
+            val clockIsCredible = nowMs > CREDIBLE_CLOCK_FLOOR_MS
+            if (expiresAtMs != null) {
+                if (expiresAtMs <= 0L) return "INVALID_EXPIRES_AT"
+                if (clockIsCredible && nowMs > expiresAtMs) {
+                    return "COMMAND_EXPIRED"
+                }
+            }
+            if (source == Source.FCM) {
+                if (lastAcceptedMs > 0L && timeMs < lastAcceptedMs - REORDER_SLACK_MS) {
+                    return "TIMESTAMP_OUT_OF_WINDOW"
+                }
+                if (clockIsCredible && Math.abs(nowMs - timeMs) > ABSOLUTE_WINDOW_MS) {
+                    return "TIMESTAMP_OUT_OF_WINDOW"
+                }
+            }
+            return null
         }
     }
 
@@ -150,14 +191,7 @@ class CommandProcessor(private val context: Context) {
             // Primero se verifica la firma HMAC en tiempo constante antes de tocar
             // preferencias o disparar lecturas de red (B.40 p.3).
             !verifyFcmSignature(data, timestamp, signature) -> "BAD_SIGNATURE"
-            // La ventana temporal y el piso monotónico son para lo que llega por FCM.
-            // Lo que viene del BUZÓN (devices/<id>/pendingCommands) es viejo por
-            // naturaleza —el equipo estuvo apagado o sin red— y su protección contra
-            // repetición es la firma + el registro de commandId ya procesados, que
-            // ahora dura semanas. Ver util/CommandMailbox.kt.
-            source == Source.FCM && timestampOutOfWindow(timestamp) -> "TIMESTAMP_OUT_OF_WINDOW"
-            isReplay(commandId) -> "REPLAY"
-            else -> null
+            else -> temporalRejection(data, timestamp, source) ?: if (isReplay(commandId)) "REPLAY" else null
         }
         if (rejection != null) {
             android.util.Log.w("LockSuiteFCM", "Comando FCM rechazado ($rejection): $command")
@@ -916,10 +950,14 @@ class CommandProcessor(private val context: Context) {
                         val progressRef = baseRef.child("devices/$deviceId/updateProgress")
                         
                         val error = com.ejemplo.locksuite.util.SelfUpdater.checkAndPerformUpdate(applicationContext, false) { progress ->
-                            progressRef.setValue(progress)
+                            com.ejemplo.locksuite.util.FirebaseDeviceSync.runAuthenticated {
+                                progressRef.setValue(progress)
+                            }
                         }
-                        
-                        progressRef.removeValue()
+
+                        com.ejemplo.locksuite.util.FirebaseDeviceSync.runAuthenticated {
+                            progressRef.removeValue()
+                        }
                         
                         // Mismo camino autenticado que el resto de los acks: este
                         // corre en un hilo de IO y puede llegar con la sesión
@@ -945,15 +983,25 @@ class CommandProcessor(private val context: Context) {
                         }
                         if (isValidBase64) {
                             val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(context)
-                            prefs.edit()
+                            val cmdTs = timestamp.toLongOrNull() ?: 0L
+                            val prevChangedAt = prefs.getLong(KEY_PIN_CHANGED_AT, 0L)
+                            val newChangedAt = maxOf(prevChangedAt, cmdTs)
+                            val edit = prefs.edit()
                                 .putString(com.ejemplo.locksuite.util.Constants.KEY_PIN_HASH, newHash)
                                 .putString(com.ejemplo.locksuite.util.Constants.KEY_PIN_SALT, newSalt)
-                                .apply()
+                            if (newChangedAt > 0L) {
+                                edit.putLong(KEY_PIN_CHANGED_AT, newChangedAt)
+                            }
+                            edit.commit()
                             com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
                                 .edit()
                                 .putBoolean("pin_configured_mirror", true)
-                                .apply()
-                            
+                                .commit()
+
+                            com.ejemplo.locksuite.security.PinManager.credentialsForSync(context)?.let { creds ->
+                                com.ejemplo.locksuite.security.PinManager.markPublishedToCloud(context, creds.key())
+                            }
+
                             // MED-11: Cerrar sesiones locales activas y resetear intentos fallidos
                             com.ejemplo.locksuite.security.SessionManager.closeSession()
                             com.ejemplo.locksuite.security.PinManager.resetAttempts(context)
@@ -1084,21 +1132,42 @@ class CommandProcessor(private val context: Context) {
      * reloj del equipo es creíble. Si el reloj está claramente mal (anterior a 2024), se
      * omite: mejor obedecer con el reloj roto que quedar inadministrable.
      */
-    private fun timestampOutOfWindow(timestamp: String): Boolean {
-        val timeMs = timestamp.toLongOrNull() ?: return true
-        if (timeMs <= 0L) return true
+    private fun temporalRejection(data: Map<String, String>, timestamp: String, source: Source): String? {
+        val timeMs = timestamp.toLongOrNull() ?: return "INVALID_TIMESTAMP"
+        val rawExpires = data["expiresAt"]
+        val expiresPresent = !rawExpires.isNullOrBlank()
+        val expiresAtMs = if (expiresPresent) rawExpires!!.toLongOrNull() else null
+        val expiresMalformed = expiresPresent && expiresAtMs == null
 
         val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(context)
         val lastAccepted = prefs.getLong(KEY_LAST_CMD_TIMESTAMP, 0L)
-        // FCM puede reordenar entregas, así que se tolera hasta REORDER_SLACK_MS de
-        // desorden; más viejo que eso es un mensaje reproducido.
-        if (lastAccepted > 0L && timeMs < lastAccepted - REORDER_SLACK_MS) return true
+        val pinChangedAt = prefs.getLong(KEY_PIN_CHANGED_AT, 0L)
 
-        val now = System.currentTimeMillis()
-        val clockIsCredible = now > CREDIBLE_CLOCK_FLOOR_MS
-        if (clockIsCredible && Math.abs(now - timeMs) > ABSOLUTE_WINDOW_MS) return true
+        return checkCommandTemporalValidity(
+            source = source,
+            timeMs = timeMs,
+            expiresAtMs = expiresAtMs,
+            expiresAtMalformed = expiresMalformed,
+            nowMs = System.currentTimeMillis(),
+            lastAcceptedMs = lastAccepted,
+            pinChangedAtMs = pinChangedAt
+        )
+    }
 
-        return false
+    private fun timestampOutOfWindow(timestamp: String): Boolean {
+        val timeMs = timestamp.toLongOrNull() ?: return true
+        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(context)
+        val lastAccepted = prefs.getLong(KEY_LAST_CMD_TIMESTAMP, 0L)
+        val pinChangedAt = prefs.getLong(KEY_PIN_CHANGED_AT, 0L)
+        return checkCommandTemporalValidity(
+            source = Source.FCM,
+            timeMs = timeMs,
+            expiresAtMs = null,
+            expiresAtMalformed = false,
+            nowMs = System.currentTimeMillis(),
+            lastAcceptedMs = lastAccepted,
+            pinChangedAtMs = pinChangedAt
+        ) != null
     }
 
     private fun verifyFcmSignature(data: Map<String, String>, timestamp: String, signature: String): Boolean {

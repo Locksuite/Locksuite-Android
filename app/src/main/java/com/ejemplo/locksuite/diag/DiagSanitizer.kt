@@ -56,11 +56,18 @@ object DiagSanitizer {
     private val STORAGE_PATH = Regex("""(?i)(?:/storage/|/sdcard|/mnt/(?:sdcard|media_rw|user)/)[^\s"'<>)\]]*""")
     private val EMAIL = Regex("""[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+""")
     private val FCM_TOKEN = Regex("""[A-Za-z0-9_\-]{11,}:[A-Za-z0-9_\-]{40,}""")
+    private val BEARER_TOKEN = Regex("""(?i)\bBearer\s+[^\s"',;]+""")
+    private val SECRET_KV = Regex(
+        """(?i)(["']?)(pinHash|pinSalt|commandSecret|recoveryCode|command_auth_secret|recovery_plaintext_cache)\1\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)"""
+    )
     private val MAC = Regex("""(?i)\b(?:[0-9a-f]{2}[:\-]){5}[0-9a-f]{2}\b""")
     private val SSID = Regex("""(?i)\b(b?ssid)\s*[=:]\s*(?:"[^"]*"|[^\s,;]+)""")
     private val RESOLVE_HOST = Regex("""(?i)(resolve host\s*)"([^"]*)"""")
     private val UNKNOWN_HOST = Regex("""(?i)(UnknownHostException:\s*)([^\s:,;]+)""")
     private val LONG_HEX = Regex("""\b[0-9a-fA-F]{32,}\b""")
+    private val BASE64_SECRET = Regex(
+        """(?<![.\w])(?=[A-Za-z0-9+/_\-]{32,}={0,2}(?![.\w(]))(?=[A-Za-z0-9+/_\-]*[0-9+/=])[A-Za-z0-9+/_\-]{32,}={0,2}"""
+    )
     private val LONG_TOKEN = Regex("""[A-Za-z0-9_\-]{40,}""")
     private val IPV4 = Regex("""\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b""")
     private val PHONE_PLUS = Regex("""\+\d[\d\s().\-]{6,}\d""")
@@ -97,6 +104,8 @@ object DiagSanitizer {
             s = STORAGE_PATH.replace(s, "<ruta-almacenamiento>")
             s = EMAIL.replace(s, "<email>")
             s = FCM_TOKEN.replace(s, "<token>")
+            s = SECRET_KV.replace(s) { m -> m.groupValues[2] + "=<secreto>" }
+            s = BEARER_TOKEN.replace(s, "Bearer <token>")
             s = MAC.replace(s, "<mac>")
             s = SSID.replace(s) { m -> m.groupValues[1] + "=<red>" }
             s = RESOLVE_HOST.replace(s) { m ->
@@ -106,6 +115,7 @@ object DiagSanitizer {
                 m.groupValues[1] + (if (hostIsOk(m.groupValues[2])) m.groupValues[2] else "<sitio>")
             }
             s = LONG_HEX.replace(s, "<hex>")
+            s = BASE64_SECRET.replace(s, "<token>")
             s = LONG_TOKEN.replace(s, "<token>")
             s = IPV4.replace(s) { m ->
                 val o = (1..4).map { m.groupValues[it].toInt() }

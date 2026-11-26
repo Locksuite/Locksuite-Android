@@ -87,7 +87,54 @@ object WebViewPolicy {
         "admob.com",
         "app-measurement.com",
         "crashlytics.com",
-        "rides.sng.link"
+        "rides.sng.link",
+
+        // Caché web, traductores-proxy, proxies web y endpoints embebidos de YouTube
+        "webcache.googleusercontent.com",
+        "translate.googleusercontent.com",
+        "translate.goog",
+        "yt3.ggpht.com",
+        "youtubeembeddedplayer.googleapis.com",
+        "youtubeanalytics.googleapis.com",
+        "youtubereporting.googleapis.com",
+        "croxyproxy.com",
+        "proxysite.com",
+        "torproject.org",
+
+        // Dominios bootstrap de DNS sobre HTTPS/TLS (DoH/DoT) y Private Relay
+        "dns.google",
+        "dns.google.com",
+        "dns64.dns.google",
+        "cloudflare-dns.com",
+        "mozilla.cloudflare-dns.com",
+        "chrome.cloudflare-dns.com",
+        "family.cloudflare-dns.com",
+        "security.cloudflare-dns.com",
+        "odoh.cloudflare-dns.com",
+        "dns.cloudflare.com",
+        "one.one.one.one",
+        "1dot1dot1dot1.cloudflare-dns.com",
+        "dns.quad9.net",
+        "dns9.quad9.net",
+        "dns10.quad9.net",
+        "dns11.quad9.net",
+        "doh.opendns.com",
+        "doh.familyshield.opendns.com",
+        "dns.adguard.com",
+        "dns.adguard-dns.com",
+        "dns-unfiltered.adguard.com",
+        "dns.nextdns.io",
+        "doh.cleanbrowsing.org",
+        "dns.mullvad.net",
+        "doh.dns.sb",
+        "dns.alidns.com",
+        "doh.pub",
+        "freedns.controld.com",
+        "wikimedia-dns.org",
+        "doh.dns.apple.com",
+        "use-application-dns.net",
+        "mask.icloud.com",
+        "mask-h2.icloud.com"
     )
 
     // Subdominios específicos de apps de Google (Gmail, Drive, Meet, Chat, Messages, Wallet,
@@ -199,6 +246,13 @@ object WebViewPolicy {
         return GLOBAL_BLACKLIST.any { lower == it || lower.endsWith(".$it") }
     }
 
+    private val GOOGLE_MAP_OR_INFRA_HOST_REGEX =
+        Regex("^(mt|mts|khm|khms|lh|clients|beacons)\\d*$")
+
+    private val IGNORED_APP_TOKENS: Set<String> = setOf(
+        "com", "android", "apps", "client", "passenger", "mobile", "user", "app", "play"
+    )
+
     /**
      * Identifica subdominios dedicados de mapas, teselas vectoriales, capas satelitales,
      * recursos estáticos y sincronización de servicios de Google (mt*, mts*, khm*, khms*, lh*, clients*, geo*).
@@ -212,31 +266,33 @@ object WebViewPolicy {
         if (host == "maps" || host == "geo" || host == "geocoding" || host == "location" || host == "safebrowsing") {
             return true
         }
-        return host.matches(Regex("^(mt|mts|khm|khms|lh|clients|beacons)\\d*$"))
+        return host.matches(GOOGLE_MAP_OR_INFRA_HOST_REGEX)
     }
 
     /**
      * Determina si un dominio consultado está permitido para una aplicación genérica
      * que no tiene una whitelist estricta configurada.
-     * 
+     *
      * Implementa "Auto-Whitelist": Permite dominios que contienen la palabra clave de la app
      * y servicios globales de infraestructura de Android. Bloquea todo lo demás (Zendesk, webs, etc.).
      */
     fun isDomainAllowedForGenericApp(packageName: String, queriedDomain: String): Boolean {
+        val lowerDomain = queriedDomain.lowercase().trimEnd('.')
+
         // 1. Si es un dominio de infraestructura global indispensable, permitir
-        val isSharedInfra = SHARED_INFRASTRUCTURE_DOMAINS.any { 
-            queriedDomain == it || queriedDomain.endsWith(".$it") 
+        val isSharedInfra = SHARED_INFRASTRUCTURE_DOMAINS.any {
+            lowerDomain == it || lowerDomain.endsWith(".$it")
         }
         if (isSharedInfra) return true
 
-        // 2. Extraer palabras clave del packageName (ej: "com.cabify.passenger" -> ["cabify", "passenger"])
+        // 2. Extraer palabras clave del packageName (ej: "com.cabify.passenger" -> ["cabify"])
         // Ignoramos palabras genéricas como "com", "android", "apps", "client", "passenger", "mobile", "user"
-        val ignoredTokens = setOf("com", "android", "apps", "client", "passenger", "mobile", "user", "app", "play")
         val tokens = packageName.split(".")
             .map { it.lowercase() }
-            .filter { it.length > 2 && !ignoredTokens.contains(it) }
+            .filter { it.length > 2 && !IGNORED_APP_TOKENS.contains(it) }
 
-        if (tokens.isEmpty()) return true // Si no hay tokens válidos, dejamos pasar por seguridad
+        // Fail-closed: si el paquete no aporta ningún token identificable, no abrimos el WebView.
+        if (tokens.isEmpty()) return false
 
         // 3. Si el dominio consultado contiene al menos una palabra clave de la app, permitir.
         // ANTES: queriedDomain.contains(token) hacía un "contains" sobre el string
@@ -250,7 +306,7 @@ object WebViewPolicy {
         // etiqueta (mercadopago-cdn.example.com, api-mercadopago.example.com),
         // que son los patrones reales de nombres de backend/CDN, sin permitir que
         // el token quede "escondido" dentro de una palabra más larga.
-        val domainLabels = queriedDomain.lowercase().split(".")
+        val domainLabels = lowerDomain.split(".")
         val isAppSpecific = tokens.any { token ->
             domainLabels.any { label -> label == token || label.split("-").contains(token) }
         }

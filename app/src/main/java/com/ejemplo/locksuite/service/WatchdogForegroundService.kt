@@ -74,6 +74,13 @@ class WatchdogForegroundService : Service() {
          */
         @Volatile private var instance: WatchdogForegroundService? = null
 
+        @Volatile
+        var running: Boolean = false
+            private set
+
+        @JvmStatic
+        fun isRunning(): Boolean = running
+
         /** Revisión inmediata del estado de accesibilidad. Segura si el servicio no corre. */
         @JvmStatic
         fun requestImmediateCheck() {
@@ -81,14 +88,12 @@ class WatchdogForegroundService : Service() {
             // Se reinicia el antirrebote: quien llama acaba de cambiar algo a propósito,
             // así que no hay nada que "esperar a confirmar".
             com.ejemplo.locksuite.util.AccessibilityEnforcer.resetDebounce()
-            svc.handler.post {
-                // 7/11/2026 (B.112): en el hilo principal; una excepción acá mataba el proceso.
+            svc.postBg {
                 com.ejemplo.locksuite.util.Safe.guard("Watchdog.requestImmediateCheck") {
                     svc.checkAccessibilityStatus()
                 }
                 // Re-armar el ciclo con el ritmo que corresponda al estado nuevo.
-                svc.handler.removeCallbacks(svc.enforcerRunnable)
-                svc.handler.postDelayed(svc.enforcerRunnable, ENFORCER_FAST_MS)
+                svc.rescheduleEnforcer(ENFORCER_FAST_MS)
             }
         }
     }
@@ -109,7 +114,28 @@ class WatchdogForegroundService : Service() {
     private var nagCount = 0
     @Volatile private var workManagerScheduled = false
     private var accessibilityObserver: android.database.ContentObserver? = null
-    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val bgLock = Any()
+    private var bgThread: android.os.HandlerThread? = null
+    @Volatile private var bgHandler: android.os.Handler? = null
+    @Volatile private var destroyed = false
+
+    private fun postBg(r: Runnable) {
+        if (destroyed) return
+        bgHandler?.post(r)
+    }
+
+    private fun postBgDelayed(r: Runnable, delayMs: Long) {
+        if (destroyed) return
+        bgHandler?.postDelayed(r, delayMs)
+    }
+
+    private fun rescheduleEnforcer(delayMs: Long) {
+        if (destroyed) return
+        bgHandler?.let {
+            it.removeCallbacks(enforcerRunnable)
+            it.postDelayed(enforcerRunnable, delayMs)
+        }
+    }
 
     /**
      * Aviso insistente de accesibilidad apagada (interruptor `acc_protect_nag`).
@@ -139,7 +165,7 @@ class WatchdogForegroundService : Service() {
             // Se re-encola siempre acá, no desde el ciclo de 20 s del Watchdog: así el
             // ritmo del aviso es exactamente NAG_INTERVAL_MS y no queda a merced de
             // cuándo le toque correr al Watchdog.
-            handler.postDelayed(this, NAG_INTERVAL_MS)
+            postBgDelayed(this, NAG_INTERVAL_MS)
         }
     }
 
@@ -183,7 +209,7 @@ class WatchdogForegroundService : Service() {
             com.ejemplo.locksuite.util.AccessibilityZombieHealer.tick(applicationContext)
             val violada = com.ejemplo.locksuite.util.AccessibilityEnforcer.lastVerdict ==
                 com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.VIOLATED
-            handler.postDelayed(this, if (violada) ENFORCER_FAST_MS else ENFORCER_IDLE_MS)
+            postBgDelayed(this, if (violada) ENFORCER_FAST_MS else ENFORCER_IDLE_MS)
         }
     }
 
@@ -199,7 +225,7 @@ class WatchdogForegroundService : Service() {
             } catch (t: Throwable) {
                 com.ejemplo.locksuite.util.Safe.report("Watchdog.checkRunnable", t)
             } finally {
-                handler.postDelayed(this, 20000L)
+                postBgDelayed(this, 20000L)
             }
         }
 
@@ -374,31 +400,60 @@ class WatchdogForegroundService : Service() {
         }
     }
 
-    override fun onCreate() {
-        super.onCreate()
-        com.ejemplo.locksuite.diag.DiagLog.i("watchdog", "Servicio de vigilancia (Watchdog) creado")
+    private fun ensureForeground() {
         createNotificationChannel()
+        val notification = buildNotification()
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
                     NOTIFICATION_ID,
-                    buildNotification(),
+                    notification,
                     android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 )
             } else {
-                startForeground(NOTIFICATION_ID, buildNotification())
+                startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
-            startForeground(NOTIFICATION_ID, buildNotification())
+            try {
+                startForeground(NOTIFICATION_ID, notification)
+            } catch (inner: Exception) {
+                com.ejemplo.locksuite.util.Safe.report("Watchdog.ensureForeground", inner)
+            }
         }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        destroyed = false
+        com.ejemplo.locksuite.diag.DiagLog.i("watchdog", "Servicio de vigilancia (Watchdog) creado")
+        ensureForeground()
         // 7/11/2026 (B.112) — si este proceso nació con el equipo bloqueado, completar YA la
         // inicialización (Firebase, idioma, etc.) en vez de esperar a ACTION_USER_UNLOCKED.
         // Ver LockSuiteApplication.ensureUnlockedInit.
         com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(this, "Watchdog creado")
-        if (com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)) {
+        val purgado = if (com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(this)) {
+            try {
+                com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)
+            } catch (t: Throwable) {
+                com.ejemplo.locksuite.util.Safe.report("Watchdog.onCreate", t)
+                false
+            }
+        } else {
+            false
+        }
+        if (purgado) {
+            running = false
             stopSelf()
             return
         }
+
+        val thread = android.os.HandlerThread("WatchdogBg").apply { start() }
+        val handler = android.os.Handler(thread.looper)
+        synchronized(bgLock) {
+            bgThread = thread
+            bgHandler = handler
+        }
+        running = true
         instance = this
         scheduleWorkManagerWatchdog()
         handler.post(checkRunnable)
@@ -418,8 +473,7 @@ class WatchdogForegroundService : Service() {
                 // acá mataba el proceso —con la accesibilidad recién enlazada—.
                 com.ejemplo.locksuite.util.Safe.guard("Watchdog.onChange") { checkAccessibilityStatus() }
                 // Re-armar el ciclo con el ritmo que corresponda al estado nuevo.
-                handler.removeCallbacks(enforcerRunnable)
-                handler.postDelayed(enforcerRunnable, 1_500L)
+                rescheduleEnforcer(1_500L)
                 // Si el arranque protegido estaba esperando justamente a que se
                 // activara la accesibilidad, liberar en el acto en vez de esperar
                 // hasta 20 s al próximo ciclo.
@@ -441,18 +495,18 @@ class WatchdogForegroundService : Service() {
             e.printStackTrace()
         }
 
-        // Marcar en línea de inmediato al (re)arrancar el servicio
-        try {
-            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(applicationContext)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // Sincronizar información del dispositivo en segundo plano al iniciar el servicio (no bloqueante)
-        try {
-            com.ejemplo.locksuite.util.FirebaseDeviceSync.requestSync(applicationContext)
-        } catch (e: Exception) {
-            e.printStackTrace()
+        // Marcar en línea y sincronizar estado en segundo plano (sin bloquear onCreate)
+        handler.post {
+            try {
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            try {
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.requestSync(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
@@ -509,11 +563,18 @@ class WatchdogForegroundService : Service() {
         com.ejemplo.locksuite.util.AccessibilityEnforcer.reconcileApps(context, verdict)
 
         if (verdict != com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.VIOLATED) {
-            if (verdict == com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.OK) {
-                val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
-                if (prefs.getBoolean("browsers_suspended_by_watchdog", false)) {
-                    prefs.edit().putBoolean("browsers_suspended_by_watchdog", false).apply()
+            val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
+            if (prefs.getBoolean("browsers_suspended_by_watchdog", false)) {
+                prefs.edit().remove("browsers_suspended_by_watchdog").apply()
+                if (verdict == com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.OK) {
                     com.ejemplo.locksuite.mdm.PolicyManager(context).setBrowsersSuspended(false)
+                } else {
+                    val pm = com.ejemplo.locksuite.mdm.PolicyManager(context)
+                    if (pm.isLockSuiteSuspended()) {
+                        prefs.edit().putBoolean("browsers_suspended", false).apply()
+                    } else {
+                        pm.setBrowsersSuspended(false)
+                    }
                 }
             }
             cancelNag()
@@ -527,7 +588,7 @@ class WatchdogForegroundService : Service() {
         // Suspender navegadores (comportamiento histórico, siempre activo).
         if (!policyManager.areBrowsersSuspended()) {
             prefs.edit().putBoolean("browsers_suspended_by_watchdog", true).apply()
-            policyManager.setBrowsersSuspended(true)
+            policyManager.setBrowsersSuspended(true, fromWatchdog = true)
         }
 
         // Interruptor: aviso insistente cada ~18 s.
@@ -572,14 +633,14 @@ class WatchdogForegroundService : Service() {
         // además de frágil no distinguía "ya está corriendo" de "recién avisó".
         if (nagArmed) return
         nagArmed = true
-        handler.removeCallbacks(nagRunnable)
-        handler.post(nagRunnable)
+        bgHandler?.removeCallbacks(nagRunnable)
+        postBg(nagRunnable)
     }
 
     private fun cancelNag() {
         nagArmed = false
         nagCount = 0
-        handler.removeCallbacks(nagRunnable)
+        bgHandler?.removeCallbacks(nagRunnable)
         lastNagAt = 0L
         try {
             getSystemService(NotificationManager::class.java)?.cancel(NAG_NOTIFICATION_ID)
@@ -744,24 +805,33 @@ class WatchdogForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        ensureForeground()
         // 19/11/2026 (B.125, T2.2): intent == null es el reinicio que hace el sistema por START_STICKY.
         com.ejemplo.locksuite.diag.DiagLog.firstEntry(
             if (intent == null) "reinicio START_STICKY del Watchdog" else "inicio del Watchdog"
         )
-        val purgado = try {
-            com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)
-        } catch (t: Throwable) {
-            com.ejemplo.locksuite.util.Safe.report("Watchdog.onStartCommand", t)
+        val purgado = if (com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(this)) {
+            try {
+                com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)
+            } catch (t: Throwable) {
+                com.ejemplo.locksuite.util.Safe.report("Watchdog.onStartCommand", t)
+                false
+            }
+        } else {
             false
         }
         if (purgado) {
+            running = false
             stopSelf()
             return START_NOT_STICKY
         }
+        running = true
         return START_STICKY
     }
 
     override fun onDestroy() {
+        destroyed = true
+        running = false
         com.ejemplo.locksuite.diag.DiagLog.w("watchdog", "Servicio de vigilancia (Watchdog) destruido")
         if (instance === this) instance = null
         // El listener en vivo del buzón cuelga de este servicio (ver checkRunnable).
@@ -770,9 +840,12 @@ class WatchdogForegroundService : Service() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        handler.removeCallbacks(checkRunnable)
-        handler.removeCallbacks(enforcerRunnable)
-        handler.removeCallbacks(nagRunnable)
+        synchronized(bgLock) {
+            bgHandler?.removeCallbacksAndMessages(null)
+            bgHandler = null
+            bgThread?.quitSafely()
+            bgThread = null
+        }
         accessibilityObserver?.let {
             try { contentResolver.unregisterContentObserver(it) } catch (e: Exception) { }
         }

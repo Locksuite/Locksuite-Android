@@ -36,6 +36,28 @@ class MultimediaProvisioningTest {
         assertTrue(script.contains("WatchdogForegroundService"))
     }
 
+    @Test
+    fun buildActivation_and_buildRestoration_allowShellVariableExpansion() {
+        val act = AccountAuthenticatorGateScript.buildActivation(
+            "com.ejemplo.locksuite",
+            "com.ejemplo.locksuite/com.ejemplo.locksuite.receiver.DeviceAdminReceiver"
+        )
+        val rest = AccountAuthenticatorGateScript.buildRestoration(listOf("com.google.android.gms"))
+
+        // Ninguna variable shell ($p, $USERS, $DPM_RC) debe quedar envuelta en comillas simples POSIX
+        assertFalse(act.contains("'$"))
+        assertFalse(act.contains(":\$p'"))
+        assertFalse(act.contains(":\$USERS'"))
+        assertFalse(act.contains(":\$DPM_RC'"))
+        assertFalse(rest.contains("'$"))
+        assertFalse(rest.contains(":\$p'"))
+
+        assertTrue(act.contains("\"${AccountAuthenticatorGateScript.MARKER_DISABLED_PREFIX}\$p\""))
+        assertTrue(act.contains("\"${AccountAuthenticatorGateScript.MARKER_DPM_EXIT_PREFIX}\$DPM_RC\""))
+        assertTrue(act.contains("\"${AccountAuthenticatorGateScript.MARKER_MULTI_USER_ABORT}\$USERS\""))
+        assertTrue(rest.contains("\"${AccountAuthenticatorGateScript.MARKER_ENABLED_PREFIX}\$p\""))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun buildActivation_rejectsShellInjectionInPackage() {
         AccountAuthenticatorGateScript.buildActivation(

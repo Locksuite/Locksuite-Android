@@ -57,8 +57,9 @@
    * `signInWithRedirect` para el WebView de :admin-app — ver B.22/B.23).
    * ───────────────────────────────────────────────────────────────────────── */
   LS.requireAuth = function (onReady) {
-    LS.auth.onAuthStateChanged(function (user) {
-      if (!user) {
+    let initialized = false;
+    LS.auth.onAuthStateChanged(async function (user) {
+      if (!user || user.isAnonymous) {
         document.body.innerHTML =
           '<div style="max-width:520px;margin:15vh auto;text-align:center;padding:0 20px">' +
           '<h2 style="color:var(--text-light)">Sesión no iniciada</h2>' +
@@ -66,6 +67,30 @@
           '<p><a class="ls-btn ls-btn-primary" href="index.html">Ir al panel</a></p></div>';
         return;
       }
+      if (initialized) return;
+      try {
+        const snap = await LS.db.ref("authorizedAdminsUids/" + user.uid).once("value");
+        if (!snap.exists() || snap.val() !== true) {
+          document.body.innerHTML =
+            '<div style="max-width:520px;margin:15vh auto;text-align:center;padding:0 20px">' +
+            '<h2 style="color:var(--text-light)">Cuenta no autorizada</h2>' +
+            '<p style="color:var(--text-gray)">Esta cuenta no figura en <code>authorizedAdminsUids</code>.</p>' +
+            '<p><a class="ls-btn ls-btn-primary" href="index.html">Volver al panel</a></p></div>';
+          return;
+        }
+      } catch (err) {
+        const code = (err && (err.code || err.message)) || "";
+        if (/permission_denied|PERMISSION_DENIED/i.test(code)) {
+          document.body.innerHTML =
+            '<div style="max-width:520px;margin:15vh auto;text-align:center;padding:0 20px">' +
+            '<h2 style="color:var(--text-light)">Cuenta no autorizada</h2>' +
+            '<p style="color:var(--text-gray)">Esta cuenta no tiene permisos de administrador.</p>' +
+            '<p><a class="ls-btn ls-btn-primary" href="index.html">Volver al panel</a></p></div>';
+          return;
+        }
+      }
+      if (initialized) return;
+      initialized = true;
       onReady(user);
     });
   };
@@ -128,12 +153,73 @@
 
   LS.askPin = function (deviceId, nombre) {
     return new Promise((resolve) => {
-      const v = window.prompt(
-        "PIN de administrador de " + (nombre || "este celular") + ":\n\n" +
-        "Se pide una sola vez por sesión de esta pestaña."
-      );
-      if (v) LS.pins[deviceId] = v;
-      resolve(v || null);
+      if (typeof document === "undefined" || !document.body) {
+        const v = typeof window !== "undefined" && typeof window.prompt === "function"
+          ? window.prompt("PIN de administrador de " + (nombre || "este celular") + ":")
+          : null;
+        if (v) LS.pins[deviceId] = v;
+        resolve(v || null);
+        return;
+      }
+      const overlay = document.createElement("div");
+      overlay.className = "ls-pin-backdrop";
+      overlay.style.cssText =
+        "position:fixed;inset:0;z-index:1000;background:rgba(9,13,18,0.78);display:flex;" +
+        "align-items:center;justify-content:center;padding:16px;";
+      const card = document.createElement("div");
+      card.style.cssText =
+        "width:100%;max-width:360px;background:var(--md-sys-color-surface-container-high,#1E293B);" +
+        "color:var(--md-sys-color-on-surface,#E2E8F0);border:1px solid var(--md-sys-color-outline-variant,#334155);" +
+        "border-radius:18px;padding:20px;box-shadow:0 16px 36px rgba(0,0,0,0.45);";
+      const title = document.createElement("h3");
+      title.style.cssText = "margin:0 0 6px;font-size:16px;";
+      title.textContent = "PIN de " + (nombre || "este celular");
+      const hint = document.createElement("p");
+      hint.style.cssText = "margin:0 0 14px;font-size:12px;color:var(--text-muted,#94A3B8);";
+      hint.textContent = "Se pide una sola vez por sesión de esta pestaña.";
+      const input = document.createElement("input");
+      input.type = "password";
+      input.inputMode = "numeric";
+      input.autocomplete = "off";
+      input.placeholder = "Ingresá el PIN (4 a 16 dígitos)";
+      input.className = "ls-input";
+      input.style.cssText = "width:100%;box-sizing:border-box;margin-bottom:14px;";
+      const actions = document.createElement("div");
+      actions.style.cssText = "display:flex;gap:8px;justify-content:flex-end;";
+      const btnCancel = document.createElement("button");
+      btnCancel.type = "button";
+      btnCancel.className = "ls-btn";
+      btnCancel.textContent = "Cancelar";
+      const btnOk = document.createElement("button");
+      btnOk.type = "button";
+      btnOk.className = "ls-btn ls-btn-primary";
+      btnOk.textContent = "Confirmar";
+      actions.appendChild(btnCancel);
+      actions.appendChild(btnOk);
+      card.appendChild(title);
+      card.appendChild(hint);
+      card.appendChild(input);
+      card.appendChild(actions);
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+
+      let done = false;
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        overlay.remove();
+        const clean = val ? String(val).trim() : "";
+        if (clean) LS.pins[deviceId] = clean;
+        resolve(clean || null);
+      };
+      btnCancel.addEventListener("click", () => finish(null));
+      btnOk.addEventListener("click", () => finish(input.value));
+      overlay.addEventListener("click", (ev) => { if (ev.target === overlay) finish(null); });
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") { ev.preventDefault(); finish(input.value); }
+        else if (ev.key === "Escape") { ev.preventDefault(); finish(null); }
+      });
+      setTimeout(() => input.focus(), 20);
     });
   };
 

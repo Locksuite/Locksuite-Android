@@ -21,11 +21,15 @@ import java.net.URL
 object SelfUpdater {
     private const val VERSION_URL = "https://locksuite-nueva.web.app/version.json"
     private const val FALLBACK_VERSION_URL = "https://locksuite-nueva.firebaseapp.com/version.json"
+    private const val MAX_APK_DOWNLOAD_BYTES = 250L * 1024L * 1024L
+    private const val MAX_MANIFEST_BYTES = 1024 * 1024
+    private val SAFE_PACKAGE_REGEX = Regex("^[a-zA-Z0-9_.]+$")
 
     suspend fun checkAndPerformUpdate(context: Context, showToasts: Boolean = false, onProgress: ((Int) -> Unit)? = null): String? {
         return withContext(Dispatchers.IO) {
             var temporaryInstallAccessPrepared = false
             var installCommitSubmitted = false
+            var tempFile: File? = null
             try {
                 if (showToasts) {
                     withContext(Dispatchers.Main) {
@@ -69,41 +73,55 @@ object SelfUpdater {
                     }
                 }
 
-                val tempFile = File(context.cacheDir, "locksuite_update.apk")
+                tempFile = File.createTempFile("locksuite_update_", ".apk", context.cacheDir)
+                val targetFile = tempFile
                 val urlWithCacheBuster = if (apkUrl.contains("?")) "$apkUrl&t=${System.currentTimeMillis()}" else "$apkUrl?t=${System.currentTimeMillis()}"
                 val apkConnection = openDownloadConnection(urlWithCacheBuster)
+                try {
+                    if (apkConnection.responseCode != HttpURLConnection.HTTP_OK) {
+                        return@withContext "Error al descargar APK: HTTP ${apkConnection.responseCode}"
+                    }
 
-                if (apkConnection.responseCode != HttpURLConnection.HTTP_OK) {
-                    return@withContext "Error al descargar APK: HTTP ${apkConnection.responseCode}"
-                }
-
-                val totalBytes = apkConnection.contentLength
-                var bytesDownloaded = 0
-                apkConnection.inputStream.use { input ->
-                    FileOutputStream(tempFile).use { output ->
-                        val buffer = ByteArray(16384)
-                        var bytesRead: Int
-                        var lastReportedProgress = -1
-                        while (input.read(buffer).also { bytesRead = it } != -1) {
-                            output.write(buffer, 0, bytesRead)
-                            bytesDownloaded += bytesRead
-                            if (totalBytes > 0) {
-                                val progress = (bytesDownloaded * 100L / totalBytes).toInt()
-                                if (progress != lastReportedProgress) {
-                                    lastReportedProgress = progress
-                                    onProgress?.invoke(progress)
+                    val totalBytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        apkConnection.contentLengthLong
+                    } else {
+                        apkConnection.contentLength.toLong()
+                    }
+                    if (totalBytes > MAX_APK_DOWNLOAD_BYTES) {
+                        return@withContext "El archivo de actualización excede el límite máximo permitido (250 MB)."
+                    }
+                    var bytesDownloaded = 0L
+                    apkConnection.inputStream.use { input ->
+                        FileOutputStream(targetFile).use { output ->
+                            val buffer = ByteArray(16384)
+                            var bytesRead: Int
+                            var lastReportedProgress = -1
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                bytesDownloaded += bytesRead
+                                if (bytesDownloaded > MAX_APK_DOWNLOAD_BYTES) {
+                                    throw IOException("El archivo de actualización excede el límite máximo permitido (250 MB)")
+                                }
+                                output.write(buffer, 0, bytesRead)
+                                if (totalBytes > 0) {
+                                    val progress = (bytesDownloaded * 100L / totalBytes).toInt()
+                                    if (progress != lastReportedProgress) {
+                                        lastReportedProgress = progress
+                                        onProgress?.invoke(progress)
+                                    }
                                 }
                             }
                         }
                     }
+                } finally {
+                    apkConnection.disconnect()
                 }
 
                 // Igual que en la Tienda: contra el archivo ya en disco y ANTES de levantar
                 // las restricciones de instalación. Acá la ausencia de hash NO bloquea
                 // (ver arriba); lo que bloquea es un hash publicado que no coincide, que
                 // es la única señal inequívoca de que el archivo no es el que se subió.
-                com.ejemplo.locksuite.util.ApkChecksum.blockSelfUpdate(tempFile, expectedSha256)?.let { error ->
-                    tempFile.delete()
+                com.ejemplo.locksuite.util.ApkChecksum.blockSelfUpdate(targetFile, expectedSha256)?.let { error ->
+                    targetFile.delete()
                     if (showToasts) {
                         withContext(Dispatchers.Main) {
                             Toast.makeText(context, error, Toast.LENGTH_LONG).show()
@@ -120,7 +138,7 @@ object SelfUpdater {
 
                 // Levantar restricciones ANTES de crear la sesión (Android valida al crear, no al commit)
                 if (!prepareTemporaryInstallAccess(context)) {
-                    tempFile.delete()
+                    targetFile.delete()
                     return@withContext "No se pudieron preparar los permisos temporales de instalación."
                 }
                 temporaryInstallAccessPrepared = true
@@ -140,9 +158,9 @@ object SelfUpdater {
                 // cerrar (saltaba directo al catch de abajo), acumulando sesiones
                 // colgadas ante fallos repetidos de auto-actualización.
                 try {
-                    val fileSize = tempFile.length().takeIf { it > 0L } ?: -1L
+                    val fileSize = targetFile.length().takeIf { it > 0L } ?: -1L
                     session.openWrite("COSU", 0, fileSize).use { out ->
-                        FileInputStream(tempFile).use { fis ->
+                        FileInputStream(targetFile).use { fis ->
                             val buffer = ByteArray(65536)
                             var bytesRead: Int
                             while (fis.read(buffer).also { bytesRead = it } != -1) {
@@ -174,25 +192,28 @@ object SelfUpdater {
                     try { session.close() } catch (_: Exception) {}
                 }
 
-                tempFile.delete()
                 return@withContext null
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 19/11/2026 (B.125, T4): una CANCELACIÓN no es un error de instalación. Antes
                 // la tragaba el `catch (e: Exception)` de abajo y se mostraba como «Error de
                 // actualización: rememberCoroutineScope left the composition» (así se perdió la
                 // instalación de «Fondos» el 16/11). Se hace la misma limpieza y se vuelve a lanzar.
-                try { File(context.cacheDir, "locksuite_update.apk").delete() } catch (_: Exception) {}
                 if (temporaryInstallAccessPrepared && !installCommitSubmitted) {
                     com.ejemplo.locksuite.mdm.PolicyManager(context).restoreInstallRestrictions()
                 }
                 throw e
             } catch (e: Exception) {
-                try { File(context.cacheDir, "locksuite_update.apk").delete() } catch (_: Exception) {}
                 if (temporaryInstallAccessPrepared && !installCommitSubmitted) {
                     com.ejemplo.locksuite.mdm.PolicyManager(context).restoreInstallRestrictions()
                 }
                 Log.e("SelfUpdater", "Error de actualización", e)
                 return@withContext "Error de actualización: ${e.message}"
+            } finally {
+                tempFile?.let {
+                    try {
+                        if (it.exists()) it.delete()
+                    } catch (_: Exception) {}
+                }
             }
         }
     }
@@ -240,9 +261,12 @@ object SelfUpdater {
         onProgress: ((Int) -> Unit)? = null
     ): String? {
         return withContext(Dispatchers.IO) {
+            if (!SAFE_PACKAGE_REGEX.matches(packageName)) {
+                return@withContext "Nombre de paquete inválido para descarga."
+            }
             var temporaryInstallAccessPrepared = false
             var installCommitSubmitted = false
-            val tempFile = File(context.cacheDir, "store_${packageName}_update.apk")
+            val tempFile = File.createTempFile("store_${packageName.replace('.', '_')}_", ".apk", context.cacheDir)
             try {
                 if (!quiet) {
                     withContext(Dispatchers.Main) {
@@ -252,33 +276,46 @@ object SelfUpdater {
 
                 val urlWithCacheBuster = if (apkUrl.contains("?")) "$apkUrl&t=${System.currentTimeMillis()}" else "$apkUrl?t=${System.currentTimeMillis()}"
                 val apkConnection = openDownloadConnection(urlWithCacheBuster)
+                try {
+                    if (apkConnection.responseCode != HttpURLConnection.HTTP_OK) {
+                        return@withContext "Error al descargar APK: HTTP ${apkConnection.responseCode}"
+                    }
 
-                if (apkConnection.responseCode != HttpURLConnection.HTTP_OK) {
-                    return@withContext "Error al descargar APK: HTTP ${apkConnection.responseCode}"
-                }
-
-                val totalBytes = apkConnection.contentLength
-                var bytesDownloaded = 0
-                apkConnection.inputStream.use { input ->
-                    FileOutputStream(tempFile).use { output ->
-                        val buffer = ByteArray(16384)
-                        var bytesRead: Int
-                        var lastReportedProgress = -1
-                        while (input.read(buffer).also { bytesRead = it } != -1) {
-                            if (isCancelled?.invoke() == true) {
-                                throw IOException("Descarga cancelada")
-                            }
-                            output.write(buffer, 0, bytesRead)
-                            bytesDownloaded += bytesRead
-                            if (totalBytes > 0) {
-                                val progress = (bytesDownloaded * 100L / totalBytes).toInt()
-                                if (progress != lastReportedProgress) {
-                                    lastReportedProgress = progress
-                                    onProgress?.invoke(progress)
+                    val totalBytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        apkConnection.contentLengthLong
+                    } else {
+                        apkConnection.contentLength.toLong()
+                    }
+                    if (totalBytes > MAX_APK_DOWNLOAD_BYTES) {
+                        return@withContext "El paquete excede el tamaño máximo permitido (250 MB)."
+                    }
+                    var bytesDownloaded = 0L
+                    apkConnection.inputStream.use { input ->
+                        FileOutputStream(tempFile).use { output ->
+                            val buffer = ByteArray(16384)
+                            var bytesRead: Int
+                            var lastReportedProgress = -1
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                if (isCancelled?.invoke() == true) {
+                                    throw IOException("Descarga cancelada")
+                                }
+                                bytesDownloaded += bytesRead
+                                if (bytesDownloaded > MAX_APK_DOWNLOAD_BYTES) {
+                                    throw IOException("El paquete excede el tamaño máximo permitido (250 MB)")
+                                }
+                                output.write(buffer, 0, bytesRead)
+                                if (totalBytes > 0) {
+                                    val progress = (bytesDownloaded * 100L / totalBytes).toInt()
+                                    if (progress != lastReportedProgress) {
+                                        lastReportedProgress = progress
+                                        onProgress?.invoke(progress)
+                                    }
                                 }
                             }
                         }
                     }
+                } finally {
+                    apkConnection.disconnect()
                 }
 
                 // ── B.6, POR FIN CERRADO PARA LA TIENDA (10/9/2026) ──
@@ -528,55 +565,59 @@ object SelfUpdater {
         }
     }
 
+    private fun requireHttpsDownloadUrl(rawUrl: String): String {
+        val trimmed = rawUrl.trim()
+        val parsed = try {
+            java.net.URI(trimmed)
+        } catch (e: Exception) {
+            throw IOException("URL de descarga inválida", e)
+        }
+        val scheme = parsed.scheme
+        val host = parsed.host
+        if (scheme == null || !scheme.equals("https", ignoreCase = true) || host.isNullOrBlank()) {
+            throw IOException("Solo se permiten descargas HTTPS válidas")
+        }
+        return trimmed
+    }
+
     /**
-     * Abre una conexión HTTP para descarga siguiendo redirecciones cross-domain (301, 302, 307, 308).
-     * En Android, HttpURLConnection no sigue redirecciones entre distintos dominios
-     * (por ejemplo de github.com a release-assets.githubusercontent.com / S3 / Azure Blob),
-     * cortando con HTTP 302 a menos que se siga manualmente la cabecera 'Location'.
+     * Abre una conexión HTTPS para descarga siguiendo redirecciones cross-domain (301, 302, 307, 308)
+     * manualmente, exigiendo HTTPS estricto (sin distinguir mayúsculas/minúsculas) en la URL inicial
+     * y en cada salto Location.
      */
     private fun openDownloadConnection(initialUrl: String): HttpURLConnection {
-        var currentUrl = initialUrl
+        var currentUrl = requireHttpsDownloadUrl(initialUrl)
         var redirects = 0
         while (redirects < 7) {
             val conn = URL(currentUrl).openConnection() as HttpURLConnection
             conn.connectTimeout = 20_000
             conn.readTimeout = 20_000
-            conn.instanceFollowRedirects = true
+            conn.instanceFollowRedirects = false
             conn.setRequestProperty("User-Agent", "LockSuite-Updater/1.0")
-            conn.connect()
-            val code = conn.responseCode
-            if (code == HttpURLConnection.HTTP_MOVED_PERM ||
-                code == HttpURLConnection.HTTP_MOVED_TEMP ||
-                code == HttpURLConnection.HTTP_SEE_OTHER ||
-                code == 307 || code == 308) {
-                val newLocation = conn.getHeaderField("Location")
-                if (!newLocation.isNullOrBlank()) {
+            try {
+                conn.connect()
+                val code = conn.responseCode
+                if (code == HttpURLConnection.HTTP_MOVED_PERM ||
+                    code == HttpURLConnection.HTTP_MOVED_TEMP ||
+                    code == HttpURLConnection.HTTP_SEE_OTHER ||
+                    code == 307 || code == 308
+                ) {
+                    val newLocation = conn.getHeaderField("Location")
                     conn.disconnect()
-                    val nextUrl = if (newLocation.startsWith("http://") || newLocation.startsWith("https://")) {
-                        newLocation
-                    } else {
-                        URL(URL(currentUrl), newLocation).toString()
+                    if (newLocation.isNullOrBlank()) {
+                        throw IOException("Redirección HTTP $code sin cabecera Location")
                     }
-                    // No se sigue un redirect que BAJE de https a http. La huella SHA-256
-                    // que exige la Tienda (B.58) ya impide instalar un archivo cambiado,
-                    // pero un salto a texto plano expone igual qué APK baja cada equipo y
-                    // no hace falta para nada: todos los orígenes reales de este proyecto
-                    // (GitHub Releases, Firebase Hosting, S3) son https de punta a punta.
-                    if (currentUrl.startsWith("https://") && nextUrl.startsWith("http://")) {
-                        conn.disconnect()
-                        throw IOException("Redireccion insegura de https a http, descarga cancelada")
-                    }
-                    currentUrl = nextUrl
+                    val resolvedUrl = URL(URL(currentUrl), newLocation).toString()
+                    currentUrl = requireHttpsDownloadUrl(resolvedUrl)
                     redirects++
                     continue
                 }
+                return conn
+            } catch (e: Exception) {
+                conn.disconnect()
+                throw e
             }
-            return conn
         }
-        // Sin esto se devolvía una conexión NUEVA, sin timeouts y sin User-Agent, sobre
-        // la última URL de una cadena que ya había dado siete saltos: o sea que un bucle
-        // de redirecciones terminaba en una descarga que podía colgarse para siempre.
-        // Un error claro es mejor: el llamador lo muestra y el panel lo registra.
         throw IOException("Demasiadas redirecciones (7) al descargar el APK")
     }
 

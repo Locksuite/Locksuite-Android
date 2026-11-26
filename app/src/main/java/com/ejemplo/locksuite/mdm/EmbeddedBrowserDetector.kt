@@ -257,6 +257,23 @@ object EmbeddedBrowserDetector {
             }
         }
 
+    /** Marcadores de clase de motor Web embebido (WebView, Chromium, Crosswalk, GeckoView, Tencent X5/SMTT). */
+    private val WEBVIEW_CLASS_MARKERS = listOf(
+        "webview", "webkit", "chromium", "renderframe", "xwalk", "geckoview", "smtt"
+    )
+
+    fun isWebViewClassName(className: String?): Boolean {
+        val lower = className?.lowercase() ?: return false
+        return WEBVIEW_CLASS_MARKERS.any { lower.contains(it) }
+    }
+
+    fun isExempt(r: Retrato): Boolean {
+        if (r.esPortalCautivo || r.packageName.contains("captiveportal")) return true
+        if (PAQUETES_EXENTOS.containsKey(r.packageName)) return true
+        val actividad = r.activityClass.lowercase()
+        return ACTIVIDADES_EXENTAS.any { actividad.contains(it) }
+    }
+
     /**
      * **LA FUNCIÓN PURA CENTRAL.**
      *

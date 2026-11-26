@@ -107,7 +107,12 @@ object DeviceRelease {
             }
         } catch (_: Exception) {}
 
-        // 5. Parar servicios y cancelar el trabajo de fondo.
+        // 5. Parar servicios y cancelar el trabajo de fondo (incluidas alarmas de rescate).
+        try {
+            com.ejemplo.locksuite.util.ProcessHealth.cancelAll(appCtx)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "No se pudieron cancelar alarmas de ProcessHealth: ${e.message}")
+        }
         try {
             appCtx.stopService(Intent(appCtx, com.ejemplo.locksuite.service.KosherVpnService::class.java))
             appCtx.stopService(Intent(appCtx, com.ejemplo.locksuite.service.WatchdogForegroundService::class.java))

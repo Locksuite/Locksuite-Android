@@ -47,4 +47,33 @@ class DnsPacketParserTest {
         val q = header() + byteArrayOf(0, 0, 2, 0, 1)
         assertNull(DnsPacketParser.extractQueriedDomain(q))
     }
+
+    @Test
+    fun rechazaRespuestaDnsConQrUno() {
+        // QR = 1 (byte 2 = 0x81): es una respuesta, no una consulta
+        val responseHeader = byteArrayOf(
+            0x12, 0x34, 0x81.toByte(), 0x80.toByte(), 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        )
+        val q = responseHeader + label("www") + label("youtube") + label("com") + byteArrayOf(0, 0, 1, 0, 1)
+        assertNull(DnsPacketParser.extractQueriedDomain(q))
+    }
+
+    @Test
+    fun rechazaQdCountDistintoDeUno() {
+        // QDCOUNT = 0
+        val qdZeroHeader = byteArrayOf(
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        )
+        val q0 = qdZeroHeader + label("example") + label("com") + byteArrayOf(0, 0, 1, 0, 1)
+        assertNull(DnsPacketParser.extractQueriedDomain(q0))
+
+        // QDCOUNT = 2 (intento de contrabando de una segunda pregunta bloqueada)
+        val qdTwoHeader = byteArrayOf(
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        )
+        val q2 = qdTwoHeader +
+            label("safe") + label("example") + label("com") + byteArrayOf(0, 0, 1, 0, 1) +
+            label("youtube") + label("com") + byteArrayOf(0, 0, 1, 0, 1)
+        assertNull(DnsPacketParser.extractQueriedDomain(q2))
+    }
 }

@@ -46,14 +46,28 @@ object PlayUpdateSessionWatcher {
     @Volatile private var registered = false
     @Volatile private var installer: PackageInstaller? = null
 
+    /**
+     * IDs de sesiones ya reconocidas para [targetPackage].
+     * En Android, cuando se dispara [PackageInstaller.SessionCallback.onFinished], el sistema ya
+     * retiró la sesión y `getSessionInfo(sessionId)` suele devolver null; recordar los IDs ya
+     * emparejados permite reconocer la finalización incluso cuando sus metadatos desaparecieron.
+     */
+    private val matchedSessionIds: MutableSet<Int> =
+        java.util.Collections.synchronizedSet(HashSet())
+
     private fun matchesTarget(sessionId: Int): Boolean {
+        if (matchedSessionIds.contains(sessionId)) return true
         val target = targetPackage ?: return false
         val info = try {
             installer?.getSessionInfo(sessionId)
         } catch (e: Exception) {
             null
         } ?: return false
-        return info.appPackageName == target
+        if (info.appPackageName == target) {
+            matchedSessionIds.add(sessionId)
+            return true
+        }
+        return false
     }
 
     /**
@@ -102,8 +116,8 @@ object PlayUpdateSessionWatcher {
         if (sawSessionAt == 0L) sawSessionAt = android.os.SystemClock.elapsedRealtime()
     }
 
-    private var onProgressCb: ((Int) -> Unit)? = null
-    private var onFinishedCb: ((Boolean) -> Unit)? = null
+    @Volatile private var onProgressCb: ((Int) -> Unit)? = null
+    @Volatile private var onFinishedCb: ((Boolean) -> Unit)? = null
 
     private val callback = object : PackageInstaller.SessionCallback() {
 
@@ -133,12 +147,14 @@ object PlayUpdateSessionWatcher {
             lastProgress = pct
             lastProgressAt = android.os.SystemClock.elapsedRealtime()
             val cb = onProgressCb ?: return
-            mainHandler.post { cb(pct) }
+            mainHandler.post { Safe.guard("sessionWatcher.onProgress") { cb(pct) } }
         }
 
         override fun onFinished(sessionId: Int, success: Boolean) {
-            if (!matchesTarget(sessionId)) return
-            Log.i(TAG, "Sesión terminada para ${targetPackage}: success=$success")
+            val matched = matchesTarget(sessionId)
+            matchedSessionIds.remove(sessionId)
+            if (!matched) return
+            Log.i(TAG, "Sesión terminada para ${targetPackage}: success=$success (id=$sessionId)")
             if (!success) sessionFailedAt = android.os.SystemClock.elapsedRealtime()
             val cb = onFinishedCb ?: return
             // OJO: success=false NO significa necesariamente que la actualización
@@ -146,7 +162,7 @@ object PlayUpdateSessionWatcher {
             // parte una descarga grande en dos. Quien reciba esto no debe cerrar
             // el flujo con un fracaso: tiene que confirmar contra el versionCode
             // del paquete. Solo success=true es concluyente.
-            mainHandler.post { cb(success) }
+            mainHandler.post { Safe.guard("sessionWatcher.onFinished") { cb(success) } }
         }
     }
 
@@ -161,17 +177,37 @@ object PlayUpdateSessionWatcher {
         onFinished: (Boolean) -> Unit
     ) {
         val ctx = context.applicationContext
+        val sameTarget = registered && targetPackage == packageName
         targetPackage = packageName
         onProgressCb = onProgress
         onFinishedCb = onFinished
-        sawSession = false
-        lastProgress = -1
-        lastProgressAt = 0L
-        sessionFailedAt = 0L
-        sawSessionAt = 0L
+        if (!sameTarget) {
+            matchedSessionIds.clear()
+            sawSession = false
+            lastProgress = -1
+            lastProgressAt = 0L
+            sessionFailedAt = 0L
+            sawSessionAt = 0L
+        }
 
         val inst = ctx.packageManager.packageInstaller
         installer = inst
+
+        // Registrar cualquier sesión ya abierta (p. ej. si el servicio se reconectó a mitad).
+        try {
+            for (s in inst.allSessions) {
+                if (s.appPackageName == packageName) {
+                    matchedSessionIds.add(s.sessionId)
+                    markSeen()
+                    val pct = (s.progress * 100f).toInt().coerceIn(0, 100)
+                    if (pct > lastProgress) {
+                        lastProgress = pct
+                        lastProgressAt = android.os.SystemClock.elapsedRealtime()
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
 
         if (registered) return
         try {
@@ -191,6 +227,7 @@ object PlayUpdateSessionWatcher {
         targetPackage = null
         onProgressCb = null
         onFinishedCb = null
+        matchedSessionIds.clear()
         if (!registered) {
             installer = null
             return
@@ -213,9 +250,15 @@ object PlayUpdateSessionWatcher {
      */
     fun hasActiveSessionFor(context: Context, packageName: String): Boolean {
         return try {
-            context.applicationContext.packageManager.packageInstaller.allSessions.any {
-                it.appPackageName == packageName
+            val session = context.applicationContext.packageManager.packageInstaller.allSessions
+                .filter { it.appPackageName == packageName }
+                .maxWithOrNull(compareBy<PackageInstaller.SessionInfo> { it.isActive }.thenBy { it.progress })
+                ?: return false
+            if (packageName == targetPackage) {
+                matchedSessionIds.add(session.sessionId)
+                markSeen()
             }
+            true
         } catch (e: Exception) {
             false
         }
@@ -225,8 +268,19 @@ object PlayUpdateSessionWatcher {
     fun currentProgressFor(context: Context, packageName: String): Int {
         return try {
             val session = context.applicationContext.packageManager.packageInstaller.allSessions
-                .firstOrNull { it.appPackageName == packageName } ?: return -1
-            (session.progress * 100f).toInt().coerceIn(0, 100)
+                .filter { it.appPackageName == packageName }
+                .maxWithOrNull(compareBy<PackageInstaller.SessionInfo> { it.isActive }.thenBy { it.progress })
+                ?: return -1
+            val pct = (session.progress * 100f).toInt().coerceIn(0, 100)
+            if (packageName == targetPackage) {
+                matchedSessionIds.add(session.sessionId)
+                markSeen()
+                if (pct != lastProgress) {
+                    lastProgress = pct
+                    lastProgressAt = android.os.SystemClock.elapsedRealtime()
+                }
+            }
+            pct
         } catch (e: Exception) {
             -1
         }

@@ -2,8 +2,10 @@ package com.ejemplo.locksuite.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Rect
@@ -16,6 +18,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
 import com.ejemplo.locksuite.mdm.AccessibilityBouncePolicy
 import com.ejemplo.locksuite.mdm.CaptivePortalPolicy
@@ -63,8 +66,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             svc.mainHandler.post {
                 com.ejemplo.locksuite.util.Safe.guard("a11y.tempInstallClosed") {
                     val f = svc.flags()
+                    val playWin = svc.findWindowRootForPackages(setOf(PKG_PLAY_STORE))
+                    val playVisible = if (playWin != null) {
+                        playWin.first.recycle()
+                        true
+                    } else {
+                        false
+                    }
                     val topPkg = svc.getOriginApp()
-                    if (!f.suspended && !f.playUpdateActive && topPkg == PKG_PLAY_STORE &&
+                    val allowFallbackTop = !playVisible && svc.hasNoInteractiveWindows() && topPkg == PKG_PLAY_STORE
+                    if (!f.suspended && !f.playUpdateActive && (playVisible || allowFallbackTop) &&
                         (f.playStoreAccessibilityBlocked || svc.policyManager.isPlayStoreAppBlocked())
                     ) {
                         Log.i(TAG, "🔒 Ventana temporal cerrada con Play Store abierta: regresando a Home")
@@ -94,6 +105,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         private const val PKG_WHATSAPP = "com.whatsapp"
         private const val PKG_WHATSAPP_BUSINESS = "com.whatsapp.w4b"
         private const val PKG_PLAY_STORE = "com.android.vending"
+        private const val PKG_HTML_VIEWER = "com.android.htmlviewer"
+        private const val PLAY_UPDATE_DEBOUNCE_MS = 250L
 
         /** Vida útil del cache de "qué paquetes son navegadores". */
         private const val BROWSER_CACHE_TTL_MS = 10 * 60 * 1000L
@@ -545,7 +558,37 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         } catch (t: Throwable) {
             com.ejemplo.locksuite.util.Safe.report("a11y.onServiceConnected (intento $intento)", t)
             if (intento < 3) {
-                mainHandler.postDelayed({ connectServiceWithRetry(intento + 1) }, 3_000L)
+                mainHandler.postDelayed({
+                    com.ejemplo.locksuite.util.Safe.guard("a11y.connectRetry") {
+                        connectServiceWithRetry(intento + 1)
+                    }
+                }, 3_000L)
+            }
+        }
+    }
+
+    private var keyguardReceiverRegistered = false
+    private var lastObservedKeyguardLocked: Boolean? = null
+    private val keyguardReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent?) {
+            com.ejemplo.locksuite.util.Safe.guard("a11y.keyguardReceiver") {
+                UpdateFlowManager.invalidateKeyguardCache()
+                if (intent?.action == Intent.ACTION_USER_PRESENT) {
+                    lastObservedKeyguardLocked = false
+                    val ctx = applicationContext
+                    if (UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
+                        val pkg = UpdateFlowManager.currentPackage(ctx)
+                        if (!pkg.isNullOrBlank()) {
+                            mainHandler.post {
+                                com.ejemplo.locksuite.util.Safe.guard("a11y.userPresentTick") {
+                                    if (UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
+                                        scanAndAct(pkg)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -582,6 +625,23 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         mdmPrefs.registerOnSharedPreferenceChangeListener(prefsListener)
         cachedFlags = null
 
+        if (!keyguardReceiverRegistered) {
+            try {
+                val filter = IntentFilter().apply {
+                    addAction(Intent.ACTION_USER_PRESENT)
+                    addAction(Intent.ACTION_SCREEN_OFF)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(keyguardReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    registerReceiver(keyguardReceiver, filter)
+                }
+                keyguardReceiverRegistered = true
+            } catch (e: Exception) {
+                Log.w(TAG, "No se pudo registrar receptor de keyguard: ${e.message}")
+            }
+        }
+
         val p = PrefsHelper.getMdmPrefs(this)
         if (!p.contains("accessibility_protection_enabled")) {
             p.edit().putBoolean("accessibility_protection_enabled", true).apply()
@@ -617,8 +677,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // seguia marcado "en curso" con Play Store destapada y la instalacion
         // habilitada, pero SIN pantalla y SIN nadie que lo llevara a un cierre con
         // motivo. En Android 12+ ni siquiera lo rescataba la alarma watchdog (ver
-        // UpdateFlowManager.armWatchdog / B.54). Se re-arma el ticker y se redibuja
-        // el overlay para que el flujo retome y termine diciendo en que quedo.
+        // UpdateFlowManager.armWatchdog / B.54). Se re-arma el ticker, el watcher de
+        // sesiones y se redibuja el overlay para que el flujo retome y termine diciendo en que quedo.
         try {
             val ctx = applicationContext
             if (com.ejemplo.locksuite.util.UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
@@ -628,8 +688,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                         ctx, pkg,
                         com.ejemplo.locksuite.util.UpdateFlowManager.currentStage(ctx)
                     )
+                    com.ejemplo.locksuite.util.UpdateFlowManager.ensureSessionWatcherStarted(ctx, pkg)
                     startUpdateTicker()
-                    Log.i(TAG, "Flujo de actualizacion en curso al reconectar: ticker re-armado para $pkg")
+                    Log.i(TAG, "Flujo de actualizacion en curso al reconectar: ticker y watcher re-armados para $pkg")
                 }
             }
         } catch (e: Exception) {
@@ -672,9 +733,6 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val ev = event ?: return
         val packageName = ev.packageName?.toString() ?: return
 
-        // Ignorar nuestra propia app
-        if (packageName == LOCKSUITE_PKG) return
-
         // Filtro de tipo de evento adelantado: es una comparación de enteros y descarta
         // el evento antes de tocar SharedPreferences o el PackageManager.
         val eventType = ev.eventType
@@ -683,12 +741,24 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             eventType != AccessibilityEvent.TYPE_VIEW_SELECTED &&
             eventType != AccessibilityEvent.TYPE_VIEW_SCROLLED) return
 
+        // Ignorar nuestra propia app (limpiando sesión de portal cautivo si salimos hacia LockSuite/Launcher)
+        if (packageName == LOCKSUITE_PKG) {
+            if (captiveOpenedAt != 0L &&
+                eventType != AccessibilityEvent.TYPE_VIEW_SCROLLED &&
+                !hasActiveCaptivePortalWindow()
+            ) {
+                finishCaptivePortalSession()
+            }
+            return
+        }
+
         // LockSuite purgado: el equipo fue liberado y la app está por desinstalarse. El
         // servicio no bloquea, no rebota y no dibuja nada, y se apaga solo (disableSelf)
         // para no quedar a medio andar si la desinstalación se demora. Va después del
         // filtro barato de tipo de evento, y se lee directo (sin la caché de flags) porque
         // es un estado terminal: no tiene que esperar a que la caché venza.
         if (mdmPrefs.getBoolean("locksuite_purged", false)) {
+            if (captiveOpenedAt != 0L) finishCaptivePortalSession()
             try {
                 if (overlayManager.isBlockingMessageVisible()) overlayManager.hideBlockingMessageOverlay()
                 overlayManager.clearAll()
@@ -709,6 +779,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // colgada en pantalla de antes de la suspensión.
         // ──────────────────────────────────────────────
         if (f.suspended) {
+            if (captiveOpenedAt != 0L) finishCaptivePortalSession()
             if (overlayManager.isBlockingMessageVisible()) {
                 overlayManager.hideBlockingMessageOverlay()
             }
@@ -727,7 +798,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             // (quedaría encendida en el bolsillo hasta el watchdog) ni se relanza Play
             // Store (se abriría detrás del keyguard, sin que nadie la vea). El flujo espera
             // a que desbloqueen: ver scanAndAct.
+            if (lastObservedKeyguardLocked == true && packageName != "com.android.systemui") {
+                UpdateFlowManager.invalidateKeyguardCache()
+            }
             val bloqueado = UpdateFlowManager.isKeyguardLocked(applicationContext)
+            if (lastObservedKeyguardLocked != bloqueado) {
+                lastObservedKeyguardLocked = bloqueado
+                if (!bloqueado) {
+                    UpdateFlowManager.invalidateKeyguardCache()
+                }
+            }
             // Asegurar que la pantalla esté encendida durante la actualización
             if (!bloqueado) ensureScreenOnForUpdate()
             if (packageName == PKG_PLAY_STORE) {
@@ -790,7 +870,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             // contaba CONTENT_CHANGED, y la ventana se podía cerrar con el usuario en
             // plena lectura. Es una comparación de paquete: gratis en el camino caliente.
             if (f.captivePortalGuard && captiveOpenedAt != 0L &&
-                CaptivePortalPolicy.isCaptivePortalWindow(packageName, null)
+                (CaptivePortalPolicy.isCaptivePortalWindow(packageName, null) ||
+                    (captivePortalPkg != null && packageName == captivePortalPkg))
             ) {
                 captiveLastActivityAt = SystemClock.elapsedRealtime()
             }
@@ -803,23 +884,60 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // (B.97: la ruta de la Tienda no abre Play Store, así que no la exime).
         val allowPlayTemp = f.tempInstallActive &&
             com.ejemplo.locksuite.mdm.TempInstallWindowManager.isActive(applicationContext)
-        if (!f.playUpdateActive && !allowPlayTemp && packageName == PKG_PLAY_STORE && f.playStoreAccessibilityBlocked) {
-            Log.w(TAG, "🚫 Bloqueo de Google Play Store por Accesibilidad activo. Bloqueando y regresando a Home...")
-            Layer3Audit.anotar(
-                applicationContext, "play-store", packageName, null,
-                "Bloqueo de Play Store por Accesibilidad activo", true
-            )
-            overlayManager.hideBlockingMessageOverlay()
-            performGlobalAction(GLOBAL_ACTION_HOME)
-            // Con una instalación silenciosa en curso (la Tienda, o la ruta de la Tienda
-            // de una actualización) NO se re-imponen las restricciones: le cortaría la
-            // instalación a mitad. Esa ventana la cierra quien la abrió.
-            if (!f.updateInProgress) policyManager.restoreInstallRestrictions()
-            return
+        if (!f.playUpdateActive && !allowPlayTemp && f.playStoreAccessibilityBlocked) {
+            if (packageName == PKG_PLAY_STORE) {
+                if (UpdateFlowManager.isFinishingNoticeActive()) {
+                    return
+                }
+                Log.w(TAG, "🚫 Bloqueo de Google Play Store por Accesibilidad activo. Bloqueando y regresando a Home...")
+                Layer3Audit.anotar(
+                    applicationContext, "play-store", packageName, null,
+                    "Bloqueo de Play Store por Accesibilidad activo", true
+                )
+                overlayManager.hideBlockingMessageOverlay()
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                // Con una instalación silenciosa en curso (la Tienda, o la ruta de la Tienda
+                // de una actualización) NO se re-imponen las restricciones: le cortaría la
+                // instalación a mitad. Esa ventana la cierra quien la abrió.
+                if (!f.updateInProgress) policyManager.restoreInstallRestrictions()
+                return
+            } else if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                !UpdateFlowManager.isFinishingNoticeActive()
+            ) {
+                val splitPlay = findWindowRootForPackages(setOf(PKG_PLAY_STORE))
+                if (splitPlay != null) {
+                    splitPlay.first.recycle()
+                    Log.w(TAG, "🚫 Play Store abierta en ventana múltiple. Bloqueando y regresando a Home...")
+                    Layer3Audit.anotar(
+                        applicationContext, "play-store", PKG_PLAY_STORE, null,
+                        "Bloqueo de Play Store en ventana múltiple", true
+                    )
+                    overlayManager.hideBlockingMessageOverlay()
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                    if (!f.updateInProgress) policyManager.restoreInstallRestrictions()
+                    return
+                }
+            }
         }
 
         // ── Actualizar stack de paquetes de apps reales ──
         trackPackage(packageName)
+
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            !AccessibilityBouncePolicy.isTransientWindowPackage(packageName)
+        ) {
+            val evCls = ev.className?.toString()
+            if (packageName != PKG_WHATSAPP && packageName != PKG_WHATSAPP_BUSINESS) {
+                lastWaWindowClassName = null
+                mainHandler.removeCallbacks(whatsappScanRunnable)
+            }
+            lastPhotoEventPkg = packageName
+            lastPhotoEventCls = evCls
+            lastGAccWindowPkg = packageName
+            lastGAccWindowCls = evCls
+            lastLegalEventPkg = packageName
+            lastLegalEventCls = evCls
+        }
 
         // ── Bloqueo de Estados y Canales en WhatsApp ──
         if ((f.waStatus || f.waChannels) &&
@@ -885,7 +1003,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
                  eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
                  eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) &&
-                CaptivePortalPolicy.isCaptivePortalWindow(packageName, ev.className?.toString())
+                (CaptivePortalPolicy.isCaptivePortalWindow(packageName, ev.className?.toString()) ||
+                    (captivePortalPkg != null && packageName == captivePortalPkg))
             ) {
                 // Señal de vida de la ventana: la página cambió, o el usuario interactuó
                 // (click, scroll), o sea que alguien la está usando. Reinicia el reloj de
@@ -895,6 +1014,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 // comió justo los eventos que probaban que el usuario estaba ahí.
                 captiveLastActivityAt = SystemClock.elapsedRealtime()
             }
+        } else if (captiveOpenedAt != 0L) {
+            finishCaptivePortalSession()
         }
 
         // Debounce para CONTENT_CHANGED (se dispara muy seguido)
@@ -909,7 +1030,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
 
         // ── Bloqueo de WebView ──
-        handleWebViewBlocking(packageName, eventType)
+        handleWebViewBlocking(packageName, eventType, ev.className?.toString())
 
         // ── Rebote de Licencias y Términos Legales en Ajustes (Punto D) ──
         //
@@ -919,21 +1040,20 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // abrir Ajustes"), que costó una sesión entera. Ahora tiene las dos guardas
         // mínimas que tienen todos los demás rebotes del archivo.
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            (isSettingsPackage(packageName) || packageName == GoogleAccountWebPolicy.PKG_GMS)
+            (isSettingsPackage(packageName) ||
+                packageName == GoogleAccountWebPolicy.PKG_GMS ||
+                packageName == PKG_HTML_VIEWER)
         ) {
             val cls = ev.className?.toString() ?: ""
-            if (isLegalOrLicenseScreen(cls) &&
-                SystemClock.elapsedRealtime() >= legalBounceBackoffUntil &&
+            if (isLegalOrLicenseScreen(packageName, cls) &&
                 !com.ejemplo.locksuite.security.SessionManager.isActive()
             ) {
-                legalBounceBackoffUntil = SystemClock.elapsedRealtime() + LEGAL_BOUNCE_BACKOFF_MS
-                Log.w(TAG, "🚫 Pantalla legal/licencias detectada: rebotando al usuario ($cls).")
-                Layer3Audit.anotar(
-                    applicationContext, "legales", packageName, cls,
-                    "pantalla de licencias o términos legales", true
-                )
-                performGlobalAction(GLOBAL_ACTION_BACK)
-                return
+                val now = SystemClock.elapsedRealtime()
+                if (now < legalBounceBackoffUntil) {
+                    scheduleDeferredLegalRecheck(packageName, cls, legalBounceBackoffUntil - now)
+                } else if (performLegalLicenseBounce(packageName, cls)) {
+                    return
+                }
             }
         }
 
@@ -953,7 +1073,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                     applicationContext, "idioma", packageName, cls,
                     "selector de idioma del sistema o por aplicación bloqueado", true
                 )
-                performGlobalAction(GLOBAL_ACTION_BACK)
+                val match = findWindowRootForPackages(setOf(packageName))
+                val isFocused = if (match != null) {
+                    match.first.recycle()
+                    match.second
+                } else {
+                    true
+                }
+                performGlobalAction(if (isFocused) GLOBAL_ACTION_BACK else GLOBAL_ACTION_HOME)
                 return
             }
         }
@@ -961,9 +1088,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // ── Rebote selectivo de LockSuite dentro de Accesibilidad en Ajustes ──
         if (!isSettingsPackage(packageName)) {
             if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-                !packageName.contains("inputmethod", ignoreCase = true)
+                !AccessibilityBouncePolicy.isTransientWindowPackage(packageName)
             ) {
                 inAccessibilityContext = false
+                lastSettingsClass = ""
                 lastSettingsWindowTitleFolded = ""
             }
         } else if (f.accSettingsBounce) {
@@ -971,8 +1099,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
 
         // ── Anti-evasión en Ajustes ──
-        if (f.settingsEvasion && packageName == SETTINGS_PKG) {
-            handleSettingsAntiEvasion()
+        if (f.settingsEvasion && isSettingsPackage(packageName)) {
+            handleSettingsAntiEvasion(packageName)
         }
 
         // ── Códigos secretos en el marcador ──
@@ -1024,17 +1152,38 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
             return
         }
+        val f = flags()
+        if (!f.captivePortalCoverImages) {
+            if (overlayManager.hasRegions("captive:")) {
+                overlayManager.clearStaleRegions("captive:", emptySet())
+            }
+            return
+        }
 
-        val isProvider = packageName == "com.google.android.webview" || packageName == "com.android.webview"
-        val activePkg = if (isProvider) (getOriginApp() ?: packageName) else packageName
+        // Ignorar ventanas del teclado (IME) y SystemUI para no parpadear ni borrar recuadros al tipear credenciales.
+        if (packageName == "com.android.systemui" || AccessibilityBouncePolicy.isImePackageBySegment(packageName)) {
+            return
+        }
 
-        // Mientras la ventana de portal cautivo está al frente se tapan sus <img> no clicables;
+        val isProvider = WEBVIEW_PROVIDER_PACKAGES.contains(packageName)
+        val trackedPortalPkg = captivePortalPkg
+        val activePkg = when {
+            CaptivePortalPolicy.isCaptivePortalWindow(packageName, null) ||
+                (trackedPortalPkg != null && packageName == trackedPortalPkg) -> packageName
+            isProvider && trackedPortalPkg != null -> trackedPortalPkg
+            isProvider -> getOriginApp() ?: packageName
+            else -> packageName
+        }
+
+        // Mientras la ventana de portal cautivo está visible (incluso en pantalla dividida) se tapan sus <img> no clicables;
         // los controles clicables/editables (Conectar, captcha, planes) quedan visibles.
-        val portalCautivo = flags().captivePortalCoverImages &&
-            (CaptivePortalPolicy.isCaptivePortalWindow(activePkg, null) || isSystemOrInputPackage(activePkg))
+        val esPortal = CaptivePortalPolicy.isCaptivePortalWindow(activePkg, null) ||
+            (trackedPortalPkg != null && activePkg == trackedPortalPkg)
 
-        if (portalCautivo) {
+        if (esPortal) {
             runCaptivePortalImageCover(activePkg)
+        } else if (trackedPortalPkg != null && hasActiveCaptivePortalWindow()) {
+            runCaptivePortalImageCover(trackedPortalPkg)
         } else if (overlayManager.hasRegions("captive:")) {
             overlayManager.clearStaleRegions("captive:", emptySet())
         }
@@ -1044,11 +1193,19 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var nodeBudget = 0
 
     private fun runCaptivePortalImageCover(activePkg: String) {
-        val root = rootInActiveWindow ?: return
+        val targetPkgs = buildSet {
+            add(activePkg)
+            captivePortalPkg?.let { add(it) }
+        }
+        val match = findWindowRootForPackages(targetPkgs) ?: return
+        val root = match.first
         try {
             val rootPkg = root.packageName?.toString() ?: ""
-            if (rootPkg == LOCKSUITE_PKG || (rootPkg != activePkg && isSystemOrInputPackage(rootPkg))) {
-                // Ignorar escaneo si la ventana activa es nuestra, del sistema o teclado, para no borrar overlays
+            if (rootPkg == LOCKSUITE_PKG ||
+                rootPkg == "com.android.systemui" ||
+                AccessibilityBouncePolicy.isImePackageBySegment(rootPkg)
+            ) {
+                // Ignorar si la ventana es nuestra, SystemUI o teclado, para no borrar overlays
                 return
             }
             val foundKeys = mutableSetOf<String>()
@@ -1105,24 +1262,77 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     // ──────────────────────────────────────────────
+    // Búsqueda multi-ventana (split-screen / PiP / ventanas libres)
+    // ──────────────────────────────────────────────
+    private fun hasNoInteractiveWindows(): Boolean = try {
+        windows.isEmpty()
+    } catch (_: Exception) {
+        true
+    }
+
+    /**
+     * Busca entre las ventanas `TYPE_APPLICATION` una perteneciente a [pkgs] y devuelve
+     * `(root, isFocused)`. Recicla todos los `AccessibilityNodeInfo` obtenidos que no
+     * se devuelven; quien llama DEBE reciclar `root` en un `try/finally`.
+     */
+    private fun findWindowRootForPackages(pkgs: Set<String>): Pair<AccessibilityNodeInfo, Boolean>? {
+        if (pkgs.isEmpty()) return null
+        try {
+            val winList = windows
+            var unfocusedMatch: AccessibilityNodeInfo? = null
+            for (w in winList) {
+                if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+                val wRoot = w.root ?: continue
+                val wPkg = wRoot.packageName?.toString()
+                if (wPkg != null && wPkg in pkgs) {
+                    if (w.isFocused) {
+                        unfocusedMatch?.recycle()
+                        return wRoot to true
+                    }
+                    if (unfocusedMatch == null) {
+                        unfocusedMatch = wRoot
+                    } else {
+                        wRoot.recycle()
+                    }
+                } else {
+                    wRoot.recycle()
+                }
+            }
+            if (unfocusedMatch != null) {
+                return unfocusedMatch to false
+            }
+        } catch (e: Exception) {
+            if (VERBOSE) Log.w(TAG, "Error consultando windows: ${e.message}")
+        }
+        val fallback = try { rootInActiveWindow } catch (_: Exception) { null } ?: return null
+        val fPkg = fallback.packageName?.toString()
+        return if (fPkg != null && fPkg in pkgs) {
+            fallback to true
+        } else {
+            fallback.recycle()
+            null
+        }
+    }
+
+    private fun isPackageWindowFocused(pkg: String): Boolean {
+        val match = findWindowRootForPackages(setOf(pkg)) ?: return true
+        match.first.recycle()
+        return match.second
+    }
+
+    // ──────────────────────────────────────────────
     // Rastreo de paquetes
     // ──────────────────────────────────────────────
     private fun isSystemOrInputPackage(pkg: String): Boolean {
         if (pkg.isEmpty()) return false
         // Memorizado: la respuesta para un paquete dado nunca cambia, y calcularla
-        // implicaba un lowercase() (que asigna un String nuevo) más ocho contains().
+        // implicaba un lowercase() (que asigna un String nuevo) más múltiples contains().
         sysInputCache[pkg]?.let { return it }
         val lower = pkg.lowercase()
         val result = pkg == LOCKSUITE_PKG ||
                pkg == "com.android.systemui" ||
                lower.contains("captiveportal") ||
-               lower.contains("inputmethod") ||
-               lower.contains("honeyboard") ||
-               lower.contains("latin") ||
-               lower.contains("gboard") ||
-               lower.contains("swiftkey") ||
-               lower.contains("keyboard") ||
-               lower.contains("ime")
+               AccessibilityBouncePolicy.isImePackageBySegment(pkg)
         if (sysInputCache.size < 256) sysInputCache[pkg] = result
         return result
     }
@@ -1144,13 +1354,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     // ──────────────────────────────────────────────
     // Lógica principal de bloqueo de WebView
     // ──────────────────────────────────────────────
-    private fun handleWebViewBlocking(packageName: String, eventType: Int) {
+    private fun handleWebViewBlocking(packageName: String, eventType: Int, activityClass: String? = null) {
         if (WEBVIEW_PROVIDER_PACKAGES.contains(packageName)) {
             val originApp = getOriginApp()
             if (VERBOSE) Log.d(TAG, "WebView provider detectado. originApp=$originApp")
             if (originApp != null && WebViewBlockManager.isBlocked(this, originApp)) {
                 Log.w(TAG, "🚫 Bloqueando WebView de $originApp (provider=$packageName)")
-                triggerBlock(originApp)
+                triggerBlock(originApp, triggerPkg = packageName, isFocused = isPackageWindowFocused(packageName))
             }
             return
         }
@@ -1160,7 +1370,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             if (VERBOSE) Log.d(TAG, "Browser detectado. originApp=$originApp")
             if (originApp != null && originApp != packageName && WebViewBlockManager.isBlocked(this, originApp)) {
                 Log.w(TAG, "🚫 Bloqueando Custom Tab/Browser de $originApp (browser=$packageName)")
-                triggerBlock(originApp)
+                triggerBlock(originApp, triggerPkg = packageName, isFocused = isPackageWindowFocused(packageName))
+                return
+            }
+            if (WebViewBlockManager.isBlocked(this, packageName)) {
+                checkAndBlockWebViewInTree(packageName, eventType)
             }
             return
         }
@@ -1177,7 +1391,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             // arriba (proveedor de WebView y navegador declarado) siguen mandando
             // igual que siempre, así que esto no puede cambiar el comportamiento de
             // nada que ya funcionaba — solo cubre el camino que antes no hacía nada.
-            maybeDetectEmbeddedBrowser(packageName, eventType)
+            maybeDetectEmbeddedBrowser(packageName, eventType, activityClass)
             return
         }
         checkAndBlockWebViewInTree(packageName, eventType)
@@ -1191,8 +1405,20 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private var lastIabScanPkg: String? = null
     private var lastIabScanAt = 0L
+    private var pendingIabPkg: String? = null
+    private var pendingIabActivityClass: String? = null
+    private val iabDelayedScanRunnable = Runnable {
+        com.ejemplo.locksuite.util.Safe.guard("a11y.iabDelayedScan") {
+            val pkg = pendingIabPkg ?: return@guard
+            val actCls = pendingIabActivityClass
+            val f = flags()
+            if (f.suspended || !f.iabFinder || webViewBlockInProgress) return@guard
+            if (WebViewBlockManager.isBlocked(this, pkg)) return@guard
+            runIabDetection(pkg, actCls, f.iabSimulation)
+        }
+    }
 
-    private fun maybeDetectEmbeddedBrowser(packageName: String, eventType: Int) {
+    private fun maybeDetectEmbeddedBrowser(packageName: String, eventType: Int, activityClass: String?) {
         val f = flags()
         if (!f.iabFinder) return
 
@@ -1207,32 +1433,48 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         lastIabScanPkg = packageName
         lastIabScanAt = now
 
-        val root = rootInActiveWindow ?: return
+        val outcome = runIabDetection(packageName, activityClass, f.iabSimulation)
+        mainHandler.removeCallbacks(iabDelayedScanRunnable)
+        if (!outcome) {
+            pendingIabPkg = packageName
+            pendingIabActivityClass = activityClass
+            mainHandler.postDelayed(iabDelayedScanRunnable, 600L)
+        }
+    }
+
+    /** Devuelve true si ya bloqueó o la pantalla está exenta (no hace falta re-escaneo diferido). */
+    private fun runIabDetection(packageName: String, activityClass: String?, simulation: Boolean): Boolean {
+        val match = findWindowRootForPackages(setOf(packageName)) ?: return false
+        val root = match.first
+        val isFocused = match.second
         val retrato = try {
-            buildIabRetrato(root, packageName)
+            buildIabRetrato(root, packageName, activityClass)
         } catch (e: Exception) {
             Log.w(TAG, "IAB: no se pudo armar el retrato de $packageName: ${e.message}")
             null
         } finally {
             root.recycle()
-        } ?: return
+        } ?: return false
+
+        if (EmbeddedBrowserDetector.isExempt(retrato)) return true
 
         val veredicto = EmbeddedBrowserDetector.evaluar(retrato)
-        if (veredicto != EmbeddedBrowserDetector.Veredicto.NAVEGADOR_EMBEBIDO) return
+        if (veredicto != EmbeddedBrowserDetector.Veredicto.NAVEGADOR_EMBEBIDO) return false
 
         val motivo = EmbeddedBrowserDetector.motivo(retrato)
 
         // Se publica SIEMPRE, bloquee o no. Es la mitad que hizo usable el modo lista
         // blanca en B.53: sin la lista de lo que habría bloqueado, encender esto es
         // apostar a ciegas sobre un universo de apps abierto.
-        EmbeddedBrowserDetector.anotar(packageName, motivo, bloqueado = !f.iabSimulation)
+        EmbeddedBrowserDetector.anotar(packageName, motivo, bloqueado = !simulation)
 
-        if (f.iabSimulation) {
+        if (simulation) {
             Log.i(TAG, "IAB (simulación): $packageName sería bloqueado — $motivo")
-            return
+            return true
         }
         Log.w(TAG, "🚫 IAB: navegador embebido en $packageName — $motivo")
-        triggerBlock(packageName, "navegador embebido: $motivo")
+        triggerBlock(packageName, "navegador embebido: $motivo", isFocused = isFocused)
+        return true
     }
 
     /**
@@ -1243,7 +1485,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
      */
     private fun buildIabRetrato(
         root: AccessibilityNodeInfo,
-        packageName: String
+        packageName: String,
+        trackedActivityClass: String? = null
     ): EmbeddedBrowserDetector.Retrato {
         nodeBudget = MAX_NODES_PER_SCAN
         val ids = ArrayList<String>(MAX_IAB_STRINGS)
@@ -1257,13 +1500,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         hayWebView = walkIab(root, 0, ids, editables, descripciones, mayorWebView)
 
+        val resolvedActivityClass = trackedActivityClass?.takeIf { it.isNotBlank() }
+            ?: currentActivityClass(root)
         return EmbeddedBrowserDetector.Retrato(
             packageName = packageName,
-            activityClass = currentActivityClass(root),
+            activityClass = resolvedActivityClass,
             // El guard de portal cautivo ya sabe reconocer esa ventana; se reusa su
             // señal en vez de estrenar una segunda forma de detectarla, que es como
             // se termina con dos detecciones que no coinciden.
-            esPortalCautivo = CaptivePortalPolicy.isCaptivePortalWindow(packageName, root.className?.toString()),
+            esPortalCautivo = CaptivePortalPolicy.isCaptivePortalWindow(packageName, resolvedActivityClass) ||
+                CaptivePortalPolicy.isCaptivePortalWindow(packageName, root.className?.toString()),
             tieneWebView = hayWebView,
             fraccionWebView = (mayorWebView[0].toDouble() / areaPantalla.toDouble()).toFloat(),
             idsDeVista = ids,
@@ -1284,10 +1530,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         if (nodeBudget-- <= 0) return false
 
         var hayWebView = false
-        val clase = node.className?.toString()?.lowercase() ?: ""
-        if (clase.contains("webview") || clase.contains("webkit") ||
-            clase.contains("chromium") || clase.contains("renderframe") || clase.contains("xwalk")
-        ) {
+        val clase = node.className?.toString() ?: ""
+        if (EmbeddedBrowserDetector.isWebViewClassName(clase)) {
             hayWebView = true
             val r = Rect()
             node.getBoundsInScreen(r)
@@ -1336,19 +1580,22 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var lastRetryArmAt = 0L
 
     private fun checkAndBlockWebViewInTree(packageName: String, eventType: Int) {
-        // Verificación inmediata sobre la ventana actual.
-        val root = rootInActiveWindow
-        if (root != null) {
-            if (isWindowFromPackage(root, packageName)) {
-                val found = containsWebView(root)
-                if (VERBOSE) Log.d(TAG, "Verificación inmediata pkg=$packageName webViewFound=$found")
-                if (found) {
-                    root.recycle()
-                    triggerBlock(packageName)
-                    return
-                }
+        val targetPkgs = setOf(packageName) + WEBVIEW_PROVIDER_PACKAGES
+        // Verificación inmediata sobre la ventana actual o en pantalla dividida.
+        val match = findWindowRootForPackages(targetPkgs)
+        if (match != null) {
+            val root = match.first
+            val isFocused = match.second
+            val found = try {
+                isWindowFromPackage(root, packageName) && containsWebView(root)
+            } finally {
+                root.recycle()
             }
-            root.recycle()
+            if (VERBOSE) Log.d(TAG, "Verificación inmediata pkg=$packageName webViewFound=$found")
+            if (found) {
+                triggerBlock(packageName, isFocused = isFocused)
+                return
+            }
         }
 
         // La escalera de reintentos existe para atrapar WebViews que cargan tarde.
@@ -1375,24 +1622,20 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                     com.ejemplo.locksuite.util.Safe.guard("a11y.webViewRetry") {
                         webViewRetryRunnables.remove(this)
                         if (webViewBlockInProgress) return
-                        val current = rootInActiveWindow ?: return
-                        val currentPkg = current.packageName?.toString() ?: run {
+                        val retryMatch = findWindowRootForPackages(targetPkgs) ?: return
+                        val current = retryMatch.first
+                        val isFocused = retryMatch.second
+                        val found = try {
+                            val currentPkg = current.packageName?.toString() ?: ""
+                            val relevantPkg = currentPkg == packageName ||
+                                (WEBVIEW_PROVIDER_PACKAGES.contains(currentPkg) && getOriginApp() == packageName)
+                            relevantPkg && containsWebView(current)
+                        } finally {
                             current.recycle()
-                            return
                         }
-                        val relevantPkg = currentPkg == packageName ||
-                                          WEBVIEW_PROVIDER_PACKAGES.contains(currentPkg)
-
-                        if (!relevantPkg) {
-                            current.recycle()
-                            return
-                        }
-
-                        val found = containsWebView(current)
-                        current.recycle()
                         if (found) {
                             Log.w(TAG, "🚫 WebView detectado con retraso de ${delay}ms para $packageName")
-                            triggerBlock(packageName)
+                            triggerBlock(packageName, isFocused = isFocused)
                         }
                     }
                 }
@@ -1407,35 +1650,75 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         return windowPkg == packageName || WEBVIEW_PROVIDER_PACKAGES.contains(windowPkg)
     }
 
-    private fun triggerBlock(packageName: String, motivo: String = "se detectó un WebView en la app") {
+    private fun triggerBlock(
+        packageName: String,
+        motivo: String = "se detectó un WebView en la app",
+        triggerPkg: String? = null,
+        isFocused: Boolean = true
+    ) {
         if (webViewBlockInProgress) return
         webViewBlockInProgress = true
 
         Log.w(TAG, "🛑 triggerBlock para $packageName — $motivo")
         Layer3Audit.anotar(applicationContext, "webview", packageName, null, motivo, true)
-        Toast.makeText(this, "Navegador interno bloqueado por políticas del MDM", Toast.LENGTH_SHORT).show()
+        mainHandler.post {
+            com.ejemplo.locksuite.util.Safe.guard("a11y.webViewToast") {
+                Toast.makeText(
+                    applicationContext,
+                    "Navegador interno bloqueado por políticas del MDM",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        if (!isFocused) {
+            Log.w(TAG, "🏠 WebView en ventana sin foco ($packageName), forzando HOME directo")
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            webViewBlockInProgress = false
+            return
+        }
         performGlobalAction(GLOBAL_ACTION_BACK)
 
         mainHandler.postDelayed({
-            val current = rootInActiveWindow
-            if (current != null) {
-                val currentPkg = current.packageName?.toString() ?: ""
-                val stillThere = currentPkg == packageName ||
-                                 (WEBVIEW_PROVIDER_PACKAGES.contains(currentPkg) && getOriginApp() == packageName)
-                val hasWebView = containsWebView(current)
+            try {
+                com.ejemplo.locksuite.util.Safe.guard("a11y.webViewPostBack") {
+                    val candidatePkgs = buildSet {
+                        add(packageName)
+                        if (triggerPkg != null) add(triggerPkg)
+                        addAll(WEBVIEW_PROVIDER_PACKAGES)
+                        addAll(KNOWN_BROWSER_PACKAGES)
+                        addAll(browserPackages())
+                    }
+                    val postMatch = findWindowRootForPackages(candidatePkgs)
+                    if (postMatch != null) {
+                        val current = postMatch.first
+                        val postFocused = postMatch.second
+                        val currentPkg: String
+                        val hasWebView: Boolean
+                        try {
+                            currentPkg = current.packageName?.toString() ?: ""
+                            hasWebView = containsWebView(current)
+                        } finally {
+                            current.recycle()
+                        }
+                        val originMatches = getOriginApp() == packageName
+                        val isBrowser = isBrowserPackage(currentPkg)
+                        val stillThere = currentPkg == packageName ||
+                            (triggerPkg != null && currentPkg == triggerPkg) ||
+                            ((WEBVIEW_PROVIDER_PACKAGES.contains(currentPkg) || isBrowser) && originMatches)
 
-                if (VERBOSE) {
-                    Log.d(TAG, "PostBack check: currentPkg=$currentPkg stillThere=$stillThere hasWebView=$hasWebView")
+                        if (VERBOSE) {
+                            Log.d(TAG, "PostBack check: currentPkg=$currentPkg stillThere=$stillThere hasWebView=$hasWebView focused=$postFocused")
+                        }
+
+                        if (stillThere && (!postFocused || hasWebView || (isBrowser && originMatches) || currentPkg == triggerPkg)) {
+                            Log.w(TAG, "🏠 WebView persiste, forzando HOME")
+                            performGlobalAction(GLOBAL_ACTION_HOME)
+                        }
+                    }
                 }
-
-                current.recycle()
-
-                if (stillThere && hasWebView) {
-                    Log.w(TAG, "🏠 WebView persiste, forzando HOME")
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                }
+            } finally {
+                webViewBlockInProgress = false
             }
-            webViewBlockInProgress = false
         }, 700)
     }
 
@@ -1452,13 +1735,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val nodePkg   = node.packageName?.toString()?.lowercase() ?: ""
 
         val isWebView =
-            className.contains("webview") ||
-            className.contains("webkit")  ||
-            className.contains("chromium")||
-            className.contains("renderframe") ||
-            className.contains("xwalk")   ||
-            className.contains("smtt")    ||
-            className.contains("geckoview") ||
+            EmbeddedBrowserDetector.isWebViewClassName(className) ||
             nodePkg == "com.google.android.webview" ||
             nodePkg == "com.android.webview"        ||
             nodePkg == "com.android.chrome"
@@ -1471,8 +1748,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val childCount = node.childCount
         for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
-            val found = containsWebViewInternal(child, depth + 1)
-            child.recycle()
+            val found = try {
+                containsWebViewInternal(child, depth + 1)
+            } finally {
+                child.recycle()
+            }
             if (found) return true
         }
         return false
@@ -1568,10 +1848,34 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private var accBounceInProgress = false
     private var accBounceBackoffUntil = 0L
+    private var pendingAccPkg: String? = null
+    private val accTempRect = Rect()
 
     /** Contexto de navegación dentro de Accesibilidad de Ajustes (permite menú principal y otras apps). */
     private var inAccessibilityContext = false
+    private var lastSettingsClass = ""
     private var lastSettingsWindowTitleFolded = ""
+
+    private val accBounceDeferredRunnable = Runnable {
+        com.ejemplo.locksuite.util.Safe.guard("a11y.accBounceDeferred") {
+            val f = flags()
+            if (f.suspended || !f.accSettingsBounce || accBounceInProgress) return@guard
+            if (com.ejemplo.locksuite.security.SessionManager.isActive()) return@guard
+            val pkg = pendingAccPkg ?: SETTINGS_PKG
+            val match = findWindowRootForPackages(setOf(pkg, SETTINGS_PKG)) ?: return@guard
+            val root = match.first
+            val isFocused = match.second
+            val cls = lastSettingsClass
+            val titleFolded = lastSettingsWindowTitleFolded
+            val action = try {
+                val snap = buildAccessibilityBounceSnapshot(root, cls, titleFolded)
+                AccessibilityBouncePolicy.classify(snap)
+            } finally {
+                root.recycle()
+            }
+            handleAccessibilityBounceAction(action, pkg, cls, isFocused)
+        }
+    }
 
     /** Cache de las señales que dependen del equipo y del idioma actual. */
     private var accSettingsClasses: Set<String> = emptySet()
@@ -1684,9 +1988,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val isContentChange = eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         if (!isWindowChange && !isContentChange) return false
 
+        val pkg = ev.packageName?.toString() ?: SETTINGS_PKG
         if (isWindowChange) {
             val evTitle = ev.text?.firstOrNull()?.toString()
             lastSettingsWindowTitleFolded = if (!evTitle.isNullOrBlank()) normalizeSpaces(evTitle) else ""
+            lastSettingsClass = ev.className?.toString() ?: ""
         } else {
             // En CONTENT_CHANGED solo inspeccionamos si estamos navegando Accesibilidad o el título
             // reciente nombra a LockSuite: costo cero en el resto de Ajustes.
@@ -1699,13 +2005,22 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
         }
 
-        val now = SystemClock.elapsedRealtime()
-        if (accBounceInProgress || now < accBounceBackoffUntil) return false
         if (com.ejemplo.locksuite.security.SessionManager.isActive()) return false
+
+        val now = SystemClock.elapsedRealtime()
+        if (now < accBounceBackoffUntil) {
+            if (isWindowChange) {
+                pendingAccPkg = pkg
+                mainHandler.removeCallbacks(accBounceDeferredRunnable)
+                mainHandler.postDelayed(accBounceDeferredRunnable, (accBounceBackoffUntil - now).coerceAtLeast(50L))
+            }
+            return false
+        }
+        if (accBounceInProgress) return false
 
         refreshAccessibilitySignals()
 
-        val cls = ev.className?.toString() ?: ""
+        val cls = if (isWindowChange) lastSettingsClass else lastSettingsClass.ifEmpty { ev.className?.toString() ?: "" }
         // Camino rápido sin tocar el árbol de nodos para pantallas fuera de Accesibilidad.
         if (isWindowChange &&
             AccessibilityBouncePolicy.isExplicitlyNonAccessibilityClass(cls) &&
@@ -1715,7 +2030,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return false
         }
 
-        val root = rootInActiveWindow ?: run {
+        val match = findWindowRootForPackages(setOf(pkg, SETTINGS_PKG)) ?: run {
             if (isWindowChange &&
                 AccessibilityBouncePolicy.isMainAccessibilityMenu(
                     AccessibilityBouncePolicy.ScreenSnapshot(
@@ -1738,6 +2053,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
             return false
         }
+        val root = match.first
+        val isFocused = match.second
 
         val action = try {
             val snapshot = buildAccessibilityBounceSnapshot(root, cls, lastSettingsWindowTitleFolded)
@@ -1746,6 +2063,15 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             root.recycle()
         }
 
+        return handleAccessibilityBounceAction(action, pkg, cls, isFocused)
+    }
+
+    private fun handleAccessibilityBounceAction(
+        action: AccessibilityBouncePolicy.Action,
+        pkg: String,
+        cls: String,
+        isFocused: Boolean
+    ): Boolean {
         when (action) {
             AccessibilityBouncePolicy.Action.ENTER_ACCESSIBILITY_CONTEXT -> {
                 inAccessibilityContext = true
@@ -1761,37 +2087,48 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             AccessibilityBouncePolicy.Action.BOUNCE -> {
                 inAccessibilityContext = true
                 accBounceInProgress = true
+                mainHandler.removeCallbacks(accBounceDeferredRunnable)
                 Log.w(TAG, "🚫 Pantalla de LockSuite en Accesibilidad ($cls): rebotando al usuario.")
                 Layer3Audit.anotar(
                     applicationContext, "menu-accesibilidad", SETTINGS_PKG,
                     cls.ifBlank { null }, "pantalla de LockSuite en Accesibilidad", true
                 )
+                if (!isFocused) {
+                    Log.w(TAG, "🏠 Accesibilidad en ventana sin foco: forzando HOME directo.")
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                    accBounceBackoffUntil = SystemClock.elapsedRealtime() + ACC_BOUNCE_BACKOFF_MS
+                    accBounceInProgress = false
+                    return true
+                }
                 performGlobalAction(GLOBAL_ACTION_BACK)
 
                 mainHandler.postDelayed({
                     try {
-                        var stillThere = false
-                        val current = rootInActiveWindow
-                        if (current != null) {
-                            try {
-                                val pkg = current.packageName?.toString() ?: ""
-                                if (isSettingsPackage(pkg)) {
-                                    val currentSnap = buildAccessibilityBounceSnapshot(
-                                        current,
-                                        "",
-                                        ""
-                                    )
-                                    stillThere = AccessibilityBouncePolicy.classify(currentSnap) ==
-                                        AccessibilityBouncePolicy.Action.BOUNCE
+                        com.ejemplo.locksuite.util.Safe.guard("a11y.accBounceVerify") {
+                            var stillThere = false
+                            val postMatch = findWindowRootForPackages(setOf(pkg, SETTINGS_PKG))
+                            if (postMatch != null) {
+                                val current = postMatch.first
+                                try {
+                                    val curPkg = current.packageName?.toString() ?: ""
+                                    if (isSettingsPackage(curPkg)) {
+                                        val currentSnap = buildAccessibilityBounceSnapshot(
+                                            current,
+                                            lastSettingsClass,
+                                            lastSettingsWindowTitleFolded
+                                        )
+                                        stillThere = AccessibilityBouncePolicy.classify(currentSnap) ==
+                                            AccessibilityBouncePolicy.Action.BOUNCE
+                                    }
+                                } finally {
+                                    current.recycle()
                                 }
-                            } finally {
-                                current.recycle()
                             }
-                        }
-                        if (stillThere) {
-                            Log.w(TAG, "🏠 La pantalla de LockSuite en Accesibilidad persiste: forzando HOME.")
-                            performGlobalAction(GLOBAL_ACTION_HOME)
-                            accBounceBackoffUntil = SystemClock.elapsedRealtime() + ACC_BOUNCE_BACKOFF_MS
+                            if (stillThere) {
+                                Log.w(TAG, "🏠 La pantalla de LockSuite en Accesibilidad persiste: forzando HOME.")
+                                performGlobalAction(GLOBAL_ACTION_HOME)
+                                accBounceBackoffUntil = SystemClock.elapsedRealtime() + ACC_BOUNCE_BACKOFF_MS
+                            }
                         }
                     } finally {
                         accBounceInProgress = false
@@ -1810,7 +2147,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         var hasSwitch = false
         var hasAccessibilityViewHints = false
         var hasExcludedSettingsHints = false
+        var hasDialogStructure = false
+        var hasInlineOwnSwitchRow = false
     }
+
+    private val FLAG_ROW_LABEL = 1
+    private val FLAG_ROW_SWITCH = 2
 
     private fun buildAccessibilityBounceSnapshot(
         root: AccessibilityNodeInfo,
@@ -1821,8 +2163,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         if (matchesOwnLabelFolded(windowTitleFolded)) {
             scan.hasOwnLabelInHeader = true
         }
+        root.getBoundsInScreen(accTempRect)
+        val screenHeight = if (accTempRect.height() > 0) accTempRect.height() else resources.displayMetrics.heightPixels
         nodeBudget = 600
-        scanBounceTree(root, 0, inHeader = false, out = scan)
+        scanBounceTree(root, 0, inHeader = false, parentIsList = false, screenHeight = screenHeight, out = scan)
 
         return AccessibilityBouncePolicy.ScreenSnapshot(
             className = cls,
@@ -1836,7 +2180,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             hasSwitch = scan.hasSwitch,
             hasAccessibilityViewHints = scan.hasAccessibilityViewHints,
             hasExcludedSettingsHints = scan.hasExcludedSettingsHints,
-            isDialog = cls.contains("Dialog", ignoreCase = true)
+            isDialog = cls.contains("Dialog", ignoreCase = true),
+            hasDialogStructure = scan.hasDialogStructure,
+            hasInlineOwnSwitchRow = scan.hasInlineOwnSwitchRow
         )
     }
 
@@ -1844,12 +2190,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         node: AccessibilityNodeInfo,
         depth: Int,
         inHeader: Boolean,
+        parentIsList: Boolean,
+        screenHeight: Int,
         out: BounceTreeScan
-    ) {
-        if (depth > 14 || nodeBudget-- <= 0) return
+    ): Int {
+        if (depth > 14 || nodeBudget-- <= 0) return 0
 
         val viewIdLower = node.viewIdResourceName?.lowercase()
         var currentInHeader = inHeader
+        var selfHasSwitch = false
+        var selfHasOwnLabel = false
         if (viewIdLower != null) {
             if (!out.hasExcludedSettingsHints &&
                 AccessibilityBouncePolicy.EXCLUDED_VIEW_ID_HINTS.any { viewIdLower.contains(it) }
@@ -1861,27 +2211,35 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             ) {
                 out.hasAccessibilityViewHints = true
             }
+            if (!out.hasDialogStructure &&
+                AccessibilityBouncePolicy.DIALOG_VIEW_ID_HINTS.any { viewIdLower.contains(it) }
+            ) {
+                out.hasDialogStructure = true
+            }
             if (!currentInHeader &&
                 AccessibilityBouncePolicy.HEADER_VIEW_ID_HINTS.any { viewIdLower.contains(it) }
             ) {
                 currentInHeader = true
             }
-            if (!out.hasSwitch &&
-                (viewIdLower.contains("switch_bar") ||
-                    viewIdLower.contains("main_switch_bar") ||
-                    viewIdLower.contains("switchwidget"))
+            if (viewIdLower.contains("switch_bar") ||
+                viewIdLower.contains("main_switch_bar") ||
+                viewIdLower.contains("switchwidget") ||
+                viewIdLower.contains("switch_widget")
             ) {
                 out.hasSwitch = true
+                selfHasSwitch = true
             }
         }
 
-        if (!out.hasSwitch) {
-            val cn = node.className?.toString()
-            if (cn != null &&
-                (cn.endsWith("Switch") || cn.endsWith("ToggleButton") || cn.endsWith("SwitchCompat"))
-            ) {
-                out.hasSwitch = true
-            }
+        val cn = node.className?.toString() ?: ""
+        if (cn.endsWith("Switch") || cn.endsWith("ToggleButton") ||
+            cn.endsWith("SwitchCompat") || cn.endsWith("MaterialSwitch") ||
+            (node.isCheckable && (cn.contains("Switch", ignoreCase = true) ||
+                cn.contains("Toggle", ignoreCase = true) ||
+                cn.contains("Check", ignoreCase = true)))
+        ) {
+            out.hasSwitch = true
+            selfHasSwitch = true
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && !out.hasOwnLabelInHeader) {
@@ -1889,6 +2247,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             if (pane != null && pane.isNotEmpty() && matchesOwnLabelFolded(normalizeSpaces(pane.toString()))) {
                 out.hasOwnLabelInHeader = true
                 out.hasOwnLabelInBody = true
+                selfHasOwnLabel = true
             }
         }
 
@@ -1903,6 +2262,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
             if (matchesOwnLabelFolded(folded)) {
                 out.hasOwnLabelInBody = true
+                selfHasOwnLabel = true
                 if (currentInHeader) out.hasOwnLabelInHeader = true
             }
         }
@@ -1918,24 +2278,68 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
             if (matchesOwnLabelFolded(foldedDesc)) {
                 out.hasOwnLabelInBody = true
+                selfHasOwnLabel = true
                 if (currentInHeader) out.hasOwnLabelInHeader = true
             }
         }
 
-        // Parada temprana si ya reunimos la señal inequívoca de rebote o exclusión.
-        if (out.hasOwnDescription || out.hasExcludedSettingsHints) return
+        // Parada temprana únicamente con señal inequívoca máxima (`hasOwnDescription`),
+        // ya que `hasOwnDescription` tiene prioridad sobre `hasExcludedSettingsHints`.
+        if (out.hasOwnDescription) return 0
+
+        val isListOrPage = depth <= 1 ||
+            node.isScrollable ||
+            cn.endsWith("RecyclerView") ||
+            cn.endsWith("ListView") ||
+            cn.endsWith("ScrollView") ||
+            cn.endsWith("NestedScrollView") ||
+            cn.endsWith("GridView") ||
+            cn.endsWith("ViewPager") ||
+            cn.endsWith("ViewPager2")
+
+        val childParentIsList = cn.endsWith("RecyclerView") ||
+            cn.endsWith("ListView") ||
+            cn.endsWith("GridView") ||
+            (node.isScrollable && !cn.endsWith("ScrollView") && !cn.endsWith("NestedScrollView")) ||
+            viewIdLower == "android:id/list"
+
+        var subtreeBits = (if (selfHasOwnLabel) FLAG_ROW_LABEL else 0) or
+            (if (selfHasSwitch) FLAG_ROW_SWITCH else 0)
 
         val childCount = node.childCount
         for (i in 0 until childCount) {
-            if (nodeBudget <= 0) return
+            if (nodeBudget <= 0 || out.hasOwnDescription) break
             val child = node.getChild(i) ?: continue
-            try {
-                scanBounceTree(child, depth + 1, currentInHeader, out)
+            val childBits = try {
+                scanBounceTree(child, depth + 1, currentInHeader, childParentIsList, screenHeight, out)
             } finally {
                 child.recycle()
             }
-            if (out.hasOwnDescription || out.hasExcludedSettingsHints) return
+            if (!isListOrPage) {
+                subtreeBits = subtreeBits or childBits
+            }
         }
+
+        if (!out.hasInlineOwnSwitchRow &&
+            !isListOrPage &&
+            !currentInHeader &&
+            (subtreeBits and (FLAG_ROW_LABEL or FLAG_ROW_SWITCH)) == (FLAG_ROW_LABEL or FLAG_ROW_SWITCH)
+        ) {
+            val looksLikeRowContainer = parentIsList || node.isClickable ||
+                (viewIdLower != null && (viewIdLower.contains("preference") ||
+                    viewIdLower.contains("row") || viewIdLower.contains("item")))
+            if (looksLikeRowContainer) {
+                val rowHeightOk = if (screenHeight <= 0) true else {
+                    node.getBoundsInScreen(accTempRect)
+                    accTempRect.isEmpty || accTempRect.height() <= (screenHeight * 0.28f).toInt()
+                }
+                if (rowHeightOk) {
+                    out.hasInlineOwnSwitchRow = true
+                }
+            }
+        }
+
+        return if (isListOrPage) 0 else subtreeBits
     }
 
     /**
@@ -1944,6 +2348,63 @@ class LockSuiteAccessibilityService : AccessibilityService() {
      */
     private var legalBounceBackoffUntil = 0L
     private val LEGAL_BOUNCE_BACKOFF_MS = 3_000L
+    private var lastLegalEventPkg: String? = null
+    private var lastLegalEventCls: String? = null
+    private var pendingLegalPkg: String? = null
+    private var pendingLegalCls: String = ""
+    private val legalDeferredRunnable = Runnable {
+        com.ejemplo.locksuite.util.Safe.guard("a11y.legalDeferred") {
+            val f = flags()
+            if (f.suspended || com.ejemplo.locksuite.security.SessionManager.isActive()) return@guard
+            val pkg = pendingLegalPkg ?: return@guard
+            val cls = pendingLegalCls
+            val match = findWindowRootForPackages(setOf(pkg)) ?: return@guard
+            val activePkg = try {
+                match.first.packageName?.toString() ?: ""
+            } finally {
+                match.first.recycle()
+            }
+            val effectiveCls = if (activePkg == lastLegalEventPkg && !lastLegalEventCls.isNullOrBlank()) {
+                lastLegalEventCls!!
+            } else {
+                cls
+            }
+            if (activePkg == pkg && isLegalOrLicenseScreen(activePkg, effectiveCls)) {
+                performLegalLicenseBounce(activePkg, effectiveCls)
+            }
+        }
+    }
+
+    private fun scheduleDeferredLegalRecheck(packageName: String, cls: String, delayMs: Long) {
+        pendingLegalPkg = packageName
+        pendingLegalCls = cls
+        mainHandler.removeCallbacks(legalDeferredRunnable)
+        mainHandler.postDelayed(legalDeferredRunnable, delayMs.coerceAtLeast(50L))
+    }
+
+    private fun performLegalLicenseBounce(packageName: String, cls: String): Boolean {
+        val match = findWindowRootForPackages(setOf(packageName))
+        val isFocused = if (match != null) {
+            match.first.recycle()
+            match.second
+        } else {
+            true
+        }
+        legalBounceBackoffUntil = SystemClock.elapsedRealtime() + LEGAL_BOUNCE_BACKOFF_MS
+        mainHandler.removeCallbacks(legalDeferredRunnable)
+        Log.w(TAG, "🚫 Pantalla legal/licencias detectada: rebotando al usuario ($packageName / $cls).")
+        Layer3Audit.anotar(
+            applicationContext, "legales", packageName, cls.ifBlank { null },
+            "pantalla de licencias o términos legales", true
+        )
+        performGlobalAction(if (isFocused) GLOBAL_ACTION_BACK else GLOBAL_ACTION_HOME)
+        return true
+    }
+
+    private fun isLegalOrLicenseScreen(packageName: String, cls: String): Boolean {
+        if (packageName == PKG_HTML_VIEWER) return true
+        return isLegalOrLicenseScreen(cls)
+    }
 
     private fun isLegalOrLicenseScreen(cls: String): Boolean {
         if (cls.isEmpty()) return false
@@ -1973,6 +2434,34 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var gAccBounceInProgress = false
     private var gAccBounceBackoffUntil = 0L
     private val gAccBounceBackoffMs = 4_000L
+    private var lastGAccWindowPkg: String? = null
+    private var lastGAccWindowCls: String? = null
+    private var pendingGAccPkg: String? = null
+    private var pendingGAccCls: String? = null
+    private val gAccDeferredRunnable = Runnable {
+        com.ejemplo.locksuite.util.Safe.guard("a11y.gAccDeferred") {
+            val f = flags()
+            if (f.suspended || !f.googleAccountWeb || gAccBounceInProgress) return@guard
+            if (com.ejemplo.locksuite.security.SessionManager.isActive()) return@guard
+            val pkg = pendingGAccPkg ?: return@guard
+            val match = findWindowRootForPackages(setOf(pkg, GoogleAccountWebPolicy.PKG_GMS)) ?: return@guard
+            val activePkg = try {
+                match.first.packageName?.toString() ?: ""
+            } finally {
+                match.first.recycle()
+            }
+            val activeCls = if (activePkg == lastGAccWindowPkg && !lastGAccWindowCls.isNullOrBlank()) {
+                lastGAccWindowCls
+            } else {
+                pendingGAccCls
+            }
+            if (GoogleAccountWebPolicy.isCandidatePackage(activePkg) &&
+                GoogleAccountWebPolicy.isAccountWebClass(activeCls, f.googleAccountStrict)
+            ) {
+                triggerGoogleAccountWebBounce(activePkg, activeCls, f.googleAccountStrict, match.second)
+            }
+        }
+    }
 
     /** Clases de Play services ya anotadas, para no reescribir la preferencia. */
     private val gAccSeenClasses = HashSet<String>(16)
@@ -1990,14 +2479,33 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return false
         }
 
-        val now = SystemClock.elapsedRealtime()
-        if (gAccBounceInProgress || now < gAccBounceBackoffUntil) return false
         // El administrador con sesión abierta entra a propósito (mismo criterio que el
         // rebote del menú de Accesibilidad): si no, no podría ni revisar la cuenta del
         // equipo que administra.
         if (com.ejemplo.locksuite.security.SessionManager.isActive()) return false
 
+        val now = SystemClock.elapsedRealtime()
+        if (now < gAccBounceBackoffUntil) {
+            pendingGAccPkg = packageName
+            pendingGAccCls = cls
+            mainHandler.removeCallbacks(gAccDeferredRunnable)
+            mainHandler.postDelayed(gAccDeferredRunnable, (gAccBounceBackoffUntil - now).coerceAtLeast(50L))
+            return false
+        }
+        if (gAccBounceInProgress) return false
+
+        val isFocused = isPackageWindowFocused(packageName)
+        return triggerGoogleAccountWebBounce(packageName, cls, strict, isFocused)
+    }
+
+    private fun triggerGoogleAccountWebBounce(
+        packageName: String,
+        cls: String?,
+        strict: Boolean,
+        isFocused: Boolean
+    ): Boolean {
         gAccBounceInProgress = true
+        mainHandler.removeCallbacks(gAccDeferredRunnable)
         Log.w(TAG, "🚫 Ajustes/actividad de la cuenta de Google ($cls): rebotando al usuario.")
         Layer3Audit.anotar(
             applicationContext, "cuenta-google", packageName, cls,
@@ -2006,34 +2514,60 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             true
         )
         mainHandler.post {
-            Toast.makeText(
-                applicationContext,
-                "🚫 Ajustes de la cuenta de Google restringidos por LockSuite",
-                Toast.LENGTH_SHORT
-            ).show()
+            com.ejemplo.locksuite.util.Safe.guard("a11y.gAccToast") {
+                Toast.makeText(
+                    applicationContext,
+                    "🚫 Ajustes de la cuenta de Google restringidos por LockSuite",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        if (!isFocused) {
+            Log.w(TAG, "🏠 Cuenta de Google en ventana sin foco: forzando HOME directo.")
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            gAccBounceBackoffUntil = SystemClock.elapsedRealtime() + gAccBounceBackoffMs
+            gAccBounceInProgress = false
+            return true
         }
         performGlobalAction(GLOBAL_ACTION_BACK)
 
         mainHandler.postDelayed({
-            // Verificación, igual que en Mercado Pago: un "atrás" a ciegas encadena
-            // rebotes. Y acá hay un motivo extra — esta pantalla es un WebView, así
-            // que "atrás" puede navegar DENTRO de la página en vez de cerrarla.
-            //
-            // Solo se escala a HOME si seguimos dentro de Play services. Si el "atrás"
-            // nos devolvió a Ajustes, funcionó: no hay que sacar al usuario de Ajustes
-            // por completo, que fue exactamente el sobre-bloqueo de B.15 punto 1.
-            var stillInGms = false
-            val current = rootInActiveWindow
-            if (current != null) {
-                stillInGms = current.packageName?.toString() == GoogleAccountWebPolicy.PKG_GMS
-                current.recycle()
+            try {
+                com.ejemplo.locksuite.util.Safe.guard("a11y.gAccBounceVerify") {
+                    // Verificación, igual que en Mercado Pago: un "atrás" a ciegas encadena
+                    // rebotes. Y acá hay un motivo extra — esta pantalla es un WebView, así
+                    // que "atrás" puede navegar DENTRO de la página en vez de cerrarla.
+                    //
+                    // Solo se escala a HOME si seguimos en la Activity de cuenta web restringida.
+                    val strictNow = flags().googleAccountStrict
+                    var stillBlocked = false
+                    val postMatch = findWindowRootForPackages(
+                        setOf(packageName, GoogleAccountWebPolicy.PKG_GMS)
+                    )
+                    if (postMatch != null) {
+                        val current = postMatch.first
+                        val curPkg = try {
+                            current.packageName?.toString() ?: ""
+                        } finally {
+                            current.recycle()
+                        }
+                        val trackedCls = if (curPkg == lastGAccWindowPkg && !lastGAccWindowCls.isNullOrBlank()) {
+                            lastGAccWindowCls
+                        } else {
+                            null
+                        }
+                        stillBlocked = GoogleAccountWebPolicy.isCandidatePackage(curPkg) &&
+                            GoogleAccountWebPolicy.isAccountWebClass(trackedCls, strictNow)
+                    }
+                    if (stillBlocked) {
+                        Log.w(TAG, "🏠 La pantalla de la cuenta persiste: forzando HOME.")
+                        performGlobalAction(GLOBAL_ACTION_HOME)
+                        gAccBounceBackoffUntil = SystemClock.elapsedRealtime() + gAccBounceBackoffMs
+                    }
+                }
+            } finally {
+                gAccBounceInProgress = false
             }
-            if (stillInGms) {
-                Log.w(TAG, "🏠 La pantalla de la cuenta persiste: forzando HOME.")
-                performGlobalAction(GLOBAL_ACTION_HOME)
-                gAccBounceBackoffUntil = SystemClock.elapsedRealtime() + gAccBounceBackoffMs
-            }
-            gAccBounceInProgress = false
         }, 700)
 
         return true
@@ -2077,22 +2611,39 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var contactPhotoBounceInProgress = false
     private var contactPhotoBounceBackoffUntil = 0L
     private val contactPhotoBounceBackoffMs = 1_200L
+    private var lastPhotoEventPkg: String? = null
+    private var lastPhotoEventCls: String? = null
+    private var pendingPhotoPkg: String? = null
+    private var pendingPhotoCls: String? = null
+    private val contactPhotoDeferredRunnable = Runnable {
+        com.ejemplo.locksuite.util.Safe.guard("a11y.photoPickerDeferred") {
+            val f = flags()
+            if (f.suspended || !f.contactPhotoPicker || contactPhotoBounceInProgress) return@guard
+            val pkg = pendingPhotoPkg ?: return@guard
+            val match = findWindowRootForPackages(setOf(pkg)) ?: return@guard
+            val activePkg = try {
+                match.first.packageName?.toString() ?: ""
+            } finally {
+                match.first.recycle()
+            }
+            val activeCls = if (activePkg == lastPhotoEventPkg && !lastPhotoEventCls.isNullOrBlank()) {
+                lastPhotoEventCls
+            } else {
+                pendingPhotoCls
+            }
+            if (PhotoPickerPolicy.shouldBounce(activePkg, activeCls, cameFromContacts(activePkg))) {
+                handleContactPhotoPickerBounce(activeCls, activePkg)
+            }
+        }
+    }
 
     /**
-     * ¿Alguna de las últimas ventanas fue una app de contactos?
-     *
-     * Se mira el stack y no solo la anterior porque el camino real puede tener un
-     * salto en el medio: Contactos → selector → catálogo de ilustraciones. Con tres
-     * niveles alcanza y sigue siendo un recorrido de tres strings en memoria.
+     * ¿La app inmediatamente anterior al selector fue una app de contactos?
+     * Usa [PhotoPickerPolicy.cameFromContactsImmediate] para no bloquear adjuntar fotos
+     * en apps legítimas (ej. WhatsApp) solo porque el usuario abrió Contactos antes.
      */
-    private fun cameFromContacts(): Boolean {
-        var i = 0
-        for (pkg in appPackageStack) {
-            if (PhotoPickerPolicy.isContactsPackage(pkg)) return true
-            if (++i >= 3) break
-        }
-        return false
-    }
+    private fun cameFromContacts(currentPkg: String?): Boolean =
+        PhotoPickerPolicy.cameFromContactsImmediate(appPackageStack.toList(), currentPkg)
 
     /**
      * Devuelve true si rebotó (y por lo tanto el evento ya está atendido).
@@ -2107,16 +2658,27 @@ class LockSuiteAccessibilityService : AccessibilityService() {
      * fotos. **No volver a agregarla.**
      */
     private fun handleContactPhotoPickerBounce(className: String?, packageName: String): Boolean {
-        if (!PhotoPickerPolicy.shouldBounce(packageName, className, cameFromContacts())) {
+        if (!PhotoPickerPolicy.shouldBounce(packageName, className, cameFromContacts(packageName))) {
             recordUnmatchedPickerClass(packageName, className)
             return false
         }
 
         val now = SystemClock.elapsedRealtime()
-        if (contactPhotoBounceInProgress || now < contactPhotoBounceBackoffUntil) return false
+        if (now < contactPhotoBounceBackoffUntil) {
+            pendingPhotoPkg = packageName
+            pendingPhotoCls = className
+            mainHandler.removeCallbacks(contactPhotoDeferredRunnable)
+            mainHandler.postDelayed(
+                contactPhotoDeferredRunnable,
+                (contactPhotoBounceBackoffUntil - now).coerceAtLeast(50L)
+            )
+            return false
+        }
+        if (contactPhotoBounceInProgress) return false
 
         contactPhotoBounceInProgress = true
         contactPhotoBounceBackoffUntil = now + contactPhotoBounceBackoffMs
+        mainHandler.removeCallbacks(contactPhotoDeferredRunnable)
         Log.w(TAG, "🚫 Selector de foto detectado ($className en $packageName): rebotando.")
         // ⚠️ Acá es donde se cerraba Tefilon sin que nadie pudiera saberlo desde el
         // panel: `recordUnmatchedPickerClass` solo anota paquetes "relevantes", y una
@@ -2127,27 +2689,49 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             "coincidió un marcador de selector de foto de perfil", true
         )
         mainHandler.post {
-            Toast.makeText(
-                applicationContext,
-                "🚫 Selección de foto bloqueada por LockSuite",
-                Toast.LENGTH_SHORT
-            ).show()
+            com.ejemplo.locksuite.util.Safe.guard("a11y.photoPickerToast") {
+                Toast.makeText(
+                    applicationContext,
+                    "🚫 Selección de foto bloqueada por LockSuite",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+
+        val isFocused = isPackageWindowFocused(packageName)
+        if (!isFocused) {
+            Log.w(TAG, "🏠 Selector de foto en ventana sin foco: forzando HOME directo.")
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            contactPhotoBounceInProgress = false
+            return true
         }
         performGlobalAction(GLOBAL_ACTION_BACK)
 
+        val bouncedPkg = packageName
         mainHandler.postDelayed({
             try {
-                val root = rootInActiveWindow
-                if (root != null) {
-                    val activePkg = root.packageName?.toString() ?: ""
-                    val activeCls = root.className?.toString()
-                    root.recycle()
-                    if (PhotoPickerPolicy.shouldBounce(activePkg, activeCls, cameFromContacts())) {
-                        performGlobalAction(GLOBAL_ACTION_HOME)
+                com.ejemplo.locksuite.util.Safe.guard("a11y.photoPickerVerify") {
+                    val postMatch = findWindowRootForPackages(setOf(bouncedPkg))
+                    if (postMatch != null) {
+                        val root = postMatch.first
+                        val activePkg = try {
+                            root.packageName?.toString() ?: ""
+                        } finally {
+                            root.recycle()
+                        }
+                        val activeCls = if (activePkg == lastPhotoEventPkg && !lastPhotoEventCls.isNullOrBlank()) {
+                            lastPhotoEventCls
+                        } else {
+                            null
+                        }
+                        if (PhotoPickerPolicy.shouldBounce(activePkg, activeCls, cameFromContacts(activePkg))) {
+                            performGlobalAction(GLOBAL_ACTION_HOME)
+                        }
                     }
                 }
-            } catch (_: Exception) {}
-            contactPhotoBounceInProgress = false
+            } finally {
+                contactPhotoBounceInProgress = false
+            }
         }, 700L)
         return true
     }
@@ -2186,6 +2770,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     /** elapsedRealtime en que se vio la ventana del portal por primera vez, o 0. */
     private var captiveOpenedAt = 0L
+    /** Paquete activo de la ventana del portal cautivo (soporta NetworkStack y variantes OEM). */
+    private var captivePortalPkg: String? = null
 
     /**
      * elapsedRealtime del último cambio de contenido DENTRO de la ventana del portal.
@@ -2253,9 +2839,47 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun hasActiveCaptivePortalWindow(): Boolean {
+        val trackedPkg = captivePortalPkg
+        if (trackedPkg != null) {
+            val match = findWindowRootForPackages(setOf(trackedPkg))
+            if (match != null) {
+                match.first.recycle()
+                return true
+            }
+        }
+        try {
+            for (w in windows) {
+                if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION &&
+                    w.type != AccessibilityWindowInfo.TYPE_SYSTEM
+                ) continue
+                val wRoot = w.root ?: continue
+                val wPkg = wRoot.packageName?.toString()
+                val wCls = wRoot.className?.toString()
+                val matches = wPkg != "com.android.systemui" &&
+                    ((trackedPkg != null && wPkg == trackedPkg) ||
+                        CaptivePortalPolicy.isCaptivePortalWindow(wPkg, wCls))
+                wRoot.recycle()
+                if (matches) return true
+            }
+        } catch (_: Exception) {
+        }
+        val fallback = try { rootInActiveWindow } catch (_: Exception) { null } ?: return false
+        return try {
+            val fPkg = fallback.packageName?.toString()
+            val fCls = fallback.className?.toString()
+            fPkg != "com.android.systemui" &&
+                ((trackedPkg != null && fPkg == trackedPkg) ||
+                    CaptivePortalPolicy.isCaptivePortalWindow(fPkg, fCls))
+        } finally {
+            fallback.recycle()
+        }
+    }
+
     private fun updateCaptivePortalState(packageName: String, className: String?) {
         val esPortal = CaptivePortalPolicy.isCaptivePortalWindow(packageName, className)
         if (esPortal) {
+            captivePortalPkg = packageName
             if (captiveOpenedAt == 0L) {
                 captiveOpenedAt = SystemClock.elapsedRealtime()
                 captiveLastActivityAt = captiveOpenedAt
@@ -2272,7 +2896,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 }
                 Log.i(
                     TAG,
-                    "Portal cautivo abierto: vigilando (inactividad " +
+                    "Portal cautivo abierto ($packageName): vigilando (inactividad " +
                         "${CaptivePortalPolicy.IDLE_CLOSE_MS} ms, techo " +
                         "${CaptivePortalPolicy.MAX_OPEN_MS} ms)."
                 )
@@ -2280,14 +2904,17 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 mainHandler.postDelayed(captiveTickRunnable, CaptivePortalPolicy.TICK_MS)
             }
         } else if (captiveOpenedAt != 0L && !isSystemOrInputPackage(packageName)) {
-            // Se fue a otra ventana real (no al teclado ni a SystemUI): cerrar el ciclo y sumar el tiempo que estuvo abierta.
-            finishCaptivePortalSession()
+            // Si el portal cautivo sigue abierto en pantalla dividida, mantener la sesión y su cobertura.
+            if (!hasActiveCaptivePortalWindow()) {
+                finishCaptivePortalSession()
+            }
         }
     }
 
     private fun finishCaptivePortalSession() {
         val abierta = if (captiveOpenedAt == 0L) 0L else SystemClock.elapsedRealtime() - captiveOpenedAt
         captiveOpenedAt = 0L
+        captivePortalPkg = null
         captiveLastActivityAt = 0L
         captiveValidatedAt = 0L
         captiveBounceInProgress = false
@@ -2327,11 +2954,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             Log.w(TAG, "No se pudo anotar el cierre forzado del portal: ${e.message}")
         }
         mainHandler.post {
-            Toast.makeText(
-                applicationContext,
-                "🚫 Ventana de la red cerrada por LockSuite: $motivo",
-                Toast.LENGTH_LONG
-            ).show()
+            com.ejemplo.locksuite.util.Safe.guard("a11y.captiveToast") {
+                Toast.makeText(
+                    applicationContext,
+                    "🚫 Ventana de la red cerrada por LockSuite: $motivo",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
         performGlobalAction(GLOBAL_ACTION_HOME)
         finishCaptivePortalSession()
@@ -2371,19 +3000,24 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun handleSettingsAntiEvasion() {
-        val root = rootInActiveWindow ?: return
+    private fun handleSettingsAntiEvasion(pkg: String = SETTINGS_PKG) {
+        val match = findWindowRootForPackages(setOf(pkg, SETTINGS_PKG)) ?: return
+        val root = match.first
+        val isFocused = match.second
         val result = SettingsScanResult()
-        nodeBudget = MAX_NODES_PER_SCAN
-        scanSettingsNode(root, 0, result)
-        root.recycle()
+        try {
+            nodeBudget = MAX_NODES_PER_SCAN
+            scanSettingsNode(root, 0, result)
+        } finally {
+            root.recycle()
+        }
 
         if (result.inLockSuite && result.dangerous) {
             Layer3Audit.anotar(
                 applicationContext, "anti-evasion", SETTINGS_PKG, null,
                 "pantalla de Ajustes sobre LockSuite con una acción peligrosa a la vista", true
             )
-            performGlobalAction(GLOBAL_ACTION_BACK)
+            performGlobalAction(if (isFocused) GLOBAL_ACTION_BACK else GLOBAL_ACTION_HOME)
             Toast.makeText(this, "Acción denegada por políticas de seguridad de LockSuite MDM", Toast.LENGTH_LONG).show()
             val loginIntent = Intent(this, com.ejemplo.locksuite.ui.auth.LoginActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -2515,7 +3149,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                             com.ejemplo.locksuite.mdm.WhatsAppPolicy.Decision(
                                 com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_STATUS,
                                 "activity:status"
-                            )
+                            ),
+                            isFocused = isPackageWindowFocused(pkg)
                         )
                         return
                     }
@@ -2527,7 +3162,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                             com.ejemplo.locksuite.mdm.WhatsAppPolicy.Decision(
                                 com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_CHANNEL,
                                 "activity:channel"
-                            )
+                            ),
+                            isFocused = isPackageWindowFocused(pkg)
                         )
                         return
                     }
@@ -2541,7 +3177,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                         }
                         triggerWhatsAppBlock(
                             pkg, effectiveCls,
-                            com.ejemplo.locksuite.mdm.WhatsAppPolicy.Decision(action, "activity:channel_status")
+                            com.ejemplo.locksuite.mdm.WhatsAppPolicy.Decision(action, "activity:channel_status"),
+                            isFocused = isPackageWindowFocused(pkg)
                         )
                         return
                     }
@@ -2577,7 +3214,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return
         }
 
-        val root = rootInActiveWindow ?: return
+        val match = findWindowRootForPackages(setOf(PKG_WHATSAPP, PKG_WHATSAPP_BUSINESS)) ?: return
+        val root = match.first
+        val isFocused = match.second
         try {
             val rootPkg = root.packageName?.toString() ?: ""
             if (rootPkg != PKG_WHATSAPP && rootPkg != PKG_WHATSAPP_BUSINESS) return
@@ -2591,11 +3230,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                     waFailedBounces = 0
                 }
                 com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.REDIRECT_TO_CHATS -> {
-                    redirectAwayFromUpdatesTab(root, rootPkg, decision.reason)
+                    redirectAwayFromUpdatesTab(root, rootPkg, decision.reason, isFocused)
                 }
                 com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_STATUS,
                 com.ejemplo.locksuite.mdm.WhatsAppPolicy.Action.BLOCK_CHANNEL -> {
-                    triggerWhatsAppBlock(rootPkg, activityClass, decision)
+                    triggerWhatsAppBlock(rootPkg, activityClass, decision, isFocused)
                 }
             }
         } finally {
@@ -2642,12 +3281,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             if (!sub.isNullOrEmpty()) state.conversationSubtitle = sub
         }
 
+        // Una vez dentro de un ítem del feed (RecyclerView/ListView), recolectar su ID directo
+        // y cortar el descenso profundo para no quemar el presupuesto de 220 nodos en filas de chat/estados.
+        if (insideList) return
+
         val cls = node.className?.toString() ?: ""
-        val nowInsideList = insideList ||
-            cls.endsWith("RecyclerView") ||
+        val isFeedListNode = cls.endsWith("RecyclerView") ||
             cls.endsWith("ListView") ||
-            shortId == "list" ||
-            shortId == com.ejemplo.locksuite.mdm.WhatsAppPolicy.normalizeViewId("updates_list")
+            (node.isScrollable && (shortId == "list" ||
+                shortId == com.ejemplo.locksuite.mdm.WhatsAppPolicy.normalizeViewId("updates_list")))
+        val nowInsideList = isFeedListNode
 
         val isNavContainer = shortId in com.ejemplo.locksuite.mdm.WhatsAppPolicy.NAV_CONTAINER_IDS ||
             shortId.startsWith("tabbarbutton_") ||
@@ -2694,7 +3337,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
 
         val childCount = node.childCount
-        for (i in 0 until childCount) {
+        val limit = if (isFeedListNode) minOf(childCount, 12) else childCount
+        for (i in 0 until limit) {
             if (state.remainingBudget <= 0) return
             val child = node.getChild(i) ?: continue
             try {
@@ -2759,7 +3403,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun redirectAwayFromUpdatesTab(root: AccessibilityNodeInfo, pkg: String, reason: String) {
+    private fun redirectAwayFromUpdatesTab(
+        root: AccessibilityNodeInfo,
+        pkg: String,
+        reason: String,
+        isFocused: Boolean = true
+    ) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastWaRedirectAt < 500L) return
         lastWaRedirectAt = now
@@ -2785,14 +3434,15 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         val clickOk = clickNodeOrClickableParent(chatsNode)
         if (!clickOk) {
-            performGlobalAction(GLOBAL_ACTION_BACK)
+            performGlobalAction(if (isFocused) GLOBAL_ACTION_BACK else GLOBAL_ACTION_HOME)
         }
     }
 
     private fun triggerWhatsAppBlock(
         pkg: String,
         activityClass: String?,
-        decision: com.ejemplo.locksuite.mdm.WhatsAppPolicy.Decision
+        decision: com.ejemplo.locksuite.mdm.WhatsAppPolicy.Decision,
+        isFocused: Boolean = true
     ) {
         val now = SystemClock.elapsedRealtime()
         if (waBlockInProgress || now < waBackoffUntil) return
@@ -2808,7 +3458,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             "sección restringida de WhatsApp ($tipoLabel · ${decision.reason})", true
         )
         mainHandler.post {
-            Toast.makeText(applicationContext, "$tipoLabel bloqueado por políticas del MDM", Toast.LENGTH_SHORT).show()
+            com.ejemplo.locksuite.util.Safe.guard("a11y.waToast") {
+                Toast.makeText(applicationContext, "$tipoLabel bloqueado por políticas del MDM", Toast.LENGTH_SHORT).show()
+            }
+        }
+        if (!isFocused) {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            waFailedBounces = 0
+            waBackoffUntil = now + 2_500L
+            waBlockInProgress = false
+            return
         }
         performGlobalAction(GLOBAL_ACTION_BACK)
 
@@ -2816,10 +3475,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             try {
                 com.ejemplo.locksuite.util.Safe.guard("a11y.waPostBack") {
                     val f = flags()
-                    val currentRoot = rootInActiveWindow
-                    val stillBlocked = if (currentRoot == null) {
+                    val postMatch = findWindowRootForPackages(setOf(PKG_WHATSAPP, PKG_WHATSAPP_BUSINESS))
+                    var postFocused = true
+                    val stillBlocked = if (postMatch == null) {
                         false
                     } else {
+                        val currentRoot = postMatch.first
+                        postFocused = postMatch.second
                         try {
                             val currentPkg = currentRoot.packageName?.toString() ?: ""
                             if (currentPkg != PKG_WHATSAPP && currentPkg != PKG_WHATSAPP_BUSINESS) {
@@ -2840,12 +3502,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
                     if (stillBlocked) {
                         waFailedBounces++
-                        if (waFailedBounces == 1) {
-                            performGlobalAction(GLOBAL_ACTION_BACK)
-                        } else if (waFailedBounces >= 2) {
+                        if (!postFocused || waFailedBounces >= 2) {
                             performGlobalAction(GLOBAL_ACTION_HOME)
                             waFailedBounces = 0
                             waBackoffUntil = SystemClock.elapsedRealtime() + 2_500L
+                        } else if (waFailedBounces == 1) {
+                            performGlobalAction(GLOBAL_ACTION_BACK)
                         }
                     } else {
                         waFailedBounces = 0
@@ -2872,6 +3534,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var mpFailedBounces = 0
     private var mpBackoffUntil = 0L
 
+    private fun mpTargetPackages(): Set<String> =
+        if (getOriginApp() == PKG_MERCADOPAGO) setOf(PKG_MERCADOPAGO) + WEBVIEW_PROVIDER_PACKAGES
+        else setOf(PKG_MERCADOPAGO)
+
     private fun handleMercadoPagoBlocking(eventType: Int) {
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             eventType == AccessibilityEvent.TYPE_VIEW_SELECTED) {
@@ -2885,22 +3551,29 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     private fun scanForMercadoPagoOffers() {
-        if (mpBlockInProgress) return
-        val root = rootInActiveWindow ?: return
-        val rootPkg = root.packageName?.toString() ?: ""
-
-        if (rootPkg == PKG_MERCADOPAGO || WEBVIEW_PROVIDER_PACKAGES.contains(rootPkg)) {
-            val retrato = buildMpRetrato(root)
-            root.recycle()
-
-            val veredicto = MercadoPagoOffersPolicy.evaluar(retrato)
-            anotarMpSiCambio(retrato, veredicto)
-
-            if (veredicto == MercadoPagoOffersPolicy.Veredicto.OFERTAS) {
-                triggerMercadoPagoBlock(MercadoPagoOffersPolicy.motivo(retrato))
+        val now = SystemClock.elapsedRealtime()
+        if (mpBlockInProgress || now < mpBackoffUntil) return
+        val match = findWindowRootForPackages(mpTargetPackages()) ?: return
+        val root = match.first
+        val isFocused = match.second
+        val retrato = try {
+            val rootPkg = root.packageName?.toString() ?: ""
+            if (rootPkg == PKG_MERCADOPAGO ||
+                (WEBVIEW_PROVIDER_PACKAGES.contains(rootPkg) && getOriginApp() == PKG_MERCADOPAGO)
+            ) {
+                buildMpRetrato(root)
+            } else {
+                null
             }
-        } else {
+        } finally {
             root.recycle()
+        } ?: return
+
+        val veredicto = MercadoPagoOffersPolicy.evaluar(retrato)
+        anotarMpSiCambio(retrato, veredicto)
+
+        if (veredicto == MercadoPagoOffersPolicy.Veredicto.OFERTAS) {
+            triggerMercadoPagoBlock(MercadoPagoOffersPolicy.motivo(retrato), isFocused)
         }
     }
 
@@ -2949,6 +3622,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private fun scanMercadoPagoNode(node: AccessibilityNodeInfo, depth: Int, estado: MpRetratoState) {
         if (depth > MAX_TREE_DEPTH) return
         if (nodeBudget-- <= 0) return
+        if (depth > 0 && !node.isVisibleToUser) return
 
         val className = node.className?.toString()
         if (className != null &&
@@ -3056,43 +3730,66 @@ class LockSuiteAccessibilityService : AccessibilityService() {
      * un "atrás", se verifica, un segundo intento, y recién entonces HOME — más una
      * pausa de MP_BACKOFF_MS para que no quede girando.
      */
-    private fun triggerMercadoPagoBlock(motivo: String) {
+    private fun triggerMercadoPagoBlock(motivo: String, isFocused: Boolean = true) {
         val now = SystemClock.elapsedRealtime()
         if (mpBlockInProgress || now < mpBackoffUntil) return
         mpBlockInProgress = true
 
         Log.w(TAG, "🚫 Ofertas de Mercado Pago: rebotando — $motivo")
         mainHandler.post {
-            Toast.makeText(applicationContext, "🚫 Sección de Ofertas restringida por LockSuite", Toast.LENGTH_SHORT).show()
+            com.ejemplo.locksuite.util.Safe.guard("a11y.mpToast") {
+                Toast.makeText(applicationContext, "🚫 Sección de Ofertas restringida por LockSuite", Toast.LENGTH_SHORT).show()
+            }
+        }
+        if (!isFocused) {
+            Log.w(TAG, "🏠 Ofertas de Mercado Pago en ventana sin foco, forzando HOME directo")
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            mpFailedBounces = 0
+            mpBackoffUntil = now + MP_BACKOFF_MS
+            mpBlockInProgress = false
+            return
         }
         performGlobalAction(GLOBAL_ACTION_BACK)
 
         mainHandler.postDelayed({
-            val current = rootInActiveWindow
-            val stillOnOffers = if (current == null) {
-                false
-            } else {
-                val pkg = current.packageName?.toString() ?: ""
-                val relevant = pkg == PKG_MERCADOPAGO || WEBVIEW_PROVIDER_PACKAGES.contains(pkg)
-                val offers = relevant &&
-                    MercadoPagoOffersPolicy.evaluar(buildMpRetrato(current)) ==
-                        MercadoPagoOffersPolicy.Veredicto.OFERTAS
-                current.recycle()
-                offers
-            }
+            try {
+                com.ejemplo.locksuite.util.Safe.guard("a11y.mpVerify") {
+                    val postMatch = findWindowRootForPackages(mpTargetPackages())
+                    var postFocused = true
+                    val stillOnOffers = if (postMatch == null) {
+                        false
+                    } else {
+                        val current = postMatch.first
+                        postFocused = postMatch.second
+                        try {
+                            val pkg = current.packageName?.toString() ?: ""
+                            val relevant = pkg == PKG_MERCADOPAGO ||
+                                (WEBVIEW_PROVIDER_PACKAGES.contains(pkg) && getOriginApp() == PKG_MERCADOPAGO)
+                            relevant &&
+                                MercadoPagoOffersPolicy.evaluar(buildMpRetrato(current)) ==
+                                    MercadoPagoOffersPolicy.Veredicto.OFERTAS
+                        } finally {
+                            current.recycle()
+                        }
+                    }
 
-            if (stillOnOffers) {
-                mpFailedBounces++
-                if (mpFailedBounces >= 2) {
-                    Log.w(TAG, "🏠 La sección de ofertas persiste tras dos intentos, forzando HOME")
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                    mpFailedBounces = 0
-                    mpBackoffUntil = SystemClock.elapsedRealtime() + MP_BACKOFF_MS
+                    if (stillOnOffers) {
+                        mpFailedBounces++
+                        if (!postFocused || mpFailedBounces >= 2) {
+                            Log.w(TAG, "🏠 La sección de ofertas persiste, forzando HOME")
+                            performGlobalAction(GLOBAL_ACTION_HOME)
+                            mpFailedBounces = 0
+                            mpBackoffUntil = SystemClock.elapsedRealtime() + MP_BACKOFF_MS
+                        } else if (mpFailedBounces == 1) {
+                            performGlobalAction(GLOBAL_ACTION_BACK)
+                        }
+                    } else {
+                        mpFailedBounces = 0
+                    }
                 }
-            } else {
-                mpFailedBounces = 0
+            } finally {
+                mpBlockInProgress = false
             }
-            mpBlockInProgress = false
         }, 700)
     }
 
@@ -3125,26 +3822,37 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     private fun scanForGeminiMessages() {
-        if (geminiBlockInProgress) return
-        val root = rootInActiveWindow ?: return
-        try {
+        val now = SystemClock.elapsedRealtime()
+        if (geminiBlockInProgress || now < geminiBackoffUntil) return
+        val match = findWindowRootForPackages(setOf(com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING)) ?: return
+        val root = match.first
+        val isFocused = match.second
+        val retrato = try {
             val rootPkg = root.packageName?.toString() ?: ""
             if (rootPkg == com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING) {
-                val retrato = buildGeminiRetrato(root)
-                val veredicto = com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.evaluar(retrato)
-                if (veredicto == com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.Veredicto.GEMINI) {
-                    triggerGeminiMessagesBlock(
-                        com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.motivo(retrato),
-                        retrato.isConversationScreen
-                    )
-                }
+                buildGeminiRetrato(root)
+            } else {
+                null
             }
         } finally {
             root.recycle()
+        } ?: return
+
+        val veredicto = com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.evaluar(retrato)
+        if (veredicto == com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.Veredicto.GEMINI) {
+            triggerGeminiMessagesBlock(
+                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.motivo(retrato),
+                retrato.isConversationScreen,
+                isFocused
+            )
         }
     }
 
-    private fun triggerGeminiMessagesBlock(motivo: String, isConversation: Boolean) {
+    private fun triggerGeminiMessagesBlock(
+        motivo: String,
+        isConversation: Boolean,
+        isFocused: Boolean = true
+    ) {
         val now = android.os.SystemClock.elapsedRealtime()
         if (geminiBlockInProgress || now < geminiBackoffUntil) return
         geminiBlockInProgress = true
@@ -3157,21 +3865,34 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             windowTag, motivo, true
         )
         mainHandler.post {
-            android.widget.Toast.makeText(
-                applicationContext,
-                "🚫 Gemini en Mensajes restringido por LockSuite",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
+            com.ejemplo.locksuite.util.Safe.guard("a11y.geminiToast") {
+                android.widget.Toast.makeText(
+                    applicationContext,
+                    "🚫 Gemini en Mensajes restringido por LockSuite",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        if (!isFocused) {
+            android.util.Log.w(TAG, "🏠 Gemini en ventana sin foco, forzando HOME directo")
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            geminiFailedBounces = 0
+            geminiBackoffUntil = now + GEMINI_BACKOFF_MS
+            geminiBlockInProgress = false
+            return
         }
         performGlobalAction(GLOBAL_ACTION_BACK)
 
         mainHandler.postDelayed({
             try {
                 com.ejemplo.locksuite.util.Safe.guard("a11y.geminiMessagesVerify") {
-                    val current = rootInActiveWindow
-                    val stillGemini = if (current == null) {
+                    val postMatch = findWindowRootForPackages(setOf(com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING))
+                    var postFocused = true
+                    val stillGemini = if (postMatch == null) {
                         false
                     } else {
+                        val current = postMatch.first
+                        postFocused = postMatch.second
                         try {
                             val pkg = current.packageName?.toString() ?: ""
                             pkg == com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.PKG_MESSAGING &&
@@ -3184,11 +3905,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
                     if (stillGemini) {
                         geminiFailedBounces++
-                        if (geminiFailedBounces >= 2) {
-                            android.util.Log.w(TAG, "🏠 Gemini en Mensajes persiste tras dos intentos, forzando HOME")
+                        if (!postFocused || geminiFailedBounces >= 2) {
+                            android.util.Log.w(TAG, "🏠 Gemini en Mensajes persiste, forzando HOME")
                             performGlobalAction(GLOBAL_ACTION_HOME)
                             geminiFailedBounces = 0
                             geminiBackoffUntil = android.os.SystemClock.elapsedRealtime() + GEMINI_BACKOFF_MS
+                        } else if (geminiFailedBounces == 1) {
+                            performGlobalAction(GLOBAL_ACTION_BACK)
                         }
                     } else {
                         geminiFailedBounces = 0
@@ -3408,8 +4131,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         // 4. Título en TopBar, bienvenida, disclaimer y consentimiento (NUNCA dentro de globos de chat)
         if (!isBubbleNode && text.isNotBlank()) {
-            if (inTopBar && estado.title == null &&
-                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esTituloGemini(textLower)
+            if (inTopBar && !isSearchOrRecipientInput &&
+                com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esTituloTopBarCandidato(text) &&
+                (estado.title == null || com.ejemplo.locksuite.mdm.GeminiMessagesPolicy.esTituloGemini(textLower))
             ) {
                 estado.title = text.trim()
             }
@@ -3430,12 +4154,20 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             estado.hasConsentButton = true
         }
 
+        val isConversationCtx = estado.isConversation ||
+            (lastGeminiMessagingWindowClass?.contains("conversation", ignoreCase = true) == true)
+        val isScrollableMessageList = viewId.contains("message_list") ||
+            (!estado.isInbox && isConversationCtx && !inTopBar && !isSearchOrRecipientInput &&
+                !viewId.contains("conversation_list") && !viewId.contains("settings") &&
+                (node.isScrollable || className.endsWith("RecyclerView") || className.endsWith("ListView")))
+
         val childCount = node.childCount
         val nextInsideEditable = insideEditableBox || isComposerInput
+        val nextInsideBubble = isBubbleNode || isScrollableMessageList
         for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
             try {
-                scanGeminiNode(child, depth + 1, estado, isBubbleNode, nextInsideEditable)
+                scanGeminiNode(child, depth + 1, estado, nextInsideBubble, nextInsideEditable)
             } finally {
                 child.recycle()
             }
@@ -3460,6 +4192,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun santanderTargetPackages(): Set<String> {
+        val santander = com.ejemplo.locksuite.mdm.SantanderBlockPolicy.PKG_SANTANDER
+        return if (getOriginApp() == santander) setOf(santander) + WEBVIEW_PROVIDER_PACKAGES
+        else setOf(santander)
+    }
+
     private fun handleSantanderBlocking(eventType: Int) {
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             eventType == AccessibilityEvent.TYPE_VIEW_SELECTED) {
@@ -3480,23 +4218,31 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private fun scanForSantanderExternal() {
         val now = SystemClock.elapsedRealtime()
         if (santanderBlockInProgress || now < santanderBackoffUntil) return
-        val root = rootInActiveWindow ?: return
-        try {
+        val match = findWindowRootForPackages(santanderTargetPackages()) ?: return
+        val root = match.first
+        val isFocused = match.second
+        val retrato = try {
             val rootPkg = root.packageName?.toString() ?: ""
             if (isSantanderOrChildWebView(rootPkg)) {
-                val retrato = buildSantanderRetrato(root)
-                if (com.ejemplo.locksuite.mdm.SantanderBlockPolicy.evaluar(retrato) ==
-                    com.ejemplo.locksuite.mdm.SantanderBlockPolicy.Veredicto.BLOQUEAR
-                ) {
-                    triggerSantanderBlock(com.ejemplo.locksuite.mdm.SantanderBlockPolicy.motivo(retrato))
-                }
+                buildSantanderRetrato(root)
+            } else {
+                null
             }
         } finally {
             root.recycle()
+        } ?: return
+
+        if (com.ejemplo.locksuite.mdm.SantanderBlockPolicy.evaluar(retrato) ==
+            com.ejemplo.locksuite.mdm.SantanderBlockPolicy.Veredicto.BLOQUEAR
+        ) {
+            triggerSantanderBlock(
+                com.ejemplo.locksuite.mdm.SantanderBlockPolicy.motivo(retrato),
+                isFocused
+            )
         }
     }
 
-    private fun triggerSantanderBlock(motivo: String) {
+    private fun triggerSantanderBlock(motivo: String, isFocused: Boolean = true) {
         val now = SystemClock.elapsedRealtime()
         if (santanderBlockInProgress || now < santanderBackoffUntil) return
         santanderBlockInProgress = true
@@ -3512,21 +4258,34 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             true
         )
         mainHandler.post {
-            Toast.makeText(
-                applicationContext,
-                "🚫 Navegación externa bloqueada en Santander",
-                Toast.LENGTH_SHORT
-            ).show()
+            com.ejemplo.locksuite.util.Safe.guard("a11y.santanderToast") {
+                Toast.makeText(
+                    applicationContext,
+                    "🚫 Navegación externa bloqueada en Santander",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        if (!isFocused) {
+            Log.w(TAG, "🏠 Santander externo en ventana sin foco, forzando HOME directo")
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            santanderFailedBounces = 0
+            santanderBackoffUntil = now + SANTANDER_BACKOFF_MS
+            santanderBlockInProgress = false
+            return
         }
         performGlobalAction(GLOBAL_ACTION_BACK)
 
         mainHandler.postDelayed({
             try {
                 com.ejemplo.locksuite.util.Safe.guard("a11y.santanderVerify") {
-                    val current = rootInActiveWindow
-                    val stillBlocked = if (current == null) {
+                    val postMatch = findWindowRootForPackages(santanderTargetPackages())
+                    var postFocused = true
+                    val stillBlocked = if (postMatch == null) {
                         false
                     } else {
+                        val current = postMatch.first
+                        postFocused = postMatch.second
                         try {
                             val pkg = current.packageName?.toString() ?: ""
                             isSantanderOrChildWebView(pkg) &&
@@ -3540,11 +4299,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
                     if (stillBlocked) {
                         santanderFailedBounces++
-                        if (santanderFailedBounces >= 2) {
-                            Log.w(TAG, "🏠 Santander externo persiste tras dos intentos, forzando HOME")
+                        if (!postFocused || santanderFailedBounces >= 2) {
+                            Log.w(TAG, "🏠 Santander externo persiste, forzando HOME")
                             performGlobalAction(GLOBAL_ACTION_HOME)
                             santanderFailedBounces = 0
                             santanderBackoffUntil = SystemClock.elapsedRealtime() + SANTANDER_BACKOFF_MS
+                        } else if (santanderFailedBounces == 1) {
+                            performGlobalAction(GLOBAL_ACTION_BACK)
                         }
                     } else {
                         santanderFailedBounces = 0
@@ -3587,10 +4348,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
 
         if (!estado.tieneWebView && (
-                classLower.contains("webview") ||
-                classLower.contains("webkit") ||
-                classLower.contains("chromium") ||
-                classLower.contains("renderframe") ||
+                EmbeddedBrowserDetector.isWebViewClassName(classLower) ||
                 viewId.contains("webview") ||
                 viewId.contains("web_view") ||
                 WEBVIEW_PROVIDER_PACKAGES.contains(nodePkg)
@@ -3690,6 +4448,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     fun resetUpdateSession() {
+        mainHandler.removeCallbacks(playUpdateScanRunnable)
+        pendingPlayUpdatePkg = null
         updateSessionPkg = null
         updateSessionStartTime = 0L
         updateSessionTreeSeenAt = 0L
@@ -3772,19 +4532,29 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         try {
             for (w in windows) {
                 val tipo = w.type
-                if (tipo == android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY ||
-                    tipo == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD ||
-                    tipo == android.view.accessibility.AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER
+                if (tipo == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY ||
+                    tipo == AccessibilityWindowInfo.TYPE_INPUT_METHOD ||
+                    tipo == AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER
                 ) continue
-                val pkg = w.root?.packageName?.toString() ?: continue
-                val esSistema = tipo == android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM
+                val wRoot = w.root ?: continue
+                val pkg = try {
+                    wRoot.packageName?.toString()
+                } finally {
+                    wRoot.recycle()
+                } ?: continue
+                val esSistema = tipo == AccessibilityWindowInfo.TYPE_SYSTEM
                 if (esSistema && pkg == "com.android.systemui") continue   // barras de estado y navegación
                 return pkg to esSistema
             }
         } catch (e: Exception) {
             // sigue al camino de abajo
         }
-        val pkg = try { rootInActiveWindow?.packageName?.toString() } catch (e: Exception) { null }
+        val activeRoot = try { rootInActiveWindow } catch (e: Exception) { null } ?: return null
+        val pkg = try {
+            activeRoot.packageName?.toString()
+        } finally {
+            activeRoot.recycle()
+        }
         return pkg?.let { it to false }
     }
 
@@ -3884,12 +4654,15 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             for (window in windows) {
                 val windowRoot = window.root ?: continue
                 if (windowRoot.packageName?.toString() == PKG_PLAY_STORE) return windowRoot
+                windowRoot.recycle()
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error buscando la ventana de Play Store: ${e.message}")
         }
-        val root = rootInActiveWindow ?: return null
-        return if (root.packageName?.toString() == PKG_PLAY_STORE) root else null
+        val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return null
+        if (root.packageName?.toString() == PKG_PLAY_STORE) return root
+        root.recycle()
+        return null
     }
 
     /**
@@ -4083,12 +4856,17 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             //     grandes en varias sesiones y descarta las intermedias.
             if (failedAt > 0L && !sessionAlive && now - failedAt > 6_000L) {
                 Log.w(TAG, "Sesión de instalación abortada y sin reemplazo para $updatingPkg")
-                finishUpdateWithBestReason(
-                    ctx, updatingPkg, safeScanPlayStore(),
-                    UpdateFlowManager.RESULT_ERROR,
-                    "La instalación de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} fue interrumpida por el sistema.",
-                    "PackageInstaller informó onFinished(success=false) y no quedó ninguna sesión activa"
-                )
+                val diagScan = safeScanPlayStore()
+                try {
+                    finishUpdateWithBestReason(
+                        ctx, updatingPkg, diagScan,
+                        UpdateFlowManager.RESULT_ERROR,
+                        "La instalación de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} fue interrumpida por el sistema.",
+                        "PackageInstaller informó onFinished(success=false) y no quedó ninguna sesión activa"
+                    )
+                } finally {
+                    diagScan?.recycle()
+                }
                 return
             }
 
@@ -4100,12 +4878,17 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             )
             if (lastMove > 0L && now - lastMove > DOWNLOAD_STALL_MS) {
                 Log.w(TAG, "Descarga sin avance por ${(now - lastMove) / 1000}s para $updatingPkg")
-                finishUpdateWithBestReason(
-                    ctx, updatingPkg, safeScanPlayStore(),
-                    UpdateFlowManager.RESULT_ERROR,
-                    "La descarga de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} no avanzó. Revisá la conexión y el espacio libre.",
-                    "Descarga estancada en ${if (pct >= 0) "$pct%" else "sin progreso"} durante ${(now - lastMove) / 1000}s"
-                )
+                val diagScan = safeScanPlayStore()
+                try {
+                    finishUpdateWithBestReason(
+                        ctx, updatingPkg, diagScan,
+                        UpdateFlowManager.RESULT_ERROR,
+                        "La descarga de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} no avanzó. Revisá la conexión y el espacio libre.",
+                        "Descarga estancada en ${if (pct >= 0) "$pct%" else "sin progreso"} durante ${(now - lastMove) / 1000}s"
+                    )
+                } finally {
+                    diagScan?.recycle()
+                }
                 return
             }
 
@@ -4195,375 +4978,402 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
             return
         }
-        if (updateSessionTreeSeenAt == 0L) updateSessionTreeSeenAt = now
 
-        // Escanear el árbol de nodos de Play Store, midiendo contra la ventana real
-        val (screenW, screenH) = playStoreBounds(root)
-        val scan = PlayButtonFinder.scan(root, screenW, screenH, resources.displayMetrics.density)
-        UpdateFlowManager.reportDebugLabels(ctx, scan.debugLabels)
+        try {
+            if (updateSessionTreeSeenAt == 0L) updateSessionTreeSeenAt = now
 
-        if (scan.rendered && updateSessionRenderedAt == 0L) updateSessionRenderedAt = now
-        // B.99: con la ficha dibujada, Google Play está de verdad: la próxima vez que haya
-        // que traerla de vuelta (el usuario tocó Inicio) es rápido otra vez.
-        if (scan.rendered) {
-            updateSessionStoreMisses = 0
-            updateSessionLastFront = null
-            updateSessionAbsenceWhy = null
-        }
+            // Escanear el árbol de nodos de Play Store, midiendo contra la ventana real
+            val (screenW, screenH) = playStoreBounds(root)
+            val scan = PlayButtonFinder.scan(root, screenW, screenH, resources.displayMetrics.density)
+            try {
+                UpdateFlowManager.reportDebugLabels(ctx, scan.debugLabels)
 
-        val hasDefiniteUpdate = scan.actions.any { it.score >= 80 }
+                if (scan.rendered && updateSessionRenderedAt == 0L) updateSessionRenderedAt = now
+                // B.99: con la ficha dibujada, Google Play está de verdad: la próxima vez que haya
+                // que traerla de vuelta (el usuario tocó Inicio) es rápido otra vez.
+                if (scan.rendered) {
+                    updateSessionStoreMisses = 0
+                    updateSessionLastFront = null
+                    updateSessionAbsenceWhy = null
+                }
 
-        // ── 3-ter. ¿Google Play está descargando? (corregido el 26/10/2026, B.97) ──
-        //
-        // Antes CUALQUIER barra de progreso en pantalla se leía como "ya está
-        // descargando": no se apretaba nada y se esperaba. Pero la ficha tiene barras que
-        // no son descargas —las capturas y el video de la app mientras cargan, la ficha
-        // misma mientras se dibuja—, y si una quedaba girando el flujo mostraba
-        // "Descargando…" sin haber apretado nunca "Actualizar", hasta el watchdog de 10
-        // minutos. Otra causa de "en algunos celulares no actualiza".
-        //
-        // Ahora: si hay un "Actualizar" a la vista, NO está descargando (mientras baja, en
-        // su lugar está "Cancelar"), y se aprieta. Sin "Actualizar", cuenta como descarga
-        // una barra después de haber apretado algo, o una en la fila de botones de una
-        // ficha ya dibujada (Play Store actualizando la app por su cuenta). Y una descarga
-        // que no avanza tiene su propio tope (QUEUED_STALL_MS), que antes no existía.
-        val progresoDeDescarga = when {
-            !scan.sawProgressBar -> false
-            hasDefiniteUpdate -> false
-            updateSessionCandidatesTried > 0 -> true
-            else -> scan.progressInBand && scan.rendered
-        }
-        if (progresoDeDescarga) {
-            if (scan.diagnosis == PlayButtonFinder.Diagnosis.WAITING_NETWORK) {
-                // "Esperando Wi-Fi": no va a arrancar sola, así que se dice ahora y no en 4
-                // minutos. Pero recién cuando se SOSTIENE unos segundos: al cambiar de red,
-                // Google Play hace parpadear "esperando red" en una descarga que sigue sola.
-                if (updateSessionWaitNetSince == 0L) {
-                    updateSessionWaitNetSince = now
-                    UpdateFlowManager.step(
-                        ctx, UpdateStepLog.WARN,
-                        "Google Play muestra «${scan.diagnosisEvidence ?: "esperando red"}». Si sigue así unos segundos, cierro avisando."
-                    )
-                } else if (now - updateSessionWaitNetSince > WAITING_NETWORK_CONFIRM_MS) {
+                val hasDefiniteUpdate = scan.actions.any { it.score >= PlayButtonFinder.SCORE_WORD }
+                val hasOpenButton = scan.opens.isNotEmpty()
+
+                // ── 3-ter. ¿Google Play está descargando? (corregido el 26/10/2026, B.97) ──
+                //
+                // Antes CUALQUIER barra de progreso en pantalla se leía como "ya está
+                // descargando": no se apretaba nada y se esperaba. Pero la ficha tiene barras que
+                // no son descargas —las capturas y el video de la app mientras cargan, la ficha
+                // misma mientras se dibuja—, y si una quedaba girando el flujo mostraba
+                // "Descargando…" sin haber apretado nunca "Actualizar", hasta el watchdog de 10
+                // minutos. Otra causa de "en algunos celulares no actualiza".
+                //
+                // Ahora: si hay un "Actualizar" a la vista, NO está descargando (mientras baja, en
+                // su lugar está "Cancelar"), y se aprieta. Sin "Actualizar", cuenta como descarga
+                // una barra después de haber apretado algo, o una en la fila de botones de una
+                // ficha ya dibujada (Play Store actualizando la app por su cuenta). Y una descarga
+                // que no avanza tiene su propio tope (QUEUED_STALL_MS), que antes no existía.
+                val progresoDeDescarga = when {
+                    !scan.sawProgressBar -> false
+                    hasDefiniteUpdate -> false
+                    updateSessionCandidatesTried > 0 -> true
+                    else -> scan.progressInBand && scan.rendered
+                }
+                if (progresoDeDescarga) {
+                    if (scan.diagnosis == PlayButtonFinder.Diagnosis.WAITING_NETWORK) {
+                        // "Esperando Wi-Fi": no va a arrancar sola, así que se dice ahora y no en 4
+                        // minutos. Pero recién cuando se SOSTIENE unos segundos: al cambiar de red,
+                        // Google Play hace parpadear "esperando red" en una descarga que sigue sola.
+                        if (updateSessionWaitNetSince == 0L) {
+                            updateSessionWaitNetSince = now
+                            UpdateFlowManager.step(
+                                ctx, UpdateStepLog.WARN,
+                                "Google Play muestra «${scan.diagnosisEvidence ?: "esperando red"}». Si sigue así unos segundos, cierro avisando."
+                            )
+                        } else if (now - updateSessionWaitNetSince > WAITING_NETWORK_CONFIRM_MS) {
+                            val diag = diagnosisResult(ctx, updatingPkg, scan.diagnosis, scan.diagnosisEvidence)
+                            if (diag != null) {
+                                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+                                UpdateFlowManager.finish(ctx, diag.first, diag.second, diag.third)
+                                return
+                            }
+                        }
+                    } else {
+                        updateSessionWaitNetSince = 0L
+                    }
+                    val pctFila = scan.bandProgressPct
+                    // Los números de la pantalla ("12 MB de 30 MB"): hay versiones de Play Store
+                    // cuya barra no informa el valor a la Accesibilidad, pero el texto avanza.
+                    val numeros = scan.progressSignature
+                    var seMovio = false
+                    if (updateSessionQueuedSince == 0L) {
+                        updateSessionQueuedSince = now
+                        updateSessionBandPct = pctFila
+                        updateSessionProgressSig = numeros
+                        UpdateFlowManager.step(
+                            ctx, UpdateStepLog.INFO,
+                            if (updateSessionCandidatesTried > 0) "Después de apretar aparece una barra de progreso: espero la descarga."
+                            else "Google Play ya está bajando esta app por su cuenta: espero."
+                        )
+                    } else if ((pctFila >= 0 && pctFila != updateSessionBandPct) ||
+                        (numeros.isNotEmpty() && numeros != updateSessionProgressSig)
+                    ) {
+                        // Avanza (la barra o los números): es una descarga de verdad, no una cola
+                        // trabada. Si algo de la pantalla cambió por otro motivo se espera de más
+                        // (hasta el watchdog), nunca se corta una descarga que anda.
+                        updateSessionBandPct = pctFila
+                        updateSessionProgressSig = numeros
+                        updateSessionQueuedSince = now
+                        seMovio = true
+                    }
+                    if (pctFila >= 0) {
+                        UpdateFlowManager.setStage(
+                            ctx, UpdateFlowManager.STAGE_DOWNLOADING, "Descargando... $pctFila%", progress = pctFila
+                        )
+                    } else if (seMovio || UpdateFlowManager.currentStage(ctx) == UpdateFlowManager.STAGE_DOWNLOADING) {
+                        // Se mueve pero sin porcentaje legible: se dice "descargando", no "en cola".
+                        UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_DOWNLOADING)
+                    } else {
+                        UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_QUEUED)
+                    }
+                    if (now - updateSessionQueuedSince > QUEUED_STALL_MS) {
+                        val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+                        finishUpdateWithBestReason(
+                            ctx, updatingPkg, scan,
+                            UpdateFlowManager.RESULT_STORE_ERROR,
+                            "Google Play dejó la descarga de $label en espera y no arrancó (otra descarga en curso, " +
+                                "sin Wi-Fi o pausada). Probá de nuevo más tarde.",
+                            "Progreso ${if (pctFila >= 0) "detenido en $pctFila%" else "sin valor (en cola)"}, sin cambios en " +
+                                "los números de la pantalla y sin sesión de instalación durante ${(now - updateSessionQueuedSince) / 1000}s"
+                        )
+                    }
+                    return
+                }
+                if (updateSessionQueuedSince != 0L) {
+                    updateSessionQueuedSince = 0L
+                    updateSessionBandPct = -1
+                    updateSessionProgressSig = ""
+                }
+                updateSessionWaitNetSince = 0L
+
+                // ── 3-bis. Pantalla de error de Play Store reconocida ──
+                //
+                // Va antes de cualquier clic: en la pantalla de "sin espacio" el único
+                // botón grande abre el administrador de almacenamiento del sistema, y
+                // apretarlo saca al usuario de la tienda con la pantalla todavía tapada.
+                //
+                // B.101 — en una INSTALACIÓN, si la ficha muestra un "Instalar" claro y todavía no
+                // se apretó nada, un texto corto suelto ("sign in", "not found", "something went
+                // wrong") es casi seguro un comentario de otro usuario más abajo en la ficha, no
+                // una pantalla de error: en una app nueva se ven opiniones y en una actualización
+                // casi no. Una pantalla de error de verdad no tiene el botón Instalar en el
+                // encabezado, y lo que aparece DESPUÉS de apretar (sin espacio, sin cuenta) se
+                // sigue diagnosticando igual.
+                val fichaNormalConInstalar = UpdateFlowManager.isInstallMode(ctx) &&
+                    hasDefiniteUpdate && updateSessionCandidatesTried == 0
+                if (scan.diagnosis != PlayButtonFinder.Diagnosis.NONE && !fichaNormalConInstalar) {
                     val diag = diagnosisResult(ctx, updatingPkg, scan.diagnosis, scan.diagnosisEvidence)
                     if (diag != null) {
+                        Log.w(TAG, "Play Store: ${scan.diagnosis} para $updatingPkg (${scan.diagnosisEvidence})")
                         UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
                         UpdateFlowManager.finish(ctx, diag.first, diag.second, diag.third)
                         return
                     }
                 }
-            } else {
-                updateSessionWaitNetSince = 0L
-            }
-            val pctFila = scan.bandProgressPct
-            // Los números de la pantalla ("12 MB de 30 MB"): hay versiones de Play Store
-            // cuya barra no informa el valor a la Accesibilidad, pero el texto avanza.
-            val numeros = scan.progressSignature
-            var seMovio = false
-            if (updateSessionQueuedSince == 0L) {
-                updateSessionQueuedSince = now
-                updateSessionBandPct = pctFila
-                updateSessionProgressSig = numeros
-                UpdateFlowManager.step(
-                    ctx, UpdateStepLog.INFO,
-                    if (updateSessionCandidatesTried > 0) "Después de apretar aparece una barra de progreso: espero la descarga."
-                    else "Google Play ya está bajando esta app por su cuenta: espero."
-                )
-            } else if ((pctFila >= 0 && pctFila != updateSessionBandPct) ||
-                (numeros.isNotEmpty() && numeros != updateSessionProgressSig)
-            ) {
-                // Avanza (la barra o los números): es una descarga de verdad, no una cola
-                // trabada. Si algo de la pantalla cambió por otro motivo se espera de más
-                // (hasta el watchdog), nunca se corta una descarga que anda.
-                updateSessionBandPct = pctFila
-                updateSessionProgressSig = numeros
-                updateSessionQueuedSince = now
-                seMovio = true
-            }
-            if (pctFila >= 0) {
-                UpdateFlowManager.setStage(
-                    ctx, UpdateFlowManager.STAGE_DOWNLOADING, "Descargando... $pctFila%", progress = pctFila
-                )
-            } else if (seMovio || UpdateFlowManager.currentStage(ctx) == UpdateFlowManager.STAGE_DOWNLOADING) {
-                // Se mueve pero sin porcentaje legible: se dice "descargando", no "en cola".
-                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_DOWNLOADING)
-            } else {
-                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_QUEUED)
-            }
-            if (now - updateSessionQueuedSince > QUEUED_STALL_MS) {
-                val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
-                finishUpdateWithBestReason(
-                    ctx, updatingPkg, scan,
-                    UpdateFlowManager.RESULT_STORE_ERROR,
-                    "Google Play dejó la descarga de $label en espera y no arrancó (otra descarga en curso, " +
-                        "sin Wi-Fi o pausada). Probá de nuevo más tarde.",
-                    "Progreso ${if (pctFila >= 0) "detenido en $pctFila%" else "sin valor (en cola)"}, sin cambios en " +
-                        "los números de la pantalla y sin sesión de instalación durante ${(now - updateSessionQueuedSince) / 1000}s"
-                )
-            }
-            return
-        }
-        if (updateSessionQueuedSince != 0L) {
-            updateSessionQueuedSince = 0L
-            updateSessionBandPct = -1
-            updateSessionProgressSig = ""
-        }
-        updateSessionWaitNetSince = 0L
 
-        // ── 3-bis. Pantalla de error de Play Store reconocida ──
-        //
-        // Va antes de cualquier clic: en la pantalla de "sin espacio" el único
-        // botón grande abre el administrador de almacenamiento del sistema, y
-        // apretarlo saca al usuario de la tienda con la pantalla todavía tapada.
-        //
-        // B.101 — en una INSTALACIÓN, si la ficha muestra un "Instalar" claro y todavía no
-        // se apretó nada, un texto corto suelto ("sign in", "not found", "something went
-        // wrong") es casi seguro un comentario de otro usuario más abajo en la ficha, no
-        // una pantalla de error: en una app nueva se ven opiniones y en una actualización
-        // casi no. Una pantalla de error de verdad no tiene el botón Instalar en el
-        // encabezado, y lo que aparece DESPUÉS de apretar (sin espacio, sin cuenta) se
-        // sigue diagnosticando igual.
-        val fichaNormalConInstalar = UpdateFlowManager.isInstallMode(ctx) &&
-            hasDefiniteUpdate && updateSessionCandidatesTried == 0
-        if (scan.diagnosis != PlayButtonFinder.Diagnosis.NONE && !fichaNormalConInstalar) {
-            val diag = diagnosisResult(ctx, updatingPkg, scan.diagnosis, scan.diagnosisEvidence)
-            if (diag != null) {
-                Log.w(TAG, "Play Store: ${scan.diagnosis} para $updatingPkg (${scan.diagnosisEvidence})")
-                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
-                UpdateFlowManager.finish(ctx, diag.first, diag.second, diag.third)
-                return
-            }
-        }
+                val cooledDown = now - updateSessionLastClickAt > CANDIDATE_WAIT_MS
 
-        val cooledDown = now - updateSessionLastClickAt > CANDIDATE_WAIT_MS
-
-        // ── 4. Diálogo de confirmación ──
-        if (updateSessionCandidatesTried > 0 && scan.dialogs.isNotEmpty() && cooledDown) {
-            val d = scan.dialogs.first()
-            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_CONFIRMING,
-                "Confirmando descarga...")
-            if (performClickOnNode(d.node)) {
-                updateSessionLastClickAt = now
-                Log.i(TAG, "Clic en diálogo: ${d.reason}")
-                UpdateFlowManager.step(ctx, UpdateStepLog.ACT, "Confirmé el diálogo de Google Play: «${nodeLabel(d.node)}» (${d.reason}).")
-            } else {
-                UpdateFlowManager.step(ctx, UpdateStepLog.WARN, "No pude apretar el botón del diálogo «${nodeLabel(d.node)}».")
-            }
-            return
-        }
-
-        // ── 4b. Descartar avisos u hojas emergentes que tapan la ficha ──
-        // (ej. Asistente de IA, Google Play Points, etc. en Play Store v53+)
-        if (scan.actions.isEmpty() && scan.dialogs.isEmpty() && scan.dismissals.isNotEmpty() &&
-            updateSessionDismissalsCount < MAX_DISMISSALS && cooledDown
-        ) {
-            val d = scan.dismissals.first()
-            if (performClickOnNode(d.node)) {
-                updateSessionDismissalsCount++
-                updateSessionLastClickAt = now
-                Log.i(TAG, "Cerrando aviso emergente de Google Play: ${d.reason}")
-                UpdateFlowManager.step(
-                    ctx, UpdateStepLog.ACT,
-                    "Cerré aviso emergente de Google Play: «${nodeLabel(d.node)}» (${d.reason})."
-                )
-                return
-            } else {
-                UpdateFlowManager.step(
-                    ctx, UpdateStepLog.WARN,
-                    "No pude cerrar aviso emergente «${nodeLabel(d.node)}»."
-                )
-            }
-        }
-
-        // ── 5. Probar el próximo candidato a "Actualizar" ──
-        //
-        // Este paso SUBIÓ de lugar el 3/9/2026: antes venía después de las dos
-        // salidas por "ya estaba al día", así que en una ficha que tardaba en
-        // dibujarse el flujo se iba por la salida falsa sin haber apretado nada.
-        // Primero se intenta actualizar; recién si no hay nada que apretar se
-        // razona sobre por qué.
-        if (cooledDown && updateSessionCandidatesTried < MAX_CANDIDATES) {
-            val next = scan.actions.firstOrNull { candidateKey(it) !in updateSessionTriedKeys }
-            if (next != null) {
-                updateSessionTriedKeys.add(candidateKey(next))
-                updateSessionCandidatesTried++
-                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
-                    "Iniciando descarga...")
-                if (performClickOnNode(next.node)) {
-                    updateSessionLastClickAt = now
-                    Log.i(TAG, "Candidato ${updateSessionCandidatesTried}/${MAX_CANDIDATES}: ${next.reason}")
-                    UpdateFlowManager.step(
-                        ctx, UpdateStepLog.ACT,
-                        "Apreté «${nodeLabel(next.node)}» (intento $updateSessionCandidatesTried de $MAX_CANDIDATES: ${next.reason})."
-                    )
-                } else {
-                    UpdateFlowManager.step(
-                        ctx, UpdateStepLog.WARN,
-                        "No pude apretar «${nodeLabel(next.node)}» (intento $updateSessionCandidatesTried de $MAX_CANDIDATES)."
-                    )
-                }
-                return
-            }
-        }
-
-        val hasOpenButton = scan.opens.isNotEmpty()
-
-        // ── 6. La ficha todavía no terminó de dibujarse ──
-        //
-        // ⚠️ ESTA ES LA CORRECCIÓN CENTRAL DEL 3/9/2026.
-        //
-        // Antes, las dos salidas de "ya estaba al día" se disparaban a los 1,5 s y
-        // a los 3,5 s contados desde que aparecía la VENTANA de Play Store. Pero la
-        // ventana existe apenas arranca la Activity, cuando la ficha todavía está
-        // en blanco. En un Snapdragon 215 con 2 GB de RAM, la ficha tarda entre 4 y
-        // 8 s en tener botones: el flujo concluía "no hay ningún botón" sobre una
-        // pantalla vacía y cerraba diciendo "la app ya está actualizada". El equipo
-        // volvía al inicio, sin actualizar y sin ningún error. Es exactamente el
-        // síntoma reportado, y explica por qué en un teléfono rápido funcionaba.
-        //
-        // Ahora no se saca NINGUNA conclusión sobre una pantalla que no terminó de
-        // dibujarse: hacen falta contenido dibujado Y tiempo transcurrido.
-        val renderedFor = if (updateSessionRenderedAt > 0L) now - updateSessionRenderedAt else 0L
-        val waitedForCard = now - updateSessionTreeSeenAt
-        if (!scan.rendered && waitedForCard < UPDATE_CARD_GIVEUP_MS) {
-            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_STORE,
-                "Esperando a Google Play...")
-            return
-        }
-
-        // ── 7. Bajar la pantalla: en un equipo chico el botón puede estar abajo ──
-        //
-        // Android no instancia en el árbol de accesibilidad lo que no está
-        // dibujado. En una pantalla de 2,8" la fila [Desinstalar] [Actualizar]
-        // puede quedar debajo del borde visible, y entonces para nosotros no
-        // existe. Un par de desplazamientos cortos la traen. Tope bajo a propósito:
-        // seguir bajando lleva a los carruseles de "apps similares", que es el bug
-        // 4 de B.9 (apretar el "Instalar" de OTRA app).
-        //
-        // Solo mientras NO se haya apretado nada todavía: después de un clic, la
-        // fila de botones se convierte en una fila de progreso y quedaría igual de
-        // "sin candidatos", pero ahí desplazar sería moverle la pantalla a una
-        // descarga que ya arrancó.
-        if (updateSessionCandidatesTried == 0 &&
-            !hasDefiniteUpdate && !hasOpenButton && scan.rendered &&
-            updateSessionScrolls < MAX_UPDATE_SCROLLS &&
-            now - updateSessionLastScrollAt > SCROLL_COOLDOWN_MS
-        ) {
-            val scrollable = scan.scrollable
-            if (scrollable != null) {
-                updateSessionScrolls++
-                updateSessionLastScrollAt = now
-                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
-                    if (UpdateFlowManager.isInstallMode(ctx)) "Buscando el botón Instalar..." else "Buscando actualización...")
-                try {
-                    scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-                    Log.i(TAG, "Desplazando la ficha ($updateSessionScrolls/$MAX_UPDATE_SCROLLS) para encontrar el botón")
-                    UpdateFlowManager.step(
-                        ctx, UpdateStepLog.ACT,
-                        "No veo el botón: bajé la ficha para buscarlo ($updateSessionScrolls de $MAX_UPDATE_SCROLLS)."
-                    )
-                } catch (e: Exception) {
-                    Log.w(TAG, "No se pudo desplazar la ficha: ${e.message}")
-                }
-                return
-            }
-        }
-
-        // ── 8. ¿Ya estaba al día? ──
-        //
-        // Solo se afirma con la ficha DIBUJADA y estable. "Abrir" sin "Actualizar"
-        // en una ficha completa es la señal legítima de que no hay actualización.
-        if (!hasDefiniteUpdate && hasOpenButton &&
-            updateSessionRenderedAt > 0L && renderedFor > UPDATE_UP_TO_DATE_GRACE_MS
-        ) {
-            val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
-            if (UpdateFlowManager.isInstallMode(ctx)) {
-                // B.101 / B.110 — instalando: si la ficha dice "Abrir", Google Play cree que la app
-                // YA está instalada. Si el sistema también la ve instalada, el paso 1 ya
-                // habría cerrado el flujo con éxito; si llegamos acá, el sistema NO la ve
-                // (por ejemplo, está oculta por una regla del administrador).
-                // Pero si ya se habían probado candidatos (pudo haberse navegado a otra pantalla
-                // por error) y aún no se relanzó la tienda, reabrimos la ficha antes de fallar.
-                if (updateSessionCandidatesTried > 0 && updateSessionRelaunches < 2) {
-                    noteStoreRelaunch("pantalla con 'Abrir' tras intentos de clic en modo instalación")
-                    UpdateFlowManager.openStore(ctx, updatingPkg)
-                    updateSessionTreeSeenAt = now
-                    updateSessionRenderedAt = 0L
+                // ── 4. Diálogo de confirmación ──
+                if (updateSessionCandidatesTried > 0 && scan.dialogs.isNotEmpty() && cooledDown) {
+                    val d = scan.dialogs.first()
+                    UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_CONFIRMING,
+                        "Confirmando descarga...")
+                    if (performClickOnNode(d.node)) {
+                        updateSessionLastClickAt = now
+                        Log.i(TAG, "Clic en diálogo: ${d.reason}")
+                        UpdateFlowManager.step(ctx, UpdateStepLog.ACT, "Confirmé el diálogo de Google Play: «${nodeLabel(d.node)}» (${d.reason}).")
+                    } else {
+                        UpdateFlowManager.step(ctx, UpdateStepLog.WARN, "No pude apretar el botón del diálogo «${nodeLabel(d.node)}».")
+                    }
                     return
                 }
-                Log.w(TAG, "Instalando $updatingPkg: Google Play muestra 'Abrir' pero el sistema no ve el paquete")
-                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
-                UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_ERROR,
-                    "Google Play dice que $label ya está instalada, pero el sistema no la encuentra (puede estar oculta por una regla).",
-                    "Ficha con 'Abrir' y paquete no visible para el sistema")
-                return
+
+                // ── 4b. Descartar avisos u hojas emergentes que tapan la ficha ──
+                // (ej. Asistente de IA, Google Play Points, etc. en Play Store v53+)
+                if (scan.actions.isEmpty() && scan.dialogs.isEmpty() && scan.dismissals.isNotEmpty() &&
+                    updateSessionDismissalsCount < MAX_DISMISSALS && cooledDown
+                ) {
+                    val d = scan.dismissals.first()
+                    if (performClickOnNode(d.node)) {
+                        updateSessionDismissalsCount++
+                        updateSessionLastClickAt = now
+                        Log.i(TAG, "Cerrando aviso emergente de Google Play: ${d.reason}")
+                        UpdateFlowManager.step(
+                            ctx, UpdateStepLog.ACT,
+                            "Cerré aviso emergente de Google Play: «${nodeLabel(d.node)}» (${d.reason})."
+                        )
+                        return
+                    } else {
+                        UpdateFlowManager.step(
+                            ctx, UpdateStepLog.WARN,
+                            "No pude cerrar aviso emergente «${nodeLabel(d.node)}»."
+                        )
+                    }
+                }
+
+                // ── 5. Probar el próximo candidato a "Actualizar" ──
+                //
+                // Nunca probar candidatos posicionales (`score < SCORE_WORD`) cuando ya hay
+                // un botón "Abrir" visible en pantalla (`hasOpenButton && !hasDefiniteUpdate`).
+                if (cooledDown && updateSessionCandidatesTried < MAX_CANDIDATES && !(hasOpenButton && !hasDefiniteUpdate)) {
+                    val next = scan.actions.firstOrNull {
+                        PlayButtonFinder.shouldAllowCandidateWhenOpenVisible(it.score, hasOpenButton) &&
+                            candidateKey(it) !in updateSessionTriedKeys
+                    }
+                    if (next != null) {
+                        updateSessionTriedKeys.add(candidateKey(next))
+                        updateSessionCandidatesTried++
+                        UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
+                            "Iniciando descarga...")
+                        if (performClickOnNode(next.node)) {
+                            updateSessionLastClickAt = now
+                            Log.i(TAG, "Candidato ${updateSessionCandidatesTried}/${MAX_CANDIDATES}: ${next.reason}")
+                            UpdateFlowManager.step(
+                                ctx, UpdateStepLog.ACT,
+                                "Apreté «${nodeLabel(next.node)}» (intento $updateSessionCandidatesTried de $MAX_CANDIDATES: ${next.reason})."
+                            )
+                        } else {
+                            UpdateFlowManager.step(
+                                ctx, UpdateStepLog.WARN,
+                                "No pude apretar «${nodeLabel(next.node)}» (intento $updateSessionCandidatesTried de $MAX_CANDIDATES)."
+                            )
+                        }
+                        return
+                    }
+                }
+
+                // ── 6. La ficha todavía no terminó de dibujarse ──
+                //
+                // ⚠️ ESTA ES LA CORRECCIÓN CENTRAL DEL 3/9/2026.
+                //
+                // Antes, las dos salidas de "ya estaba al día" se disparaban a los 1,5 s y
+                // a los 3,5 s contados desde que aparecía la VENTANA de Play Store. Pero la
+                // ventana existe apenas arranca la Activity, cuando la ficha todavía está
+                // en blanco. En un Snapdragon 215 con 2 GB de RAM, la ficha tarda entre 4 y
+                // 8 s en tener botones: el flujo concluía "no hay ningún botón" sobre una
+                // pantalla vacía y cerraba diciendo "la app ya está actualizada". El equipo
+                // volvía al inicio, sin actualizar y sin ningún error. Es exactamente el
+                // síntoma reportado, y explica por qué en un teléfono rápido funcionaba.
+                //
+                // Ahora no se saca NINGUNA conclusión sobre una pantalla que no terminó de
+                // dibujarse: hacen falta contenido dibujado Y tiempo transcurrido.
+                val renderedFor = if (updateSessionRenderedAt > 0L) now - updateSessionRenderedAt else 0L
+                val waitedForCard = now - updateSessionTreeSeenAt
+                if (!scan.rendered && waitedForCard < UPDATE_CARD_GIVEUP_MS) {
+                    UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_STORE,
+                        "Esperando a Google Play...")
+                    return
+                }
+
+                // ── 7. Bajar la pantalla: en un equipo chico el botón puede estar abajo ──
+                //
+                // Android no instancia en el árbol de accesibilidad lo que no está
+                // dibujado. En una pantalla de 2,8" la fila [Desinstalar] [Actualizar]
+                // puede quedar debajo del borde visible, y entonces para nosotros no
+                // existe. Un par de desplazamientos cortos la traen. Tope bajo a propósito:
+                // seguir bajando lleva a los carruseles de "apps similares", que es el bug
+                // 4 de B.9 (apretar el "Instalar" de OTRA app).
+                //
+                // Solo mientras NO se haya apretado nada todavía: después de un clic, la
+                // fila de botones se convierte en una fila de progreso y quedaría igual de
+                // "sin candidatos", pero ahí desplazar sería moverle la pantalla a una
+                // descarga que ya arrancó.
+                if (updateSessionCandidatesTried == 0 &&
+                    !hasDefiniteUpdate && !hasOpenButton && scan.rendered &&
+                    updateSessionScrolls < MAX_UPDATE_SCROLLS &&
+                    now - updateSessionLastScrollAt > SCROLL_COOLDOWN_MS
+                ) {
+                    val scrollable = scan.scrollable
+                    if (scrollable != null) {
+                        updateSessionScrolls++
+                        updateSessionLastScrollAt = now
+                        UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
+                            if (UpdateFlowManager.isInstallMode(ctx)) "Buscando el botón Instalar..." else "Buscando actualización...")
+                        try {
+                            scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                            Log.i(TAG, "Desplazando la ficha ($updateSessionScrolls/$MAX_UPDATE_SCROLLS) para encontrar el botón")
+                            UpdateFlowManager.step(
+                                ctx, UpdateStepLog.ACT,
+                                "No veo el botón: bajé la ficha para buscarlo ($updateSessionScrolls de $MAX_UPDATE_SCROLLS)."
+                            )
+                        } catch (e: Exception) {
+                            Log.w(TAG, "No se pudo desplazar la ficha: ${e.message}")
+                        }
+                        return
+                    }
+                }
+
+                // ── 8. ¿Ya estaba al día? ──
+                //
+                // Solo se afirma con la ficha DIBUJADA y estable. "Abrir" sin "Actualizar"
+                // en una ficha completa es la señal legítima de que no hay actualización.
+                if (!hasDefiniteUpdate && hasOpenButton &&
+                    updateSessionRenderedAt > 0L && renderedFor > UPDATE_UP_TO_DATE_GRACE_MS
+                ) {
+                    val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+                    if (UpdateFlowManager.isInstallMode(ctx)) {
+                        // B.101 / B.110 — instalando: si la ficha dice "Abrir", Google Play cree que la app
+                        // YA está instalada. Si el sistema también la ve instalada, el paso 1 ya
+                        // habría cerrado el flujo con éxito; si llegamos acá, el sistema NO la ve
+                        // (por ejemplo, está oculta por una regla del administrador).
+                        // Pero si ya se habían probado candidatos (pudo haberse navegado a otra pantalla
+                        // por error) y aún no se relanzó la tienda, reabrimos la ficha antes de fallar.
+                        if (updateSessionCandidatesTried > 0 && updateSessionRelaunches < 2) {
+                            noteStoreRelaunch("pantalla con 'Abrir' tras intentos de clic en modo instalación")
+                            UpdateFlowManager.openStore(ctx, updatingPkg)
+                            updateSessionTreeSeenAt = now
+                            updateSessionRenderedAt = 0L
+                            return
+                        }
+                        Log.w(TAG, "Instalando $updatingPkg: Google Play muestra 'Abrir' pero el sistema no ve el paquete")
+                        UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+                        UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_ERROR,
+                            "Google Play dice que $label ya está instalada, pero el sistema no la encuentra (puede estar oculta por una regla).",
+                            "Ficha con 'Abrir' y paquete no visible para el sistema")
+                        return
+                    }
+                    Log.i(TAG, "App $updatingPkg ya está al día (botón Abrir visible, sin Actualizar)")
+                    UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+                    UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UP_TO_DATE,
+                        "$label ya está actualizada.", "Ficha con 'Abrir' y sin 'Actualizar'")
+                    return
+                }
+
+                // ── 9. La ficha se dibujó y no hay NINGÚN botón que reconozcamos ──
+                //
+                // Esto ya NO se informa como "ya está actualizada". Una ficha dibujada sin
+                // ningún botón no es una app al día: es una pantalla que no entendimos. Se
+                // cierra con un error honesto y con las etiquetas de lo que sí se vio, que
+                // es lo que permite agregar el idioma o el caso que falte sin pedir un ADB.
+                // La condición `candidatesTried == 0` es esencial: si ya se apretó algo, la
+                // fila de botones es ahora una fila de progreso y también se ve "sin
+                // candidatos" — cerrar acá abortaría una descarga que arrancó bien. Ese
+                // caso lo cubre el freno por estancamiento del paso 10, que sí espera.
+                if (updateSessionCandidatesTried == 0 && scan.actions.isEmpty() && !hasOpenButton &&
+                    (renderedFor > UPDATE_CARD_RENDER_MS || waitedForCard > UPDATE_CARD_GIVEUP_MS)
+                ) {
+                    Log.w(TAG, "Ficha de $updatingPkg sin botones reconocibles. Labels: ${scan.debugLabels}")
+                    finishUpdateWithBestReason(
+                        ctx, updatingPkg, scan,
+                        UpdateFlowManager.RESULT_NOT_AVAILABLE,
+                        if (UpdateFlowManager.isInstallMode(ctx))
+                            "No se encontró el botón Instalar de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} en Google Play."
+                        else
+                            "No se encontró el botón de actualizar de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} en Google Play.",
+                        "Ficha dibujada (${scan.renderedNodes} nodos con texto) sin candidatos reconocibles"
+                    )
+                    return
+                }
+
+                // ── 10. Freno por estancamiento ──
+                if (now - updateSessionStartTime > UPDATE_STALL_MS) {
+                    Log.w(TAG, "Actualización estancada para $updatingPkg. Labels: ${scan.debugLabels}")
+                    finishUpdateWithBestReason(
+                        ctx, updatingPkg, scan,
+                        UpdateFlowManager.RESULT_ERROR,
+                        "No se pudo ${UpdateFlowManager.verb(ctx)} ${UpdateFlowManager.appLabel(ctx, updatingPkg)}.",
+                        "Estancado ${UPDATE_STALL_MS / 1000}s tras probar $updateSessionCandidatesTried candidatos"
+                    )
+                    return
+                }
+
+                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
+                    if (UpdateFlowManager.isInstallMode(ctx)) "Buscando el botón Instalar..." else "Buscando actualización...")
+            } finally {
+                scan.recycle()
             }
-            Log.i(TAG, "App $updatingPkg ya está al día (botón Abrir visible, sin Actualizar)")
-            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
-            UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UP_TO_DATE,
-                "$label ya está actualizada.", "Ficha con 'Abrir' y sin 'Actualizar'")
-            return
+        } finally {
+            root.recycle()
         }
-
-        // ── 9. La ficha se dibujó y no hay NINGÚN botón que reconozcamos ──
-        //
-        // Esto ya NO se informa como "ya está actualizada". Una ficha dibujada sin
-        // ningún botón no es una app al día: es una pantalla que no entendimos. Se
-        // cierra con un error honesto y con las etiquetas de lo que sí se vio, que
-        // es lo que permite agregar el idioma o el caso que falte sin pedir un ADB.
-        // La condición `candidatesTried == 0` es esencial: si ya se apretó algo, la
-        // fila de botones es ahora una fila de progreso y también se ve "sin
-        // candidatos" — cerrar acá abortaría una descarga que arrancó bien. Ese
-        // caso lo cubre el freno por estancamiento del paso 10, que sí espera.
-        if (updateSessionCandidatesTried == 0 && scan.actions.isEmpty() && !hasOpenButton &&
-            (renderedFor > UPDATE_CARD_RENDER_MS || waitedForCard > UPDATE_CARD_GIVEUP_MS)
-        ) {
-            Log.w(TAG, "Ficha de $updatingPkg sin botones reconocibles. Labels: ${scan.debugLabels}")
-            finishUpdateWithBestReason(
-                ctx, updatingPkg, scan,
-                UpdateFlowManager.RESULT_NOT_AVAILABLE,
-                if (UpdateFlowManager.isInstallMode(ctx))
-                    "No se encontró el botón Instalar de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} en Google Play."
-                else
-                    "No se encontró el botón de actualizar de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} en Google Play.",
-                "Ficha dibujada (${scan.renderedNodes} nodos con texto) sin candidatos reconocibles"
-            )
-            return
-        }
-
-        // ── 10. Freno por estancamiento ──
-        if (now - updateSessionStartTime > UPDATE_STALL_MS) {
-            Log.w(TAG, "Actualización estancada para $updatingPkg. Labels: ${scan.debugLabels}")
-            finishUpdateWithBestReason(
-                ctx, updatingPkg, scan,
-                UpdateFlowManager.RESULT_ERROR,
-                "No se pudo ${UpdateFlowManager.verb(ctx)} ${UpdateFlowManager.appLabel(ctx, updatingPkg)}.",
-                "Estancado ${UPDATE_STALL_MS / 1000}s tras probar $updateSessionCandidatesTried candidatos"
-            )
-            return
-        }
-
-        UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
-            if (UpdateFlowManager.isInstallMode(ctx)) "Buscando el botón Instalar..." else "Buscando actualización...")
     }
 
     /**
      * Escaneo puntual de la pantalla de Play Store para adjuntar un diagnóstico a
      * un cierre. Devuelve null si la ventana ya no está: cerrar sin diagnóstico es
-     * aceptable, quedarse colgado no.
+     * aceptable, quedarse colgado no. Quien llama debe reciclar el resultado.
      */
     private fun safeScanPlayStore(): PlayButtonFinder.Result? {
+        val root = findPlayStoreRoot() ?: return null
         return try {
-            val root = findPlayStoreRoot() ?: return null
             val (w, h) = playStoreBounds(root)
             PlayButtonFinder.scan(root, w, h, resources.displayMetrics.density)
         } catch (e: Exception) {
             null
+        } finally {
+            root.recycle()
+        }
+    }
+
+    private var pendingPlayUpdatePkg: String? = null
+    private val playUpdateScanRunnable = Runnable {
+        com.ejemplo.locksuite.util.Safe.guard("a11y.playUpdateScan") {
+            val ctx = applicationContext
+            val pkg = pendingPlayUpdatePkg ?: UpdateFlowManager.currentPackage(ctx)
+            if (!pkg.isNullOrBlank() && UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
+                scanAndAct(pkg)
+            }
         }
     }
 
     private fun handlePlayStoreAutoUpdate(event: AccessibilityEvent, updatingPkg: String) {
-        scanAndAct(updatingPkg)
+        pendingPlayUpdatePkg = updatingPkg
+        mainHandler.removeCallbacks(playUpdateScanRunnable)
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            scanAndAct(updatingPkg)
+        } else {
+            mainHandler.postDelayed(playUpdateScanRunnable, PLAY_UPDATE_DEBOUNCE_MS)
+        }
     }
 
     /**
@@ -4607,14 +5417,17 @@ class LockSuiteAccessibilityService : AccessibilityService() {
      */
     private fun performClickOnNode(node: AccessibilityNodeInfo?): Boolean {
         if (node == null) return false
+        var current: AccessibilityNodeInfo? = null
         try {
             if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
 
-            var current: AccessibilityNodeInfo? = node.parent
+            current = node.parent
             var level = 0
             while (current != null && level < CLICK_PARENT_DEPTH) {
                 if (current.isClickable && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
-                current = current.parent
+                val next = current.parent
+                current.recycle()
+                current = next
                 level++
             }
 
@@ -4622,6 +5435,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
         } catch (e: Exception) {
             Log.e(TAG, "Error en performClickOnNode: ${e.message}")
+        } finally {
+            try {
+                current?.recycle()
+            } catch (_: Exception) { }
         }
         return false
     }
@@ -4630,7 +5447,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private fun stopCaptiveWatch() {
         mainHandler.removeCallbacks(captiveTickRunnable)
         captiveOpenedAt = 0L
+        captivePortalPkg = null
         captiveLastActivityAt = 0L
+        captiveValidatedAt = 0L
     }
 
     override fun onInterrupt() {
@@ -4678,6 +5497,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         if (instance === this) instance = null
         stopCaptiveWatch()
 
+        if (keyguardReceiverRegistered) {
+            try {
+                unregisterReceiver(keyguardReceiver)
+            } catch (_: Exception) { }
+            keyguardReceiverRegistered = false
+        }
+
         // Aviso INSTANTÁNEO de que la accesibilidad se cayó. Es la señal más confiable
         // que existe —la da el propio servicio que se está muriendo— y llega antes que
         // cualquier lectura de preferencias del sistema. Se hace en un hilo aparte
@@ -4711,7 +5537,15 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
         mainHandler.removeCallbacks(whatsappScanRunnable)
         mainHandler.removeCallbacks(mercadoPagoScanRunnable)
+        mainHandler.removeCallbacks(geminiMessagesScanRunnable)
+        mainHandler.removeCallbacks(santanderScanRunnable)
+        mainHandler.removeCallbacks(iabDelayedScanRunnable)
+        mainHandler.removeCallbacks(playUpdateScanRunnable)
         mainHandler.removeCallbacks(updateTickRunnable)
+        mainHandler.removeCallbacks(accBounceDeferredRunnable)
+        mainHandler.removeCallbacks(legalDeferredRunnable)
+        mainHandler.removeCallbacks(gAccDeferredRunnable)
+        mainHandler.removeCallbacks(contactPhotoDeferredRunnable)
         webViewRetryRunnables.forEach { mainHandler.removeCallbacks(it) }
         webViewRetryRunnables.clear()
         releaseUpdateWakeLock()

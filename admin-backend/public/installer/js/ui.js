@@ -118,7 +118,15 @@ export function showToast(message, icon = 'info') {
         clearTimeout(toastTimer);
     }
 
-    x.innerHTML = `<span class="material-symbols-rounded toast-icon">${icon}</span><span class="toast-text">${message}</span>`;
+    x.textContent = '';
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'material-symbols-rounded toast-icon';
+    iconSpan.textContent = String(icon || 'info');
+    const textSpan = document.createElement('span');
+    textSpan.className = 'toast-text';
+    textSpan.textContent = String(message == null ? '' : message);
+    x.appendChild(iconSpan);
+    x.appendChild(textSpan);
     x.className = "show";
 
     toastTimer = setTimeout(() => {
@@ -590,7 +598,6 @@ export function updateProgress(val, activeMilestone = null, heroTitle = null, he
 
 export function startNewDeviceInstall() {
     clearSessionState();
-    localStorage.clear();
     appState.adbConnected = false;
     appState.adbInstance = null;
     appState.webUsbInstance = null;

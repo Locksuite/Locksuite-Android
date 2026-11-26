@@ -82,6 +82,8 @@ test("ícono: se rechaza lo que no es https del CDN de Google", () => {
   for (const bad of [
     "http://play-lh.googleusercontent.com/a", "https://evil.example.com/a.png",
     "https://googleusercontent.com.evil.com/a", "https://user@play-lh.googleusercontent.com/a",
+    "https://play-lh.googleusercontent.com/a#frag", "https://play-lh.googleusercontent.com:8443/a",
+    "https://play-lh.googleusercontent.com/a\\b",
     "https://play-lh.googleusercontent.com/a b", 'https://play-lh.googleusercontent.com/a"onerror=', "",
     "javascript:alert(1)", "data:image/png;base64,AAAA",
   ]) {

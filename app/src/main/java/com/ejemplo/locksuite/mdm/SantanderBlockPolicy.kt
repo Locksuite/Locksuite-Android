@@ -48,10 +48,27 @@ object SantanderBlockPolicy {
     )
 
     private val MARCADORES_APP_STORE = listOf(
+        // Inglés (apps.apple.com en EN)
         "arcade", "today", "categories",
         "iphone", "ipad", "mac", "vision", "watch",
         "age rating", "designed for ipad", "not verified for macos",
-        "in-app purchases"
+        "in-app purchases",
+        // Español (apps.apple.com en ES; evita términos genéricos bancarios o "store" que
+        // colisionarían con el enlace "App Store" del pie de Términos y Condiciones)
+        "hoy", "categorias", "juegos", "apps",
+        "clasificacion por edad", "disenado para ipad", "disenado para iphone",
+        "no verificado para macos", "compras dentro de la app",
+        "vista previa de app store", "capturas de pantalla",
+        "historial de versiones", "calificaciones y resenas",
+        "tienda de apps", "app store preview",
+        // Portugués (apps.apple.com en PT)
+        "hoje", "jogos",
+        "classificacao etaria", "classificacao indicativa",
+        "feito para ipad", "projetado para ipad",
+        "nao verificado para macos", "compras dentro do app", "compras no app",
+        "pre-visualizacao da app store", "capturas de tela",
+        "historico de versoes", "avaliacoes e resenhas",
+        "loja de apps"
     )
 
     /**

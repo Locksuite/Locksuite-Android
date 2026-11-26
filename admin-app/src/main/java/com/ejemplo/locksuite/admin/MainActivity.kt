@@ -13,9 +13,14 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Message
 import android.util.Log
+import android.view.ActionMode
+import android.view.Menu
+import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import java.net.URI
+import java.util.Locale
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -93,10 +98,40 @@ class MainActivity : AppCompatActivity() {
          *   support.google.com y policies.google.com, que NO están en esta lista, así
          *   que quedan bloqueados y desde ahí no se sale a la web abierta.
          */
+        private val PANEL_ALLOWED_HOSTS = setOf(
+            "locksuite-nueva.web.app",
+            "locksuite-nueva.firebaseapp.com"
+        )
+
         private val NAV_ALLOWED_HOSTS = setOf(
             "locksuite-nueva.web.app",
             "locksuite-nueva.firebaseapp.com",
             "accounts.google.com"
+        )
+
+        private val BLOCKED_ACCOUNTS_PATH_PREFIXES = listOf(
+            "/signup",
+            "/manageaccount",
+            "/signin/recovery",
+            "/recover",
+            "/lifecycle/steps/signup",
+            "/v3/signin/recovery",
+            "/createaccount",
+            "/myaccount",
+            "/b/"
+        )
+
+        private val ALLOWED_RASTER_DATA_IMAGE_REGEX = Regex(
+            "^data:image/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$",
+            RegexOption.IGNORE_CASE
+        )
+
+        private val ALLOWED_EDIT_ACTION_IDS = setOf(
+            android.R.id.copy,
+            android.R.id.cut,
+            android.R.id.paste,
+            android.R.id.pasteAsPlainText,
+            android.R.id.selectAll
         )
 
         /** Subrecursos: hosts exactos. */
@@ -184,11 +219,13 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        webView = findViewById(R.id.webView)
+        val xmlWebView = findViewById<WebView>(R.id.webView)
         swipeRefresh = findViewById(R.id.swipeRefreshLayout)
         progressBar = findViewById(R.id.progressBar)
         layoutOffline = findViewById(R.id.layoutOffline)
         btnRetry = findViewById(R.id.btnRetry)
+
+        webView = createConfinedWebView(xmlWebView)
 
         setupWebView()
         setupSwipeRefresh()
@@ -212,28 +249,106 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun editActionTitles(): Set<String> {
+        val out = HashSet<String>()
+        for (res in intArrayOf(android.R.string.copy, android.R.string.paste, android.R.string.cut, android.R.string.selectAll)) {
+            try {
+                out.add(getString(res).trim())
+            } catch (_: Exception) {
+            }
+        }
+        return out
+    }
+
+    private fun isAllowedEditItem(item: MenuItem, allowedTitles: Set<String>): Boolean {
+        if (item.intent != null) return false
+        if (item.itemId == android.R.id.textAssist) return false
+        if (item.itemId in ALLOWED_EDIT_ACTION_IDS) return true
+        val title = item.title?.toString()?.trim() ?: return false
+        return title in allowedTitles
+    }
+
+    private fun filterActionMenu(menu: Menu, allowedTitles: Set<String>) {
+        for (i in menu.size() - 1 downTo 0) {
+            if (i >= menu.size()) continue
+            val item = menu.getItem(i)
+            if (!isAllowedEditItem(item, allowedTitles)) {
+                item.isVisible = false
+                item.isEnabled = false
+            }
+        }
+    }
+
+    private fun createConfinedWebView(placeholder: WebView): WebView {
+        val editTitles = editActionTitles()
+        val confined = object : WebView(this) {
+            override fun startActionMode(callback: ActionMode.Callback?): ActionMode? {
+                return wrapActionModeCallback(callback)?.let { super.startActionMode(it) }
+            }
+
+            override fun startActionMode(callback: ActionMode.Callback?, type: Int): ActionMode? {
+                return wrapActionModeCallback(callback)?.let { super.startActionMode(it, type) }
+            }
+
+            private fun wrapActionModeCallback(callback: ActionMode.Callback?): ActionMode.Callback? {
+                if (callback == null) return null
+                return object : ActionMode.Callback2() {
+                    override fun onGetContentRect(mode: ActionMode?, view: View?, outRect: android.graphics.Rect?) {
+                        if (callback is ActionMode.Callback2) {
+                            callback.onGetContentRect(mode, view, outRect)
+                        } else {
+                            super.onGetContentRect(mode, view, outRect)
+                        }
+                    }
+
+                    override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean {
+                        val res = callback.onCreateActionMode(mode, menu)
+                        menu?.let { filterActionMenu(it, editTitles) }
+                        return res
+                    }
+
+                    override fun onPrepareActionMode(mode: ActionMode?, menu: Menu?): Boolean {
+                        val res = callback.onPrepareActionMode(mode, menu)
+                        menu?.let { filterActionMenu(it, editTitles) }
+                        return res
+                    }
+
+                    override fun onActionItemClicked(mode: ActionMode?, item: MenuItem?): Boolean {
+                        if (item == null || !isAllowedEditItem(item, editTitles)) {
+                            return true
+                        }
+                        return callback.onActionItemClicked(mode, item)
+                    }
+
+                    override fun onDestroyActionMode(mode: ActionMode?) {
+                        callback.onDestroyActionMode(mode)
+                    }
+                }
+            }
+        }
+        confined.id = placeholder.id
+        confined.layoutParams = placeholder.layoutParams
+        val parent = placeholder.parent as? ViewGroup
+        if (parent != null) {
+            val idx = parent.indexOfChild(placeholder)
+            parent.removeViewAt(idx)
+            parent.addView(confined, idx, placeholder.layoutParams)
+        }
+        try {
+            placeholder.destroy()
+        } catch (_: Exception) {
+        }
+        return confined
+    }
+
     /**
-     * En un celular kosher, seleccionar texto dentro del WebView abre el menú contextual
-     * del sistema ("Copiar", "Compartir", "Búsqueda web", "Traducir"). "Búsqueda web" o
-     * "Compartir" lanza `ACTION_WEB_SEARCH` / `ACTION_SEND` hacia fuera del WebView.
-     * Conservamos únicamente Copiar / Cortar / Pegar / Seleccionar todo.
+     * Defensa adicional sobre el menú de selección si algún fabricante notifica el
+     * ActionMode por la ventana de la Activity en vez de startActionMode() del WebView.
      */
     override fun onActionModeStarted(mode: android.view.ActionMode?) {
         super.onActionModeStarted(mode)
         val menu = mode?.menu ?: return
-        val allowedIds = setOf(
-            android.R.id.copy,
-            android.R.id.cut,
-            android.R.id.paste,
-            android.R.id.pasteAsPlainText,
-            android.R.id.selectAll
-        )
-        for (i in menu.size() - 1 downTo 0) {
-            val item = menu.getItem(i)
-            if (item.itemId !in allowedIds) {
-                menu.removeItem(item.itemId)
-            }
-        }
+        filterActionMenu(menu, editActionTitles())
     }
 
     override fun onResume() {
@@ -388,6 +503,9 @@ class MainActivity : AppCompatActivity() {
         webView.setBackgroundColor(Color.parseColor("#0B192C"))
         webView.isVerticalScrollBarEnabled = true
         webView.isHorizontalScrollBarEnabled = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            webView.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        }
 
         webView.webChromeClient = PanelChromeClient()
         webView.webViewClient = PanelWebViewClient()
@@ -451,7 +569,7 @@ class MainActivity : AppCompatActivity() {
             filePathCallback: ValueCallback<Array<Uri>>?,
             fileChooserParams: FileChooserParams?
         ): Boolean {
-            if (!isNavigationAllowed(webView?.url)) {
+            if (!isPanelHostUrl(webView?.url)) {
                 filePathCallback?.onReceiveValue(null)
                 return true
             }
@@ -483,8 +601,25 @@ class MainActivity : AppCompatActivity() {
 
         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
             super.onPageStarted(view, url, favicon)
+            if (url != null && !isNavigationAllowed(url)) {
+                Log.w(TAG, "BLOQUEADO (onPageStarted): ${shortUrl(url)}")
+                view?.stopLoading()
+                toast(getString(R.string.blocked_navigation))
+                view?.post { if (!webViewDestroyed) loadPanel() }
+                return
+            }
             hasError = false
             progressBar.visibility = View.VISIBLE
+        }
+
+        override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+            super.doUpdateVisitedHistory(view, url, isReload)
+            if (url != null && !isNavigationAllowed(url)) {
+                Log.w(TAG, "BLOQUEADO (doUpdateVisitedHistory): ${shortUrl(url)}")
+                view?.stopLoading()
+                toast(getString(R.string.blocked_navigation))
+                view?.post { if (!webViewDestroyed) loadPanel() }
+            }
         }
 
         override fun onPageFinished(view: WebView?, url: String?) {
@@ -534,9 +669,15 @@ class MainActivity : AppCompatActivity() {
             view: WebView?,
             request: WebResourceRequest?
         ): WebResourceResponse? {
-            val url = request?.url?.toString() ?: return null
-            if (isResourceAllowed(url)) return null // null = que siga el camino normal
-            Log.w(TAG, "BLOQUEADO (recurso): ${shortUrl(url)}")
+            val req = request ?: return null
+            val url = req.url?.toString() ?: return null
+            val allowed = if (req.isForMainFrame) {
+                isNavigationAllowed(url)
+            } else {
+                isResourceAllowed(url)
+            }
+            if (allowed) return null // null = que siga el camino normal
+            Log.w(TAG, "BLOQUEADO (${if (req.isForMainFrame) "navegación" else "recurso"}): ${shortUrl(url)}")
             return WebResourceResponse(
                 "text/plain",
                 "utf-8",
@@ -608,30 +749,79 @@ class MainActivity : AppCompatActivity() {
     // Lista blanca
     // ─────────────────────────────────────────────────────────────────────────
 
+    private data class ParsedUri(
+        val scheme: String,
+        val host: String,
+        val canonicalPath: String
+    )
+
+    private fun parseStrictUri(url: String?, allowWss: Boolean = false): ParsedUri? {
+        if (url.isNullOrBlank()) return null
+        val trimmed = url.trim()
+        for (ch in trimmed) {
+            if (ch <= ' ' || ch == '\\') return null
+        }
+
+        val doubleSlashIdx = trimmed.indexOf("://")
+        if (doubleSlashIdx > 0) {
+            val authorityStart = doubleSlashIdx + 3
+            val slashIdx = trimmed.indexOf('/', authorityStart)
+            val questionIdx = trimmed.indexOf('?', authorityStart)
+            val hashIdx = trimmed.indexOf('#', authorityStart)
+            val authorityEnd = listOf(slashIdx, questionIdx, hashIdx)
+                .filter { it >= 0 }
+                .minOrNull() ?: trimmed.length
+            if (trimmed.substring(authorityStart, authorityEnd).contains('@')) {
+                return null
+            }
+        }
+
+        val uri = try {
+            URI(trimmed)
+        } catch (_: Exception) {
+            return null
+        }
+
+        val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return null
+        val schemeValid = scheme == "https" || (allowWss && scheme == "wss")
+        if (!schemeValid) return null
+
+        if (uri.rawUserInfo != null || uri.userInfo != null) return null
+        if (uri.port != -1 && uri.port != 443) return null
+
+        val host = uri.host?.lowercase(Locale.ROOT) ?: return null
+        val rawPath = (uri.rawPath ?: "").ifEmpty { "/" }
+        val lowerRawPath = rawPath.lowercase(Locale.ROOT)
+        if (lowerRawPath.contains("%2e") || lowerRawPath.contains("%2f") || lowerRawPath.contains("%5c")) {
+            return null
+        }
+        if (rawPath.split('/').any { it == "." || it == ".." }) {
+            return null
+        }
+
+        val canonicalPath = ((uri.normalize().rawPath ?: "").ifEmpty { "/" })
+        if (!canonicalPath.startsWith("/")) return null
+        return ParsedUri(scheme, host, canonicalPath)
+    }
+
+    private fun isPanelHostUrl(url: String?): Boolean {
+        val parsed = parseStrictUri(url) ?: return false
+        return parsed.scheme == "https" && parsed.host in PANEL_ALLOWED_HOSTS
+    }
+
     /** ¿Puede el WebView NAVEGAR a esta URL? */
     private fun isNavigationAllowed(url: String?): Boolean {
-        if (url == null) return false
-        val uri = try { Uri.parse(url) } catch (e: Exception) { return false }
-        val scheme = uri.scheme?.lowercase()
+        val trimmed = url?.trim() ?: return false
+        // Permitir ÚNICAMENTE exacto about:blank (rechaza about:srcdoc, etc.)
+        if (trimmed == "about:blank") return true
 
-        // about:blank lo usa el propio WebView al arrancar y al limpiar.
-        if (scheme == "about") return true
-
-        // Cualquier esquema que no sea https queda afuera. Eso incluye, a propósito:
-        //   http     → sin cifrar
-        //   intent:  → salta a OTRA app (el vector clásico para abrir Chrome)
-        //   market:  → Play Store
-        //   tel:/sms:/mailto: → el panel no los necesita
-        //   file:/content:/blob:/data:/javascript: → carga local o inyección
-        if (scheme != "https") return false
-
-        val host = uri.host?.lowercase() ?: return false
-        if (host !in NAV_ALLOWED_HOSTS) return false
-        if (host == "accounts.google.com") {
-            val path = uri.path?.lowercase() ?: ""
+        val parsed = parseStrictUri(trimmed, allowWss = false) ?: return false
+        if (parsed.host !in NAV_ALLOWED_HOSTS) return false
+        if (parsed.host == "accounts.google.com") {
+            val path = parsed.canonicalPath.lowercase(Locale.ROOT)
             // En accounts.google.com permitimos el flujo OAuth/SignIn pero bloqueamos creación
-            // de cuentas, recuperación y gestión de cuenta general.
-            if (path.startsWith("/signup") || path.startsWith("/manageaccount") || path.startsWith("/signin/recovery") || path.startsWith("/recover")) {
+            // de cuentas, recuperación, cambio/selector /b/ y gestión de cuenta general.
+            if (BLOCKED_ACCOUNTS_PATH_PREFIXES.any { path.startsWith(it) }) {
                 return false
             }
         }
@@ -640,15 +830,23 @@ class MainActivity : AppCompatActivity() {
 
     /** ¿Puede la página bajar este subrecurso? */
     private fun isResourceAllowed(url: String?): Boolean {
-        if (url == null) return false
-        val uri = try { Uri.parse(url) } catch (e: Exception) { return false }
-        when (uri.scheme?.lowercase()) {
-            "https", "wss" -> Unit
-            // Los genera la propia página en memoria, no salen a la red.
-            "data", "blob", "about" -> return true
-            else -> return false
+        val trimmed = url?.trim() ?: return false
+        if (trimmed == "about:blank") return true
+
+        if (trimmed.startsWith("data:", ignoreCase = true)) {
+            return ALLOWED_RASTER_DATA_IMAGE_REGEX.matches(trimmed)
         }
-        val host = uri.host?.lowercase() ?: return false
+        if (trimmed.startsWith("blob:", ignoreCase = true)) {
+            val inner = trimmed.substring(5)
+            val parsedInner = parseStrictUri(inner, allowWss = false) ?: return false
+            val host = parsedInner.host
+            return host in NAV_ALLOWED_HOSTS ||
+                host in RESOURCE_ALLOWED_HOSTS ||
+                RESOURCE_ALLOWED_SUFFIXES.any { host.endsWith(it) }
+        }
+
+        val parsed = parseStrictUri(trimmed, allowWss = true) ?: return false
+        val host = parsed.host
         if (host in NAV_ALLOWED_HOSTS || host in RESOURCE_ALLOWED_HOSTS) return true
         return RESOURCE_ALLOWED_SUFFIXES.any { host.endsWith(it) }
     }

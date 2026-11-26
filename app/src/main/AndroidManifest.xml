@@ -59,6 +59,8 @@
     <application
         android:name=".LockSuiteApplication"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
         android:icon="@drawable/ic_logo"
         android:label="LockSuite MDM"
         android:roundIcon="@drawable/ic_logo"
@@ -339,7 +341,7 @@
         <!-- APP UPDATE ACTIVITY (Menú exclusivo de actualización de aplicaciones) -->
         <activity
             android:name=".ui.update.AppUpdateActivity"
-            android:exported="true"
+            android:exported="false"
             android:theme="@style/Theme.LockSuite" />
 
         <!-- APP UPDATE WIDGET PROVIDER (Acceso directo a Actualizaciones de Apps) -->
@@ -442,6 +444,17 @@
                 <data android:scheme="https" android:host="accounts.google.com" android:pathPrefix="/v3/signin/recovery/challenge" />
             </intent-filter>
         </activity>
+
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
     </application>
 

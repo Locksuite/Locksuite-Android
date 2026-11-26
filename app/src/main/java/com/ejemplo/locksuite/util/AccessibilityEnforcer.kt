@@ -105,7 +105,9 @@ object AccessibilityEnforcer {
         VIOLATED
     }
 
-    // ── Antirrebote ──
+    // ── Sincronización y antirrebote ──
+    private val stateLock = Any()
+    private val reconcileLock = Any()
     @Volatile private var rawReading: Boolean? = null
     @Volatile private var rawSince = 0L
     @Volatile private var confirmedReading: Boolean? = null
@@ -219,22 +221,23 @@ object AccessibilityEnforcer {
      * de lo que hacía la versión anterior.
      */
     private fun stableReading(context: Context): Boolean? {
-        val now = SystemClock.elapsedRealtime()
         val raw = isServiceRunning(context)
-
-        if (rawReading != raw) {
-            rawReading = raw
-            rawSince = now
-            // Cambió recién: todavía no se le cree.
+        synchronized(stateLock) {
+            val now = SystemClock.elapsedRealtime()
+            if (rawReading != raw) {
+                rawReading = raw
+                rawSince = now
+                // Cambió recién: todavía no se le cree.
+                return confirmedReading
+            }
+            if (now - rawSince >= CONFIRM_MS) {
+                if (confirmedReading != raw) {
+                    android.util.Log.i(TAG, "Estado de accesibilidad confirmado: ${if (raw) "ACTIVA" else "APAGADA"}")
+                }
+                confirmedReading = raw
+            }
             return confirmedReading
         }
-        if (now - rawSince >= CONFIRM_MS) {
-            if (confirmedReading != raw) {
-                android.util.Log.i(TAG, "Estado de accesibilidad confirmado: ${if (raw) "ACTIVA" else "APAGADA"}")
-            }
-            confirmedReading = raw
-        }
-        return confirmedReading
     }
 
     /**
@@ -248,13 +251,17 @@ object AccessibilityEnforcer {
                 !policy.isAccessibilityProtectionEnabled() ||
                 !com.ejemplo.locksuite.security.PinManager.isPinConfigured(context)
             ) {
-                lastVerdict = Verdict.NOT_APPLICABLE
+                synchronized(stateLock) {
+                    lastVerdict = Verdict.NOT_APPLICABLE
+                }
                 return Verdict.NOT_APPLICABLE
             }
 
             val stable = stableReading(context) ?: return null
             val verdict = if (stable) Verdict.OK else Verdict.VIOLATED
-            lastVerdict = verdict
+            synchronized(stateLock) {
+                lastVerdict = verdict
+            }
             return verdict
         } catch (e: Exception) {
             android.util.Log.w(TAG, "evaluate: ${e.message}")
@@ -270,30 +277,32 @@ object AccessibilityEnforcer {
      * habíamos hecho.
      */
     fun reconcileApps(context: Context, verdict: Verdict) {
-        try {
-            val prefs = PrefsHelper.getMdmPrefs(context)
-            val quiereSuspender = shouldSuspendApps(context, verdict)
-            if (quiereSuspender && AccessibilityZombieHealer.reEnableIfPermitted(context)) {
-                return
-            }
-            val estabaPuesta = prefs.getBoolean(KEY_EMERGENCY_ACTIVE, false)
+        synchronized(reconcileLock) {
+            try {
+                val prefs = PrefsHelper.getMdmPrefs(context)
+                val quiereSuspender = shouldSuspendApps(context, verdict)
+                if (quiereSuspender && AccessibilityZombieHealer.reEnableIfPermitted(context)) {
+                    return
+                }
+                val estabaPuesta = prefs.getBoolean(KEY_EMERGENCY_ACTIVE, false)
 
-            // Si no corresponde suspender Y nunca lo hicimos, no hay nada que revisar:
-            // este es el camino del 99,9 % del tiempo y no toca el sistema para nada.
-            if (!quiereSuspender && !estabaPuesta) return
+                // Si no corresponde suspender Y nunca lo hicimos, no hay nada que revisar:
+                // este es el camino del 99,9 % del tiempo y no toca el sistema para nada.
+                if (!quiereSuspender && !estabaPuesta) return
 
-            val cambios = AppController(context).reconcileEmergencySuspend(quiereSuspender)
-            if (estabaPuesta != quiereSuspender) {
-                prefs.edit().putBoolean(KEY_EMERGENCY_ACTIVE, quiereSuspender).apply()
+                val cambios = AppController(context).reconcileEmergencySuspend(quiereSuspender)
+                if (cambios >= 0 && estabaPuesta != quiereSuspender) {
+                    prefs.edit().putBoolean(KEY_EMERGENCY_ACTIVE, quiereSuspender).apply()
+                }
+                if (cambios > 0) {
+                    android.util.Log.w(
+                        TAG,
+                        "Reconciliación de apps: ${if (quiereSuspender) "suspendidas" else "liberadas"} $cambios app(s)"
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "reconcileApps: ${e.message}")
             }
-            if (cambios > 0) {
-                android.util.Log.w(
-                    TAG,
-                    "Reconciliación de apps: ${if (quiereSuspender) "suspendidas" else "liberadas"} $cambios app(s)"
-                )
-            }
-        } catch (e: Exception) {
-            android.util.Log.w(TAG, "reconcileApps: ${e.message}")
         }
     }
 
@@ -353,18 +362,22 @@ object AccessibilityEnforcer {
         // El antirrebote solo se "pisa" cuando la lectura dice algo del servicio. Con
         // NOT_APPLICABLE no hay lectura que guardar: la protección está desactivada, no
         // es que la accesibilidad esté caída.
-        if (verdict != Verdict.NOT_APPLICABLE) {
-            confirmedReading = verdict == Verdict.OK
-            rawReading = confirmedReading
-            rawSince = SystemClock.elapsedRealtime()
+        synchronized(stateLock) {
+            if (verdict != Verdict.NOT_APPLICABLE) {
+                confirmedReading = verdict == Verdict.OK
+                rawReading = confirmedReading
+                rawSince = SystemClock.elapsedRealtime()
+            }
+            lastVerdict = verdict
         }
-        lastVerdict = verdict
         reconcileApps(context, verdict)
     }
 
     /** Reinicia el antirrebote. Útil cuando algo avisa de un cambio con certeza. */
     fun resetDebounce() {
-        rawReading = null
-        rawSince = 0L
+        synchronized(stateLock) {
+            rawReading = null
+            rawSince = 0L
+        }
     }
 }

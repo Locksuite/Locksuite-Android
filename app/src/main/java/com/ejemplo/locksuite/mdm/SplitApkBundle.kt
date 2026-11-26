@@ -24,6 +24,7 @@ object SplitApkBundle {
     const val MAX_SPLIT_ENTRIES = 128
     const val MAX_MANIFEST_BYTES = 4 * 1024 * 1024
     const val MAX_TOTAL_UNCOMPRESSED_BYTES = 1024L * 1024L * 1024L
+    const val MAX_INNER_ZIP_ENTRIES = 16384
     private const val MAX_OUTER_ZIP_ENTRIES = 4096
 
     data class SplitEntryInfo(
@@ -161,12 +162,14 @@ object SplitApkBundle {
                 }
 
                 val inspected = ArrayList<SplitEntryInfo>(apkEntries.size)
+                val outerBudget = DecompressionBudget(MAX_TOTAL_UNCOMPRESSED_BYTES)
+                val innerBudget = DecompressionBudget(MAX_TOTAL_UNCOMPRESSED_BYTES)
                 for (apkEntry in apkEntries) {
-                    val parsed = inspectInnerApkStream(outerZip, apkEntry)
+                    val parsed = inspectInnerApkStream(outerZip, apkEntry, outerBudget, innerBudget)
                     val resolved = if (parsed.manifest != null || fallbackTempDir == null) {
                         parsed
                     } else {
-                        inspectInnerApkFallback(outerZip, apkEntry, fallbackTempDir) ?: parsed
+                        inspectInnerApkFallback(outerZip, apkEntry, fallbackTempDir, outerBudget) ?: parsed
                     }
                     inspected.add(
                         SplitEntryInfo(
@@ -180,8 +183,44 @@ object SplitApkBundle {
 
                 InspectResult.SplitBundle(entries = inspected, hasObb = hasObb)
             }
+        } catch (e: BudgetExceededException) {
+            InspectResult.Error(e.message ?: "El paquete supera los límites permitidos de descompresión.")
         } catch (e: Exception) {
             InspectResult.Error("No se pudo leer el paquete ZIP (${e.message ?: e.javaClass.simpleName}).")
+        }
+    }
+
+    private class BudgetExceededException(message: String) : java.io.IOException(message)
+
+    private class DecompressionBudget(val maxBytes: Long = MAX_TOTAL_UNCOMPRESSED_BYTES) {
+        var totalBytes: Long = 0L
+            private set
+
+        fun consume(bytes: Int) {
+            if (bytes <= 0) return
+            totalBytes += bytes.toLong()
+            if (totalBytes > maxBytes) {
+                throw BudgetExceededException(
+                    "El paquete supera el límite acumulado de bytes descomprimidos ($maxBytes bytes)."
+                )
+            }
+        }
+    }
+
+    private class BudgetedInputStream(
+        delegate: java.io.InputStream,
+        private val budget: DecompressionBudget
+    ) : java.io.FilterInputStream(delegate) {
+        override fun read(): Int {
+            val b = super.read()
+            if (b >= 0) budget.consume(1)
+            return b
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            val n = super.read(b, off, len)
+            if (n > 0) budget.consume(n)
+            return n
         }
     }
 
@@ -190,27 +229,54 @@ object SplitApkBundle {
         val abis: Set<String>
     )
 
-    private fun inspectInnerApkStream(outerZip: ZipFile, apkEntry: ZipEntry): InnerInspection {
+    private fun drainBounded(input: java.io.InputStream, scratch: ByteArray) {
+        while (input.read(scratch) > 0) {
+            // BudgetedInputStream contabiliza cada bloque leído y lanza BudgetExceededException si supera el tope.
+        }
+    }
+
+    private fun inspectInnerApkStream(
+        outerZip: ZipFile,
+        apkEntry: ZipEntry,
+        outerBudget: DecompressionBudget,
+        innerBudget: DecompressionBudget
+    ): InnerInspection {
         var manifest: BinaryManifestParser.ManifestInfo? = null
         val libNames = ArrayList<String>()
+        val scratch = ByteArray(8192)
         try {
-            ZipInputStream(BufferedInputStream(outerZip.getInputStream(apkEntry), 16384)).use { zis ->
-                while (true) {
-                    val inner = zis.nextEntry ?: break
-                    if (!inner.isDirectory) {
-                        val innerName = inner.name
-                        if (innerName == "AndroidManifest.xml" && manifest == null) {
-                            val bytes = readStreamBounded(zis, MAX_MANIFEST_BYTES)
-                            if (bytes != null) {
-                                manifest = BinaryManifestParser.parse(bytes)
-                            }
-                        } else if (innerName.startsWith("lib/") && innerName.endsWith(".so")) {
-                            libNames.add(innerName)
+            BudgetedInputStream(outerZip.getInputStream(apkEntry), outerBudget).use { boundedOuter ->
+                ZipInputStream(BufferedInputStream(boundedOuter, 16384)).use { zis ->
+                    var innerEntryCount = 0
+                    while (true) {
+                        val inner = zis.nextEntry ?: break
+                        innerEntryCount++
+                        if (innerEntryCount > MAX_INNER_ZIP_ENTRIES) {
+                            throw BudgetExceededException(
+                                "El APK interno ${apkEntry.name} supera el límite de $MAX_INNER_ZIP_ENTRIES entradas."
+                            )
                         }
+                        val countedInner = BudgetedInputStream(zis, innerBudget)
+                        if (!inner.isDirectory) {
+                            val innerName = inner.name
+                            if (innerName == "AndroidManifest.xml" && manifest == null) {
+                                val bytes = readStreamBounded(countedInner, MAX_MANIFEST_BYTES)
+                                if (bytes != null) {
+                                    manifest = BinaryManifestParser.parse(bytes)
+                                }
+                            } else {
+                                if (innerName.startsWith("lib/") && innerName.endsWith(".so")) {
+                                    libNames.add(innerName)
+                                }
+                                drainBounded(countedInner, scratch)
+                            }
+                        }
+                        zis.closeEntry()
                     }
-                    zis.closeEntry()
                 }
             }
+        } catch (e: BudgetExceededException) {
+            throw e
         } catch (_: Exception) {
             // Fallback por archivo temporal si el stream comprimido interno usa descriptores especiales
         }
@@ -220,7 +286,8 @@ object SplitApkBundle {
     private fun inspectInnerApkFallback(
         outerZip: ZipFile,
         apkEntry: ZipEntry,
-        tempDir: File
+        tempDir: File,
+        outerBudget: DecompressionBudget
     ): InnerInspection? {
         if (!tempDir.exists()) tempDir.mkdirs()
         val tmp = try {
@@ -229,17 +296,12 @@ object SplitApkBundle {
             return null
         }
         return try {
-            outerZip.getInputStream(apkEntry).use { input ->
+            BudgetedInputStream(outerZip.getInputStream(apkEntry), outerBudget).use { input ->
                 FileOutputStream(tmp).use { output ->
                     val buf = ByteArray(16384)
-                    var total = 0L
                     while (true) {
                         val n = input.read(buf)
                         if (n <= 0) break
-                        total += n
-                        if (total > MAX_TOTAL_UNCOMPRESSED_BYTES) {
-                            return null
-                        }
                         output.write(buf, 0, n)
                     }
                 }
@@ -251,8 +313,15 @@ object SplitApkBundle {
                 } ?: return null
                 val manifest = BinaryManifestParser.parse(manifestBytes)
                 val libNames = ArrayList<String>()
+                var innerEntryCount = 0
                 val entries = innerZip.entries()
                 while (entries.hasMoreElements()) {
+                    innerEntryCount++
+                    if (innerEntryCount > MAX_INNER_ZIP_ENTRIES) {
+                        throw BudgetExceededException(
+                            "El APK interno ${apkEntry.name} supera el límite de $MAX_INNER_ZIP_ENTRIES entradas."
+                        )
+                    }
                     val e = entries.nextElement()
                     if (!e.isDirectory && e.name.startsWith("lib/") && e.name.endsWith(".so")) {
                         libNames.add(e.name)
@@ -260,6 +329,8 @@ object SplitApkBundle {
                 }
                 InnerInspection(manifest, UpdateRoutePlanner.abisFromZipEntries(libNames))
             }
+        } catch (e: BudgetExceededException) {
+            throw e
         } catch (_: Exception) {
             null
         } finally {

@@ -168,14 +168,18 @@
    * dieran distinto, el panel mostraría una cosa y el equipo aplicaría otra —
    * que es la familia de bugs que este proyecto arrastra desde B.28.
    * ═══════════════════════════════════════════════════════════════════════ */
+  function normalizarEstadoApp(raw) {
+    return raw === "allow" || raw === "block" ? raw : "unset";
+  }
+
   function estadoDe(pkg) {
     const k = LS.pkgKey(pkg);
     if (Object.prototype.hasOwnProperty.call(S.pendApps, pkg)) {
       const p = S.pendApps[pkg];
-      return p === null ? (S.globalDecisions[k] || "unset") : p;
+      return normalizarEstadoApp(p === null ? S.globalDecisions[k] : p);
     }
-    if (S.appPolicy[k]) return S.appPolicy[k];
-    return S.globalDecisions[k] || "unset";
+    if (S.appPolicy[k]) return normalizarEstadoApp(S.appPolicy[k]);
+    return normalizarEstadoApp(S.globalDecisions[k]);
   }
 
   /** ¿Este equipo tiene decisión propia (o pendiente) para esa app? */
@@ -522,7 +526,7 @@
         : '<p class="ls-empty" style="padding:4px 0">—</p>';
 
       return '' +
-        '<div class="ls-approw st-' + st + (pend ? " pending" : "") + '" data-pkg="' + esc(a.pkg) + '">' +
+        '<div class="ls-approw st-' + esc(st) + (pend ? " pending" : "") + '" data-pkg="' + esc(a.pkg) + '">' +
           '<div class="ls-apphead">' +
             '<div class="ls-appgrow">' +
               '<div class="ls-appname">' + esc(a.label) + "</div>" +
@@ -2795,6 +2799,8 @@
       S.ui.cerrado = true;
       await LS.db.ref("devices/" + deviceId).remove();
       await LS.db.ref("deviceSecrets/" + deviceId).remove().catch(() => {});
+      await LS.db.ref("deviceDiag/" + deviceId).remove().catch(() => {});
+      await LS.db.ref("deviceClaims/" + deviceId).remove().catch(() => {});
       cerrarFicha("🗑️ «" + n + "» quedó eliminado.");
     } catch (err) {
       S.ui.cerrado = false;

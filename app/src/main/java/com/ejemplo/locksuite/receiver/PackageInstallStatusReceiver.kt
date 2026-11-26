@@ -15,6 +15,7 @@ class PackageInstallStatusReceiver : BroadcastReceiver() {
          * (26/10/2026, B.97). `EXTRA_PACKAGE_NAME` no viene siempre en las fallas.
          */
         const val EXTRA_LS_PACKAGE = "com.ejemplo.locksuite.extra.INSTALL_PACKAGE"
+        const val EXTRA_SILENT = "com.ejemplo.locksuite.extra.INSTALL_SILENT"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -24,6 +25,7 @@ class PackageInstallStatusReceiver : BroadcastReceiver() {
             val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
             val packageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
                 ?: intent.getStringExtra(EXTRA_LS_PACKAGE)
+            val silent = intent.getBooleanExtra(EXTRA_SILENT, false)
 
             // Restaurar restricciones de instalación del MDM tras completar o fallar el proceso
             // (solo si no hay un flujo de Play Store en curso, para no cortarle permisos a mitad)
@@ -69,10 +71,14 @@ class PackageInstallStatusReceiver : BroadcastReceiver() {
 
             if (status == PackageInstaller.STATUS_SUCCESS) {
                 Log.i("PackageInstallStatus", "Instalación exitosa de $packageName")
-                Toast.makeText(context, "Instalación completada con éxito", Toast.LENGTH_LONG).show()
+                if (!silent) {
+                    Toast.makeText(context, "Instalación completada con éxito", Toast.LENGTH_LONG).show()
+                }
             } else {
                 Log.e("PackageInstallStatus", "Error al instalar $packageName: $message (status=$status)")
-                Toast.makeText(context, "Fallo al instalar: ${message ?: "Restricciones de usuario o paquete inválido"}", Toast.LENGTH_LONG).show()
+                if (!silent) {
+                    Toast.makeText(context, "Fallo al instalar: ${message ?: "Restricciones de usuario o paquete inválido"}", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }

@@ -174,13 +174,18 @@ class GoogleVerificationPolicyTest {
         assertTrue(GoogleVerificationPolicy.isResourceAllowed("https://fonts.gstatic.com/s/googlesans/v14/google-sans.woff2"))
         assertTrue(GoogleVerificationPolicy.isResourceAllowed("https://apis.google.com/js/api.js"))
         assertTrue(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/devicephoneverification/data"))
-        assertTrue(GoogleVerificationPolicy.isResourceAllowed("data:image/svg+xml;base64,PHN2Z..."))
+        assertTrue(GoogleVerificationPolicy.isResourceAllowed("data:image/png;base64,iVBORw0KGgo="))
+        assertTrue(GoogleVerificationPolicy.isResourceAllowed("data:image/jpeg;base64,/9j/4AAQSkZJRg=="))
+        assertTrue(GoogleVerificationPolicy.isResourceAllowed("data:image/webp;base64,UklGRh4AAABXRUJQ"))
+        assertTrue(GoogleVerificationPolicy.isResourceAllowed("data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"))
     }
 
     @Test
     fun `bloquea subrecursos no kosher, wss o publicitarios (P2-01)`() {
         assertFalse(GoogleVerificationPolicy.isResourceAllowed("wss://accounts.google.com/ws"))
         assertFalse(GoogleVerificationPolicy.isResourceAllowed("data:text/html,<h1>Test</h1>"))
+        assertFalse(GoogleVerificationPolicy.isResourceAllowed("data:image/svg+xml;base64,PHN2Z3htbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PC9zdmc+"))
+        assertFalse(GoogleVerificationPolicy.isResourceAllowed("data:image/svg+xml;utf8,<svg/>"))
         assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"))
         assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://www.youtube.com/embed/dQw4w9WgXcQ"))
         assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://googleads.g.doubleclick.net/pagead/ads"))

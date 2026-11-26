@@ -46,7 +46,9 @@ object AccessibilityBouncePolicy {
         val hasSwitch: Boolean,
         val hasAccessibilityViewHints: Boolean,
         val hasExcludedSettingsHints: Boolean,
-        val isDialog: Boolean
+        val isDialog: Boolean,
+        val hasDialogStructure: Boolean = false,
+        val hasInlineOwnSwitchRow: Boolean = false
     )
 
     val EXCLUDED_CLASS_MARKERS: List<String> = listOf(
@@ -113,40 +115,106 @@ object AccessibilityBouncePolicy {
         "toolbar",
         "collapsing_toolbar",
         "header_title",
-        "alertTitle"
+        "alerttitle"
     )
+
+    val DIALOG_VIEW_ID_HINTS: List<String> = listOf(
+        "button1",
+        "alerttitle",
+        "parentpanel"
+    )
+
+    private val TRANSIENT_CONTEXT_PACKAGES: Set<String> = setOf(
+        "com.android.systemui",
+        "com.android.settings.intelligence",
+        "com.google.android.settings.intelligence"
+    )
+
+    private val IME_EXACT_SEGMENTS: Set<String> = setOf(
+        "ime",
+        "inputmethod",
+        "honeyboard",
+        "gboard",
+        "swiftkey",
+        "keyboard",
+        "latinime",
+        "samsungime",
+        "miuiime",
+        "xiaomiime",
+        "pinyinime",
+        "koreanime",
+        "japaneseime",
+        "openwnn"
+    )
+
+    /**
+     * ¿El nombre de paquete corresponde a un teclado virtual (IME) por segmento?
+     * Evita falsos positivos por substring como `"ime"` dentro de `"time"`, `"prime"`, `"anime"` o `"chime"`.
+     */
+    fun isImePackageBySegment(pkg: String?): Boolean {
+        if (pkg.isNullOrBlank()) return false
+        val lower = pkg.lowercase()
+        if (lower.contains("inputmethod")) return true
+        val segments = lower.split('.', '_', '-')
+        return segments.any { seg ->
+            seg in IME_EXACT_SEGMENTS || seg.endsWith("keyboard")
+        }
+    }
+
+    /**
+     * Ventanas transitorias que aparecen sobre Ajustes sin sacar al usuario de Accesibilidad
+     * (barra de notificaciones, teclado virtual, buscador de Ajustes).
+     */
+    fun isTransientWindowPackage(pkg: String?): Boolean {
+        if (pkg.isNullOrBlank()) return false
+        val lower = pkg.lowercase()
+        if (lower in TRANSIENT_CONTEXT_PACKAGES) return true
+        if (lower.endsWith(".settings.intelligence")) return true
+        return isImePackageBySegment(lower)
+    }
 
     fun classify(s: ScreenSnapshot): Action {
         val isToggleDetailClass = isAccessibilityServiceDetailClass(s.className)
+        val isAnyDialog = s.isDialog || s.hasDialogStructure
 
-        // 1. Exclusión estricta: Info de la app / Notificaciones / Permisos / Inicio de Ajustes.
-        if (!s.hasOwnDescription && (s.hasExcludedSettingsHints || isExplicitlyNonAccessibilityClass(s.className))) {
-            return Action.LEAVE_ACCESSIBILITY_CONTEXT
-        }
-
-        // 2. Señal primaria: nuestra descripción de accesibilidad (única de nuestra pantalla en Accesibilidad).
-        if (s.hasOwnDescription && !s.hasExcludedSettingsHints) {
+        // 1. Señal primaria inequívoca: nuestra descripción de accesibilidad tiene prioridad sobre
+        //    hasExcludedSettingsHints (evita falsas exenciones si el fabricante mezcla textos/IDs).
+        if (s.hasOwnDescription) {
             return Action.BOUNCE
         }
 
-        // 3. Menú principal de Accesibilidad (no rebotar, habilitar contexto para subpantallas).
+        // 2. Exclusión estricta: Info de la app / Notificaciones / Permisos / Inicio de Ajustes.
+        if (s.hasExcludedSettingsHints || isExplicitlyNonAccessibilityClass(s.className)) {
+            return Action.LEAVE_ACCESSIBILITY_CONTEXT
+        }
+
+        // 3. Fila inline "LockSuite + Switch" en la lista de Apps instaladas / Accesibilidad:
+        //    impide apagar LockSuite directo desde la lista sin entrar al detalle.
+        val inOrEnteringAcc = s.inAccessibilityContext || s.hasAccessibilityViewHints ||
+            isToggleDetailClass || isMainAccessibilityMenu(s)
+        if (s.hasInlineOwnSwitchRow && inOrEnteringAcc) {
+            return Action.BOUNCE
+        }
+
+        // 4. Menú principal de Accesibilidad (no rebotar, habilitar contexto para subpantallas).
         if (!isToggleDetailClass && !s.hasOwnLabelInHeader && isMainAccessibilityMenu(s)) {
             return Action.ENTER_ACCESSIBILITY_CONTEXT
         }
 
-        // 4. Pantalla de detalle de LockSuite en Accesibilidad (cubre pantallas chicas donde la descripción
+        // 5. Pantalla de detalle de LockSuite en Accesibilidad (cubre pantallas chicas donde la descripción
         //    puede quedar scrolleada debajo del pliegue del primer render).
         val strongAccSignal = s.inAccessibilityContext || s.hasAccessibilityViewHints || isToggleDetailClass
-        if (!s.hasExcludedSettingsHints && s.hasOwnLabelInHeader && s.hasSwitch && strongAccSignal) {
+        if (s.hasOwnLabelInHeader && s.hasSwitch && strongAccSignal) {
             return Action.BOUNCE
         }
 
-        // 5. Diálogo de confirmación "¿Detener LockSuite?" al intentar apagarlo en Accesibilidad.
-        if (s.inAccessibilityContext && s.isDialog && s.hasOwnLabelInBody && !s.hasExcludedSettingsHints) {
+        // 6. Diálogo de confirmación "¿Detener LockSuite?" al intentar apagarlo en Accesibilidad
+        //    (detectado tanto por nombre de clase como por estructura button1/alertTitle/parentPanel).
+        if (s.inAccessibilityContext && isAnyDialog && s.hasOwnLabelInBody) {
             return Action.BOUNCE
         }
 
-        // 6. Cualquier otra subpantalla (Apps instaladas, TalkBack, Lupa, Subtítulos, etc.).
+        // 7. Cualquier otra subpantalla (Apps instaladas, TalkBack, Lupa, Subtítulos, etc.).
         return Action.IGNORE
     }
 

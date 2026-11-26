@@ -151,6 +151,24 @@ object GeminiMessagesPolicy {
         return t == "gemini" || t == "géminis" || t == "geminis" || t == "ג'מיני" || t == "ג׳מיני"
     }
 
+    /**
+     * ¿Un texto visible en la TopBar es un título candidato de conversación (de Gemini o de
+     * cualquier persona/grupo)? Capturar cualquier título no vacío de la TopBar impide que un
+     * chat real sin `viewId` de título quede con `conversationTitle = null` y dispare falsos
+     * positivos si aparece algún texto similar en pantalla.
+     */
+    fun esTituloTopBarCandidato(raw: String?): Boolean {
+        val trimmed = raw?.trim() ?: return false
+        if (trimmed.isEmpty() || trimmed.length > 60) return false
+        val lower = trimmed.lowercase()
+        if (esBarraBusquedaBandeja(lower)) return false
+        if (esMarcadorAjustes(lower)) return false
+        if (esFabIniciarChat(lower)) return false
+        // Ignorar horas/contadores puramente numéricos o símbolos de barra de estado
+        if (trimmed.all { it.isDigit() || it == ':' || it == ' ' || it == '+' || it == '%' }) return false
+        return true
+    }
+
     fun esHintGemini(raw: String?): Boolean {
         val h = raw?.lowercase() ?: return false
         return h.contains("gemini") || h.contains("géminis") || h.contains("ג'מיני") || h.contains("ג׳מיני")

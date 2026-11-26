@@ -193,16 +193,62 @@ object WhitelistCatalog {
         "tenor.com",
         "giphy.com",
         "gboard-stickers.googleapis.com",
-        // YouTube por la puerta de atrás de la API.
+        // YouTube por la puerta de atrás de la API / embebidos / miniaturas.
         "youtubei.googleapis.com",
         "youtube.googleapis.com",
+        "youtubeembeddedplayer.googleapis.com",
+        "youtubeanalytics.googleapis.com",
+        "youtubereporting.googleapis.com",
+        "yt3.ggpht.com",
         // Discovery / feed de contenido de Google (el "Descubre" del launcher).
         "discover.google.com",
         // Tracking y deep linking de viajes (Singular / rides) bloqueado por defecto en toda la flota
         "rides.sng.link",
         // Tiendas/redes externas bloqueadas por defecto para toda la flota en cualquier app
         "apps.apple.com",
-        "x.com"
+        "x.com",
+        // Caché web, traductores-proxy y proxies web de evasión
+        "webcache.googleusercontent.com",
+        "translate.googleusercontent.com",
+        "translate.goog",
+        "croxyproxy.com",
+        "proxysite.com",
+        "torproject.org",
+        // Dominios bootstrap de DNS sobre HTTPS/TLS (DoH/DoT) y Private Relay —
+        // impiden que apps/WebViews resuelvan DNS cifrado saltándose el filtro.
+        "dns.google",
+        "dns.google.com",
+        "dns64.dns.google",
+        "cloudflare-dns.com",
+        "mozilla.cloudflare-dns.com",
+        "chrome.cloudflare-dns.com",
+        "family.cloudflare-dns.com",
+        "security.cloudflare-dns.com",
+        "odoh.cloudflare-dns.com",
+        "dns.cloudflare.com",
+        "one.one.one.one",
+        "1dot1dot1dot1.cloudflare-dns.com",
+        "dns.quad9.net",
+        "dns9.quad9.net",
+        "dns10.quad9.net",
+        "dns11.quad9.net",
+        "doh.opendns.com",
+        "doh.familyshield.opendns.com",
+        "dns.adguard.com",
+        "dns.adguard-dns.com",
+        "dns-unfiltered.adguard.com",
+        "dns.nextdns.io",
+        "doh.cleanbrowsing.org",
+        "dns.mullvad.net",
+        "doh.dns.sb",
+        "dns.alidns.com",
+        "doh.pub",
+        "freedns.controld.com",
+        "wikimedia-dns.org",
+        "doh.dns.apple.com",
+        "use-application-dns.net",
+        "mask.icloud.com",
+        "mask-h2.icloud.com"
     )
 
     /**
@@ -251,9 +297,10 @@ object WhitelistCatalog {
             ),
             block = listOf(
                 "game.diditaxi.com.cn", "minigame.didiglobal.com", "play.didiglobal.com",
+                "game.xiaojukeji.com",
                 "drama.didiglobal.com", "webcast.didiglobal.com", "live.didiglobal.com"
             ),
-            note = "DiDi mete juegos, streaming y video dentro de la app: por eso los 6 bloqueos."
+            note = "DiDi mete juegos, streaming y video dentro de la app: por eso los 7 bloqueos."
         ),
 
         Entry(

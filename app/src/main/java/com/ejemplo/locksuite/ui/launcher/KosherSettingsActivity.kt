@@ -30,6 +30,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.content.ComponentName
 import android.content.pm.PackageManager
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.ejemplo.locksuite.ui.auth.LoginActivity
 
 
@@ -79,6 +82,46 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
 
     var canWriteSystemSettings by remember {
         mutableStateOf(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.System.canWrite(context) else true)
+    }
+
+    val userManager = remember { context.getSystemService(Context.USER_SERVICE) as? android.os.UserManager }
+    val policyManager = remember { com.ejemplo.locksuite.mdm.PolicyManager(context) }
+
+    var volumeBlocked by remember {
+        mutableStateOf(userManager?.hasUserRestriction(android.os.UserManager.DISALLOW_ADJUST_VOLUME) == true)
+    }
+    var isAdminActive by remember { mutableStateOf(com.ejemplo.locksuite.security.SessionManager.isActive()) }
+    var nokiaModeActive by remember { mutableStateOf(policyManager.isNokiaKeypadMode()) }
+    var nokiaTouchActive by remember { mutableStateOf(policyManager.isNokiaTouchEnabled()) }
+    var bluetoothBlocked by remember {
+        mutableStateOf(!isAdminActive && policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH))
+    }
+    var dateTimeBlocked by remember {
+        mutableStateOf(!isAdminActive && policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_DATE_TIME))
+    }
+    var localeBlocked by remember {
+        mutableStateOf(!isAdminActive && policyManager.isLocaleChangeBlocked())
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                canWriteSystemSettings =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.System.canWrite(context) else true
+                volumeBlocked =
+                    userManager?.hasUserRestriction(android.os.UserManager.DISALLOW_ADJUST_VOLUME) == true
+                val active = com.ejemplo.locksuite.security.SessionManager.isActive()
+                isAdminActive = active
+                nokiaModeActive = policyManager.isNokiaKeypadMode()
+                nokiaTouchActive = policyManager.isNokiaTouchEnabled()
+                bluetoothBlocked = !active && policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH)
+                dateTimeBlocked = !active && policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_DATE_TIME)
+                localeBlocked = !active && policyManager.isLocaleChangeBlocked()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     val isStealth = remember {
@@ -134,9 +177,19 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
                             Spacer(modifier = Modifier.width(8.dp))
                             Slider(
                                 value = musicVol,
+                                enabled = !volumeBlocked,
                                 onValueChange = {
+                                    if (userManager?.hasUserRestriction(android.os.UserManager.DISALLOW_ADJUST_VOLUME) == true) {
+                                        volumeBlocked = true
+                                        return@Slider
+                                    }
                                     musicVol = it
-                                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, it.toInt(), 0)
+                                    try {
+                                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, it.toInt(), 0)
+                                    } catch (_: SecurityException) {
+                                        volumeBlocked = true
+                                    } catch (_: Exception) {
+                                    }
                                 },
                                 valueRange = 0f..maxMusicVol,
                                 modifier = Modifier.weight(1f)
@@ -151,13 +204,26 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
                             Spacer(modifier = Modifier.width(8.dp))
                             Slider(
                                 value = alarmVol,
+                                enabled = !volumeBlocked,
                                 onValueChange = {
+                                    if (userManager?.hasUserRestriction(android.os.UserManager.DISALLOW_ADJUST_VOLUME) == true) {
+                                        volumeBlocked = true
+                                        return@Slider
+                                    }
                                     alarmVol = it
-                                    audioManager.setStreamVolume(AudioManager.STREAM_ALARM, it.toInt(), 0)
+                                    try {
+                                        audioManager.setStreamVolume(AudioManager.STREAM_ALARM, it.toInt(), 0)
+                                    } catch (_: SecurityException) {
+                                        volumeBlocked = true
+                                    } catch (_: Exception) {
+                                    }
                                 },
                                 valueRange = 0f..maxAlarmVol,
                                 modifier = Modifier.weight(1f)
                             )
+                        }
+                        if (volumeBlocked) {
+                            Text("Volumen bloqueado por el administrador", fontSize = 11.sp, color = Color.Gray)
                         }
                     }
                 }
@@ -195,9 +261,14 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
                             )
                         }
                         
-                        if (!canWriteSystemSettings) {
+                        if (!canWriteSystemSettings && isAdminActive) {
                             Button(
                                 onClick = {
+                                    if (!com.ejemplo.locksuite.security.SessionManager.isActive()) {
+                                        isAdminActive = false
+                                        Toast.makeText(context, "Requiere sesión de administrador activa", Toast.LENGTH_SHORT).show()
+                                        return@Button
+                                    }
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                                         try {
                                             val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
@@ -220,62 +291,59 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
                     }
                 }
 
-                val policyManager = remember { com.ejemplo.locksuite.mdm.PolicyManager(context) }
-                val isAdminActive = remember { com.ejemplo.locksuite.security.SessionManager.isActive() }
-                var nokiaModeActive by remember { mutableStateOf(policyManager.isNokiaKeypadMode()) }
-                var nokiaTouchActive by remember { mutableStateOf(policyManager.isNokiaTouchEnabled()) }
-
-                // APARIENCIA DEL LAUNCHER
-                SettingsGroup(title = "Apariencia del Launcher") {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Modo teléfono de teclas (Nokia)", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
-                                Text("Reloj grande y menú de apps 3×3 con atajos numéricos", fontSize = 12.sp, color = Color.Gray)
-                            }
-                            Switch(
-                                checked = nokiaModeActive,
-                                onCheckedChange = { checked ->
-                                    nokiaModeActive = checked
-                                    policyManager.setNokiaKeypadMode(checked)
-                                }
-                            )
-                        }
-
-                        if (nokiaModeActive) {
+                // APARIENCIA DEL LAUNCHER (solo administrador autenticado)
+                if (isAdminActive) {
+                    SettingsGroup(title = "Apariencia del Launcher") {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("Habilitar pantalla táctil en modo teclas", fontSize = 14.sp, color = Color.White)
-                                    Text("Si se apaga, solo responde a teclas físicas (emergencia: 3s esquina sup. der.)", fontSize = 11.sp, color = Color.Gray)
+                                    Text("Modo teléfono de teclas (Nokia)", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
+                                    Text("Reloj grande y menú de apps 3×3 con atajos numéricos", fontSize = 12.sp, color = Color.Gray)
                                 }
                                 Switch(
-                                    checked = nokiaTouchActive,
+                                    checked = nokiaModeActive,
                                     onCheckedChange = { checked ->
-                                        nokiaTouchActive = checked
-                                        policyManager.setNokiaTouchEnabled(checked)
+                                        if (!com.ejemplo.locksuite.security.SessionManager.isActive()) {
+                                            isAdminActive = false
+                                            Toast.makeText(context, "Requiere sesión de administrador activa", Toast.LENGTH_SHORT).show()
+                                            return@Switch
+                                        }
+                                        nokiaModeActive = checked
+                                        policyManager.setNokiaKeypadMode(checked)
                                     }
                                 )
                             }
+
+                            if (nokiaModeActive) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Habilitar pantalla táctil en modo teclas", fontSize = 14.sp, color = Color.White)
+                                        Text("Si se apaga, solo responde a teclas físicas (emergencia: 3s esquina sup. der.)", fontSize = 11.sp, color = Color.Gray)
+                                    }
+                                    Switch(
+                                        checked = nokiaTouchActive,
+                                        onCheckedChange = { checked ->
+                                            if (!com.ejemplo.locksuite.security.SessionManager.isActive()) {
+                                                isAdminActive = false
+                                                Toast.makeText(context, "Requiere sesión de administrador activa", Toast.LENGTH_SHORT).show()
+                                                return@Switch
+                                            }
+                                            nokiaTouchActive = checked
+                                            policyManager.setNokiaTouchEnabled(checked)
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
-                }
-
-                val bluetoothBlocked = remember {
-                    !isAdminActive && policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH)
-                }
-                val dateTimeBlocked = remember {
-                    !isAdminActive && policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_DATE_TIME)
-                }
-                val localeBlocked = remember {
-                    !isAdminActive && policyManager.isLocaleChangeBlocked()
                 }
 
                 // CONECTIVIDAD SECCIÓN
@@ -399,31 +467,38 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        if (isAdminActive) {
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                        SettingsButton(
-                            label = "Bloqueo de pantalla",
-                            icon = Icons.Filled.Lock,
-                            onClick = {
-                                try {
-                                    // Abre directamente la pantalla de configurar PIN/Patrón/Contraseña
-                                    val intent = Intent(android.app.admin.DevicePolicyManager.ACTION_SET_NEW_PASSWORD).apply {
-                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            SettingsButton(
+                                label = "Bloqueo de pantalla",
+                                icon = Icons.Filled.Lock,
+                                onClick = {
+                                    if (!com.ejemplo.locksuite.security.SessionManager.isActive()) {
+                                        isAdminActive = false
+                                        Toast.makeText(context, "Requiere sesión de administrador activa", Toast.LENGTH_SHORT).show()
+                                        return@SettingsButton
                                     }
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
                                     try {
-                                        // Fallback a los ajustes generales de seguridad del sistema
-                                        val intentSecurity = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+                                        // Abre directamente la pantalla de configurar PIN/Patrón/Contraseña
+                                        val intent = Intent(android.app.admin.DevicePolicyManager.ACTION_SET_NEW_PASSWORD).apply {
                                             flags = Intent.FLAG_ACTIVITY_NEW_TASK
                                         }
-                                        context.startActivity(intentSecurity)
-                                    } catch (ex: Exception) {
-                                        Toast.makeText(context, "No se pudo abrir Ajustes de Bloqueo", Toast.LENGTH_SHORT).show()
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        try {
+                                            // Fallback a los ajustes generales de seguridad del sistema
+                                            val intentSecurity = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+                                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                            }
+                                            context.startActivity(intentSecurity)
+                                        } catch (ex: Exception) {
+                                            Toast.makeText(context, "No se pudo abrir Ajustes de Bloqueo", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 }
-                            }
-                        )
+                            )
+                        }
 
                         Spacer(modifier = Modifier.height(8.dp))
 

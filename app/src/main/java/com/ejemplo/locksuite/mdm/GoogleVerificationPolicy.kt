@@ -291,11 +291,17 @@ object GoogleVerificationPolicy {
         return false
     }
 
+    // Solo imágenes raster base64 explícitas (rechaza data:image/svg+xml, data:text/html, etc.)
+    private val ALLOWED_RASTER_DATA_IMAGE_REGEX = Regex(
+        "^data:image/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$",
+        RegexOption.IGNORE_CASE
+    )
+
     /**
      * ¿Puede la página descargar este subrecurso (JS, CSS, fuentes, imágenes de UI)?
      *
      * Restricciones:
-     * - Solo HTTPS en puerto 443 (o data:image/ para svgs/pngs de UI embebidos)
+     * - Solo HTTPS en puerto 443 (o imágenes raster data:image/(png|jpeg|webp|gif);base64,...)
      * - No se permite WSS (WebSockets innecesarios para esta pantalla)
      * - Hosts exactos o sufijos estrictamente autorizados
      * - Bloqueo absoluto de dominios de video, tracking y publicidad
@@ -306,9 +312,10 @@ object GoogleVerificationPolicy {
 
         if (trimmed == "about:blank") return true
 
-        // Permitir imágenes embebidas data:image/ (íconos y assets de UI)
-        if (trimmed.startsWith("data:image/")) return true
-        if (trimmed.startsWith("data:")) return false // Bloquear data:text/html u otros scripts
+        // Permitir únicamente imágenes raster base64 embebidas (nunca SVG ni HTML)
+        if (trimmed.startsWith("data:", ignoreCase = true)) {
+            return ALLOWED_RASTER_DATA_IMAGE_REGEX.matches(trimmed)
+        }
 
         // Parseo estricto
         val parsed = parseStrictUri(trimmed) ?: return false

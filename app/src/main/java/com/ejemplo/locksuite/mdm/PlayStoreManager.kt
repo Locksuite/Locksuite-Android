@@ -78,7 +78,7 @@ object PlayStoreManager {
     // MODO DE ESTE EQUIPO
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** Modo vigente. Lo que no se reconozca, o no esté guardado, es CERRADA. */
+    /** Modo vigente. Si no hay valor guardado todavía, arranca en [PlayStoreCatalog.MODE_KOSHER] (B.102); un valor desconocido falla cerrado a CERRADA. */
     fun mode(context: Context): String =
         PlayStoreCatalog.normalizeMode(prefs(context).getString(KEY_MODE, PlayStoreCatalog.MODE_KOSHER))
 
@@ -183,11 +183,12 @@ object PlayStoreManager {
     }
 
     /**
-     * JSON → apps validadas. `null` = el texto no es un arreglo JSON (error de lectura);
-     * un arreglo vacío es válido y significa "no hay apps".
+     * JSON → apps validadas. `null` = ausente, en blanco o no es un arreglo JSON (error de
+     * lectura: `replaceConfig` conserva el catálogo anterior); un arreglo vacío (`"[]"`) sí es
+     * válido y significa "no hay apps".
      */
     internal fun parseApps(json: String?, extra: Boolean): List<StoreApp>? {
-        if (json.isNullOrBlank()) return emptyList()
+        if (json.isNullOrBlank()) return null
         return try {
             val arr = JSONArray(json)
             val raws = ArrayList<PlayStoreCatalog.RawApp>(arr.length())
@@ -555,10 +556,20 @@ object PlayStoreManager {
             // ── Pausa de lo que la tienda instaló y ya no ofrece ──
             val pausedSaved = p.getStringSet(KEY_PAUSED, emptySet()) ?: emptySet()
             val controller = AppController(ctx)
+            val blocked = blockedChecker(ctx)
+            val mdmPrefs = prefs(ctx)
+            val keepPaused = installedByStore.filter { pkg ->
+                blocked(pkg) ||
+                    mdmPrefs.getBoolean("hide_$pkg", false) ||
+                    controller.isAppHidden(pkg) ||
+                    AppController.DEFAULT_BLOCKED_PACKAGES.contains(pkg) ||
+                    (pkg !in pausedSaved && try { controller.isAppSuspended(pkg) } catch (_: Exception) { false })
+            }.toSet()
             val plan = PlayStoreCatalog.planPause(
                 offered = offeredSet,
                 installedByStore = installedByStore,
-                pausedByStore = pausedSaved
+                pausedByStore = pausedSaved,
+                keepPaused = keepPaused
             )
             val pausedAfter = LinkedHashSet(plan.pausedAfter)
             for (pkg in plan.toPause) {

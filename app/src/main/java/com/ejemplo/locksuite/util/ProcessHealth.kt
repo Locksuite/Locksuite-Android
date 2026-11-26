@@ -41,6 +41,7 @@ object ProcessHealth {
     private const val SENTINEL_DELAY_MS = 365L * 24 * 3600_000L
     private const val RESCUE_DELAY_MS = 20 * 60_000L
     private const val RESCUE_REARM_EVERY_MS = 5 * 60_000L
+    private const val KEY_BOOT_COUNT = "boot_count"
 
     @Volatile private var rescueArmedAt = 0L
 
@@ -50,6 +51,24 @@ object ProcessHealth {
     private fun intent(ctx: Context, action: String) =
         Intent(ctx, ReviveReceiver::class.java).setAction(action)
 
+    private fun currentBootCount(app: Context): Long = try {
+        android.provider.Settings.Global.getInt(
+            app.contentResolver,
+            android.provider.Settings.Global.BOOT_COUNT,
+            -1
+        ).toLong()
+    } catch (_: Throwable) {
+        -1L
+    }
+
+    /**
+     * Devuelve `true` solo si ambos conteos de arranque son válidos y pertenecen al MISMO arranque.
+     * En un reinicio limpio del equipo Android borra todas las alarmas y PendingIntents, así que
+     * un cambio de `BOOT_COUNT` descarta un falso positivo de detención forzada.
+     */
+    internal fun isSameBoot(currentBoot: Long, savedBoot: Long): Boolean =
+        currentBoot >= 0L && savedBoot >= 0L && currentBoot == savedBoot
+
     /** Al arrancar el proceso (ya desbloqueado). Anota la detención forzada si la hubo. */
     @JvmStatic
     fun onProcessStart(context: Context) {
@@ -57,20 +76,53 @@ object ProcessHealth {
             val app = context.applicationContext ?: context
             val lastUpdate = app.packageManager.getPackageInfo(app.packageName, 0).lastUpdateTime
             val saved = DiagStore.getLong("last_update_time", 0L)
+            val currentBoot = currentBootCount(app)
+            val savedBoot = DiagStore.getLong(KEY_BOOT_COUNT, -1L)
             val sentinelPresent = PendingIntent.getBroadcast(
                 app, REQ_SENTINEL, intent(app, ACTION_SENTINEL),
                 flagsImmutable(PendingIntent.FLAG_NO_CREATE)
             ) != null
-            if (ForceStopVerdict.decide(sentinelPresent, lastUpdate, saved) == ForceStopVerdict.Verdict.FORCE_STOPPED) {
+            val rebootDetected = currentBoot >= 0L && savedBoot >= 0L && currentBoot != savedBoot
+            val canJudgeForceStop = !rebootDetected && (isSameBoot(currentBoot, savedBoot) || currentBoot < 0L)
+            if (canJudgeForceStop &&
+                ForceStopVerdict.decide(sentinelPresent, lastUpdate, saved) == ForceStopVerdict.Verdict.FORCE_STOPPED
+            ) {
                 DiagLog.w(
                     "app",
                     "Arranque después de una DETENCIÓN FORZADA del paquete (se cancelaron alarmas y trabajos)"
                 )
             }
             DiagStore.putLong("last_update_time", lastUpdate)
+            if (currentBoot >= 0L) {
+                DiagStore.putLong(KEY_BOOT_COUNT, currentBoot)
+            }
             armSentinel(app)
         } catch (t: Throwable) {
             android.util.Log.w("ProcessHealth", "onProcessStart: ${t.message}")
+        }
+    }
+
+    /** Cancela todas las alarmas de rescate y sentinela (usado en purga total / liberación). */
+    @JvmStatic
+    fun cancelAll(context: Context) {
+        try {
+            val app = context.applicationContext ?: context
+            val am = app.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+            listOf(REQ_REVIVE to ACTION_REVIVE, REQ_SENTINEL to ACTION_SENTINEL).forEach { (req, action) ->
+                try {
+                    val pi = PendingIntent.getBroadcast(
+                        app, req, intent(app, action),
+                        flagsImmutable(PendingIntent.FLAG_NO_CREATE)
+                    )
+                    if (pi != null) {
+                        am?.cancel(pi)
+                        pi.cancel()
+                    }
+                } catch (_: Throwable) {}
+            }
+            rescueArmedAt = 0L
+        } catch (t: Throwable) {
+            android.util.Log.w("ProcessHealth", "cancelAll: ${t.message}")
         }
     }
 

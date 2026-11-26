@@ -192,8 +192,8 @@ object ApkChecksum {
                 null
             }
             is Result.Unusable -> {
-                Log.w(TAG, "sha256 inutilizable en version.json (${r.reason}): se instala igual.")
-                null
+                Log.e(TAG, "sha256 malformado en version.json (${r.reason}): actualización bloqueada.")
+                "El archivo de actualización tiene un sha256 inválido (${r.reason}). No se instaló."
             }
             is Result.Mismatch -> {
                 Log.e(TAG, "sha256 DISTINTO en la actualización de LockSuite: esperado=${r.expected} obtenido=${r.actual}")

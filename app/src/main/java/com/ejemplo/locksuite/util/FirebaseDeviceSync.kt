@@ -1249,15 +1249,19 @@ object FirebaseDeviceSync {
             } catch (_: Throwable) { }
         }
 
-        var detail = exit.description?.take(250) ?: ""
+        var detail = com.ejemplo.locksuite.diag.DiagSanitizer.sanitize(exit.description, 250)
         if ((detail.isBlank() || detail.equals("crash", ignoreCase = true)) && traceSnippet.isNotBlank()) {
             val firstLine = traceSnippet.lines().firstOrNull { it.isNotBlank() } ?: ""
-            detail = firstLine.take(250)
+            detail = com.ejemplo.locksuite.diag.DiagSanitizer.sanitize(firstLine, 250)
         }
         // 19/11/2026 (B.125, T2.1): en un ANR el detalle que ve el panel incluye el motivo.
         if (esAnr && traceSnippet.startsWith("Subject:")) {
             val subject = traceSnippet.lineSequence().first().removePrefix("Subject:").trim()
-            detail = (if (detail.isBlank()) subject else "$detail — $subject").take(250)
+            val cleanSubject = com.ejemplo.locksuite.diag.DiagSanitizer.sanitize(subject, 200)
+            detail = com.ejemplo.locksuite.diag.DiagSanitizer.sanitize(
+                if (detail.isBlank()) cleanSubject else "$detail — $cleanSubject",
+                250
+            )
         }
 
         val res = mutableMapOf<String, Any>(
@@ -1267,8 +1271,10 @@ object FirebaseDeviceSync {
             "lastExitDetail" to detail
         )
         if (traceSnippet.isNotBlank()) {
-            res["lastExitTrace"] = traceSnippet.take(
-                if (esAnr) com.ejemplo.locksuite.diag.AnrTraceHead.MAX_CHARS else 1500
+            val maxTraceChars = if (esAnr) com.ejemplo.locksuite.diag.AnrTraceHead.MAX_CHARS else 1500
+            res["lastExitTrace"] = com.ejemplo.locksuite.diag.DiagSanitizer.sanitizeBlock(
+                traceSnippet,
+                maxTraceChars
             )
         }
         return res

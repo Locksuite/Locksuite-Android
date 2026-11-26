@@ -207,4 +207,56 @@ class NetworkForwarderTest {
         // Verify that there are no remaining bytes in the buffer (meaning the EDNS OPT record was completely stripped)
         assertFalse("Should have no extra bytes", dnsBuffer.hasRemaining())
     }
+
+    @Test
+    fun isTunnelAddress_handlesStandardAndExpandedIpv6() {
+        assertTrue(NetworkForwarder.isTunnelAddress(InetAddress.getByName("10.0.0.1")))
+        assertTrue(NetworkForwarder.isTunnelAddress(InetAddress.getByName("10.0.0.2")))
+        assertTrue(NetworkForwarder.isTunnelAddress(InetAddress.getByName("fd00::1")))
+        assertTrue(NetworkForwarder.isTunnelAddress(InetAddress.getByName("fd00::2")))
+        assertTrue(NetworkForwarder.isTunnelAddress(InetAddress.getByName("fd00:0:0:0:0:0:0:1")))
+        assertTrue(NetworkForwarder.isTunnelAddress(InetAddress.getByName("fd00:0000:0000:0000:0000:0000:0000:0002")))
+
+        assertFalse(NetworkForwarder.isTunnelAddress(InetAddress.getByName("8.8.8.8")))
+        assertFalse(NetworkForwarder.isTunnelAddress(InetAddress.getByName("10.0.0.3")))
+        assertFalse(NetworkForwarder.isTunnelAddress(InetAddress.getByName("fd00::3")))
+        assertFalse(NetworkForwarder.isTunnelAddress(InetAddress.getByName("2001:4860:4860::8888")))
+    }
+
+    @Test
+    fun isUsableResolver_rejectsSpecialAndTunnelAddresses() {
+        assertFalse(NetworkForwarder.isUsableResolver(InetAddress.getByName("127.0.0.1")))
+        assertFalse(NetworkForwarder.isUsableResolver(InetAddress.getByName("::1")))
+        assertFalse(NetworkForwarder.isUsableResolver(InetAddress.getByName("0.0.0.0")))
+        assertFalse(NetworkForwarder.isUsableResolver(InetAddress.getByName("::")))
+        assertFalse(NetworkForwarder.isUsableResolver(InetAddress.getByName("169.254.1.1")))
+        assertFalse(NetworkForwarder.isUsableResolver(InetAddress.getByName("fe80::1")))
+        assertFalse(NetworkForwarder.isUsableResolver(InetAddress.getByName("fd00:0:0:0:0:0:0:1")))
+
+        assertTrue(NetworkForwarder.isUsableResolver(InetAddress.getByName("8.8.8.8")))
+        assertTrue(NetworkForwarder.isUsableResolver(InetAddress.getByName("2001:4860:4860::8888")))
+    }
+
+    @Test
+    fun buildTruncatedDnsResponse_setsTcBitAndClearsAnswers() {
+        val query = buildDnsPayload(1, addEdns = true)
+        val upstreamHeader = byteArrayOf(
+            0x12, 0x34, 0x81.toByte(), 0x80.toByte(),
+            0x00, 0x01, 0x00, 0x10, 0x00, 0x00, 0x00, 0x01
+        )
+        val truncated = NetworkForwarder.buildTruncatedDnsResponse(query, upstreamHeader)
+        assertNotNull(truncated)
+        val buf = ByteBuffer.wrap(truncated!!)
+        assertEquals(0x1234.toShort(), buf.getShort()) // Transaction ID preserved
+        val flags = buf.getShort().toInt() and 0xFFFF
+        assertTrue("QR bit must be 1", (flags and 0x8000) != 0)
+        assertTrue("TC bit must be 1", (flags and 0x0200) != 0)
+        assertEquals(1.toShort(), buf.getShort()) // QDCOUNT = 1
+        assertEquals(0.toShort(), buf.getShort()) // ANCOUNT = 0
+        assertEquals(0.toShort(), buf.getShort()) // NSCOUNT = 0
+        assertEquals(0.toShort(), buf.getShort()) // ARCOUNT = 0
+        assertEquals("test.com", DnsPacketParser.extractQueriedDomain(query))
+        // Question bytes (14 bytes for test.com + qtype + qclass) follow 12-byte header
+        assertEquals(12 + 14, truncated.size)
+    }
 }

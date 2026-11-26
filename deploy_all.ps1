@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$VersionName
 )
 
@@ -48,36 +48,48 @@ $gradleContent = $gradleContent -replace 'versionCode\s*=\s*\d+', "versionCode =
 $gradleContent = $gradleContent -replace 'versionName\s*=\s*"[^"]+"', "versionName = `"$VersionName`""
 Set-Content $gradleFile $gradleContent
 
-# 3. Actualizar version.json
+# 3. Compilar APK limpiando cache previamente (antes de actualizar version.json para calcular sha256)
+Write-Host "Compilando release APK (clean + assembleRelease)..." -ForegroundColor Yellow
+cmd.exe /c .\gradlew.bat clean assembleRelease --no-daemon
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Fallo la compilacion Gradle (clean assembleRelease)."
+}
+
+# 4. Copiar APKs y calcular SHA-256 oficial para verificacion OTA
+$apkSource = Join-Path $projectRoot "app/build/outputs/apk/release/app-release.apk"
+$apkDest1 = Join-Path $projectRoot "admin-backend/public/locksuite-latest.apk"
+$apkDest2 = Join-Path $projectRoot "admin-backend/public/LockSuite_MDM.apk"
+$apkDest3 = Join-Path $projectRoot "admin-backend/public/installer/apk/normal.apk"
+$adminApkSource = Join-Path $projectRoot "admin-app/build/outputs/apk/release/admin-app-release.apk"
+$adminApkDest = Join-Path $projectRoot "admin-backend/public/LockSuite_Admin.apk"
+
+if (Test-Path $apkSource) {
+    Copy-Item $apkSource $apkDest1 -Force
+    Copy-Item $apkSource $apkDest2 -Force
+    if (Test-Path (Split-Path $apkDest3)) { Copy-Item $apkSource $apkDest3 -Force }
+    if (Test-Path $adminApkSource) { Copy-Item $adminApkSource $adminApkDest -Force }
+    $apkSha256 = (Get-FileHash $apkDest1 -Algorithm SHA256).Hash.ToLower()
+    Write-Host "APKs copiadas con exito a public/ y public/installer/apk/. SHA-256: $apkSha256" -ForegroundColor Green
+} else {
+    Write-Error "No se encontro el APK compilado en $apkSource"
+}
+
+# 5. Actualizar version.json con version y sha256 verificable
 if (Test-Path $versionJsonFile) {
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     $jsonContent = Get-Content $versionJsonFile -Raw | ConvertFrom-Json
     $jsonContent.versionCode = $newCode
     $jsonContent.versionName = $VersionName
     $jsonContent.updatedAt = $timestamp
+    if ($jsonContent.PSObject.Properties.Name -contains "sha256") {
+        $jsonContent.sha256 = $apkSha256
+    } else {
+        $jsonContent | Add-Member -NotePropertyName "sha256" -NotePropertyValue $apkSha256
+    }
     $jsonContent | ConvertTo-Json -Depth 10 | Set-Content $versionJsonFile
-    Write-Host "version.json actualizado." -ForegroundColor Green
+    Write-Host "version.json actualizado con sha256." -ForegroundColor Green
 } else {
     Write-Warning "No se encontro version.json para actualizar."
-}
-
-# 4. Compilar APK limpiando cache previamente
-Write-Host "Compilando release APK (clean + assembleRelease)..." -ForegroundColor Yellow
-cmd.exe /c .\gradlew.bat clean assembleRelease --no-daemon
-
-# 5. Copiar APKs
-$apkSource = Join-Path $projectRoot "app/build/outputs/apk/release/app-release.apk"
-$apkDest1 = Join-Path $projectRoot "admin-backend/public/locksuite-latest.apk"
-$apkDest2 = Join-Path $projectRoot "admin-backend/public/LockSuite_MDM.apk"
-$apkDest3 = Join-Path $projectRoot "admin-backend/public/installer/apk/normal.apk"
-
-if (Test-Path $apkSource) {
-    Copy-Item $apkSource $apkDest1 -Force
-    Copy-Item $apkSource $apkDest2 -Force
-    if (Test-Path (Split-Path $apkDest3)) { Copy-Item $apkSource $apkDest3 -Force }
-    Write-Host "APKs copiadas con exito a public/ y public/installer/apk/." -ForegroundColor Green
-} else {
-    Write-Error "No se encontro el APK compilado en $apkSource"
 }
 
 # 6. Desplegar en Firebase
@@ -95,6 +107,9 @@ try {
     # DEBE quedar publicado de todas formas para no trabar la auto-actualización OTA de los celulares.
     Write-Host "Desplegando Hosting y Database..." -ForegroundColor Yellow
     cmd.exe /c firebase deploy --only hosting,database
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Fallo el despliegue de Hosting y Database."
+    }
     Write-Host "Hosting y Database desplegados con exito." -ForegroundColor Green
 
     # Luego desplegar funciones de forma independiente

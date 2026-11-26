@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -106,12 +107,15 @@ fun AppUpdateScreen(onClose: () -> Unit) {
         }
     }
 
-    LaunchedEffect(Unit) {
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
         loadApps()
-        // Monitoreo de accesibilidad en vivo
-        while (true) {
-            isAccessibilityActive = LockSuiteAccessibilityService.instance != null
-            delay(1200L)
+        // Monitoreo de accesibilidad en vivo (solo mientras la pantalla está STARTED)
+        lifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                isAccessibilityActive = LockSuiteAccessibilityService.instance != null
+                delay(1200L)
+            }
         }
     }
 

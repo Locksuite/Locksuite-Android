@@ -14,14 +14,21 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
     override fun doWork(): Result {
         // 19/11/2026 (B.125, T2.2): quién arrancó este proceso, si fue el Worker (JobScheduler).
         com.ejemplo.locksuite.diag.DiagLog.firstEntry("WatchdogWorker (JobScheduler)")
-        // Y la alarma de rescate: otro mecanismo distinto de WorkManager (ver util/ProcessHealth).
-        com.ejemplo.locksuite.util.ProcessHealth.scheduleRescueIfDue(applicationContext)
         if (!com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(applicationContext)) {
             return Result.retry()
         }
-        if (PrefsHelper.getMdmPrefs(applicationContext).getBoolean("locksuite_purged", false)) {
+        com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(applicationContext, "WatchdogWorker")
+        val purged = try {
+            PrefsHelper.getMdmPrefs(applicationContext).getBoolean("locksuite_purged", false)
+        } catch (_: Throwable) {
+            false
+        }
+        if (purged) {
+            com.ejemplo.locksuite.util.ProcessHealth.cancelAll(applicationContext)
             return Result.success()
         }
+        // Y la alarma de rescate: otro mecanismo distinto de WorkManager (ver util/ProcessHealth).
+        com.ejemplo.locksuite.util.ProcessHealth.scheduleRescueIfDue(applicationContext)
 
         // LATIDO PRIMERO, Y BARATO (2/9/2026) — "a veces los celulares no quedan en línea".
         //
@@ -121,15 +128,17 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
         }
 
         // Verificar que el servicio de primer plano siga ejecutándose
-        try {
-            val serviceIntent = Intent(applicationContext, WatchdogForegroundService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                applicationContext.startForegroundService(serviceIntent)
-            } else {
-                applicationContext.startService(serviceIntent)
+        if (!WatchdogForegroundService.isRunning()) {
+            try {
+                val serviceIntent = Intent(applicationContext, WatchdogForegroundService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    applicationContext.startForegroundService(serviceIntent)
+                } else {
+                    applicationContext.startService(serviceIntent)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
 
         // Garantizar que KosherVpnService siga activo si cualquier política lo requiere

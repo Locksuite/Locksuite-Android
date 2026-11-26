@@ -147,7 +147,9 @@ object GoogleAccountWebPolicy {
         // Pantallas dedicadas de Mi Actividad o Historial de ubicaciones cuando abren
         // su propia Activity (sin tocar `accountsettings`, que aloja la cuenta entera).
         "myactivity",
-        "locationhistory"
+        "locationhistory",
+        // Ayuda y comentarios de Google (WebView con enlaces salientes a la web de soporte).
+        "googlehelp"
     )
 
     /**
@@ -170,7 +172,8 @@ object GoogleAccountWebPolicy {
     private val CLASS_MARKERS_STRICT = listOf(
         "accountsettings",
         "googlesettings",
-        "myaccount"
+        "myaccount",
+        "octarine"
     )
 
     /**
@@ -212,10 +215,12 @@ object GoogleAccountWebPolicy {
     private val BLOCKED_NORMAL = listOf(
         // ── EL CONTENIDO, que es lo que hay que cerrar ──
         "myactivity.google.com",    // Mi Actividad: historial de YouTube, búsquedas, etc.
+        "activity.google.com",      // Alias/redirección de Mi Actividad
         "history.google.com",       // nombre viejo, sigue redirigiendo a Mi Actividad
         "timeline.google.com",      // Cronología de ubicaciones (con fotos)
         "takeout.google.com",       // "Descargar tus datos": exporta y muestra
         "adssettings.google.com",   // intereses publicitarios, con imágenes
+        "myadcenter.google.com",    // Mi centro de anuncios (reemplazo moderno de adssettings)
         "photos.google.com",        // "Tus fotos" desde la cuenta
         // Miniaturas de YouTube. Es un dominio de imágenes de YouTube y nada más, así
         // que bloquearlo no puede romper otra cosa; mata las miniaturas también dentro

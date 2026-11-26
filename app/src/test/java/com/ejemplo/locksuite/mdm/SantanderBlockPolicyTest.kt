@@ -188,4 +188,40 @@ class SantanderBlockPolicyTest {
         )
         assertEquals(SantanderBlockPolicy.Veredicto.PERMITIR, SantanderBlockPolicy.evaluar(r))
     }
+
+    @Test
+    fun `bloquea Apple App Store Web en espanol`() {
+        val r = SantanderBlockPolicy.Retrato(
+            packageName = SantanderBlockPolicy.PKG_SANTANDER,
+            tieneWebView = true,
+            textos = norm(
+                "App Store",
+                "Vista previa de App Store",
+                "Clasificación por edad",
+                "Diseñado para iPad",
+                "Compras dentro de la app",
+                "Historial de versiones"
+            )
+        )
+        assertEquals(SantanderBlockPolicy.Veredicto.BLOQUEAR, SantanderBlockPolicy.evaluar(r))
+        assertTrue(SantanderBlockPolicy.motivo(r).contains("app store"))
+    }
+
+    @Test
+    fun `bloquea Apple App Store Web en portugues`() {
+        val r = SantanderBlockPolicy.Retrato(
+            packageName = SantanderBlockPolicy.PKG_SANTANDER,
+            tieneWebView = true,
+            textos = norm(
+                "App Store",
+                "Pré-visualização da App Store",
+                "Classificação etária",
+                "Feito para iPad",
+                "Compras dentro do app",
+                "Avaliações e resenhas"
+            )
+        )
+        assertEquals(SantanderBlockPolicy.Veredicto.BLOQUEAR, SantanderBlockPolicy.evaluar(r))
+        assertTrue(SantanderBlockPolicy.motivo(r).contains("app store"))
+    }
 }

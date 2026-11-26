@@ -20,10 +20,19 @@ object NetworkForwarder {
      * antes de que ELLA se dé por vencida, no agotar los 3,5 s con cada alternativa.
      */
     private const val RETRY_TIMEOUT_MS = 1500
+    /** Tamaño máximo seguro de payload DNS sobre MTU 1500 con IPv6 (1500 - 40 - 8). */
+    private const val DEFAULT_MAX_RESPONSE_BYTES = 1452
 
     private data class UpstreamResult(
         val address: InetAddress,
         val network: Network?
+    )
+
+    private data class CachedUpstream(
+        val address: InetAddress,
+        val network: Network?,
+        val cachedAtMs: Long,
+        val epoch: Long
     )
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -70,47 +79,69 @@ object NetworkForwarder {
     // siendo el DNS virtual del propio túnel y todas las consultas del equipo daban
     // timeout. Ahora se deriva de la fuente única de verdad: si alguien cambia una
     // dirección del túnel, esta lista lo sigue sola.
-    private val TUNNEL_ADDRESSES = setOf(
-        com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_DNS_V4,
-        com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_ADDR_V4,
-        com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_DNS_V6,
-        com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_ADDR_V6
+    /**
+     * Direcciones del propio túnel comparadas por BYTES crudos (no por `hostAddress` string).
+     * Comparar strings fallaba en IPv6 cuando Android devolvía formato expandido
+     * (`fd00:0:0:0:0:0:0:1`) o con scope id (`fd00::1%tun0`).
+     */
+    private val TUNNEL_ADDRESS_BYTES: List<ByteArray> = listOfNotNull(
+        parseAddressBytes(com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_DNS_V4),
+        parseAddressBytes(com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_ADDR_V4),
+        parseAddressBytes(com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_DNS_V6),
+        parseAddressBytes(com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_ADDR_V6)
     )
+
+    private fun parseAddressBytes(ip: String): ByteArray? = try {
+        InetAddress.getByName(ip).address
+    } catch (_: Exception) {
+        null
+    }
+
+    internal fun isTunnelAddress(dns: InetAddress): Boolean {
+        val bytes = dns.address
+        return TUNNEL_ADDRESS_BYTES.any { java.util.Arrays.equals(it, bytes) }
+    }
 
     /** Red de seguridad por si algo cambia sin avisar por el callback. */
     private const val UPSTREAM_TTL_MS = 30_000L
     private const val UPSTREAM_UNBOUND_TTL_MS = 1_500L
 
-    @Volatile private var cachedUpstream: InetAddress? = null
-    @Volatile private var cachedUpstreamNetwork: Network? = null
-    @Volatile private var cachedUpstreamAt = 0L
+    private val cacheEpoch = java.util.concurrent.atomic.AtomicLong(0L)
+    @Volatile private var cachedUpstream: CachedUpstream? = null
 
     /** La llama KosherVpnService ante cualquier cambio de red o al (re)establecer el túnel. */
     fun invalidateUpstreamCache() {
-        cachedUpstreamAt = 0L
+        cacheEpoch.incrementAndGet()
         cachedUpstream = null
-        cachedUpstreamNetwork = null
     }
 
-    private fun isUsableResolver(dns: InetAddress): Boolean =
+    internal fun isUsableResolver(dns: InetAddress): Boolean =
         !dns.isLoopbackAddress &&
         !dns.isAnyLocalAddress &&
         !dns.isLinkLocalAddress &&
-        (dns.hostAddress ?: "") !in TUNNEL_ADDRESSES
+        !isTunnelAddress(dns)
 
     private fun getUpstreamDnsAddress(vpnService: VpnService): UpstreamResult {
         val now = android.os.SystemClock.elapsedRealtime()
+        val currentEpoch = cacheEpoch.get()
         val cached = cachedUpstream
-        val cachedNet = cachedUpstreamNetwork
-        val ttl = if (cachedNet != null) UPSTREAM_TTL_MS else UPSTREAM_UNBOUND_TTL_MS
-        if (cached != null && now - cachedUpstreamAt < ttl) {
-            return UpstreamResult(cached, cachedNet)
+        if (cached != null && cached.epoch == currentEpoch) {
+            val ttl = if (cached.network != null) UPSTREAM_TTL_MS else UPSTREAM_UNBOUND_TTL_MS
+            if (now - cached.cachedAtMs < ttl) {
+                return UpstreamResult(cached.address, cached.network)
+            }
         }
 
         val resolved = resolveUpstreamDns(vpnService)
-        cachedUpstream = resolved.address
-        cachedUpstreamNetwork = resolved.network
-        cachedUpstreamAt = now
+        // Solo publicar si no hubo una invalidación concurrente mientras consultábamos ConnectivityManager.
+        if (cacheEpoch.get() == currentEpoch) {
+            cachedUpstream = CachedUpstream(
+                address = resolved.address,
+                network = resolved.network,
+                cachedAtMs = android.os.SystemClock.elapsedRealtime(),
+                epoch = currentEpoch
+            )
+        }
         return resolved
     }
 
@@ -189,6 +220,9 @@ object NetworkForwarder {
 
     private val FALLBACK_DNS_PRIMARY: InetAddress by lazy { InetAddress.getByName("8.8.8.8") }
     private val FALLBACK_DNS_SECONDARY: InetAddress by lazy { InetAddress.getByName("1.1.1.1") }
+    // Fallbacks IPv6 para redes móviles IPv6 puras (NAT64/DNS64) donde ningún upstream IPv4 tiene ruta
+    private val FALLBACK_DNS_V6_PRIMARY: InetAddress by lazy { InetAddress.getByName("2001:4860:4860::8888") }
+    private val FALLBACK_DNS_V6_SECONDARY: InetAddress by lazy { InetAddress.getByName("2606:4700:4700::1111") }
 
     /**
      * Verifica si una dirección IPv4 está en el bloque 100.0.0.0/8 (especialmente CGNAT 100.64.0.0/10).
@@ -205,10 +239,14 @@ object NetworkForwarder {
     fun forwardDnsQuery(
         packet: IpPacketParser.ParsedPacket,
         output: FileOutputStream,
-        vpnService: VpnService
+        vpnService: VpnService,
+        maxResponseBytes: Int = DEFAULT_MAX_RESPONSE_BYTES
     ) {
+        val safeMaxResponseBytes = maxResponseBytes.coerceIn(512, 4096)
         var socket: DatagramSocket? = null
         try {
+            if (Thread.currentThread().isInterrupted) return
+
             var sock: DatagramSocket = DatagramSocket().also {
                 socket = it
                 vpnService.protect(it) // CRÍTICO: Evita bucle infinito de reentrada de red
@@ -262,16 +300,25 @@ object NetworkForwarder {
             // en vez de tres try/catch anidados — así agregar un resolutor más es
             // agregar un elemento a una lista, no otro nivel de anidamiento.
             //
-            // El orden importa: primero el resolutor que corresponde a la red, después
-            // Google, después Cloudflare. Y no se repite el mismo dos veces (V-6: antes,
-            // si el resolutor inicial YA era 8.8.8.8, no había ningún reintento).
+            // El orden importa: primero el resolutor de la red, después los fallbacks de
+            // su misma familia IP y luego la familia alterna (cubre redes móviles IPv6 puras).
             val resolvers = LinkedHashSet<InetAddress>().apply {
                 add(activeResolver)
-                add(FALLBACK_DNS_PRIMARY)
-                add(FALLBACK_DNS_SECONDARY)
+                if (activeResolver is java.net.Inet6Address) {
+                    add(FALLBACK_DNS_V6_PRIMARY)
+                    add(FALLBACK_DNS_V6_SECONDARY)
+                    add(FALLBACK_DNS_PRIMARY)
+                    add(FALLBACK_DNS_SECONDARY)
+                } else {
+                    add(FALLBACK_DNS_PRIMARY)
+                    add(FALLBACK_DNS_SECONDARY)
+                    add(FALLBACK_DNS_V6_PRIMARY)
+                    add(FALLBACK_DNS_V6_SECONDARY)
+                }
             }
 
             for ((intento, resolver) in resolvers.withIndex()) {
+                if (Thread.currentThread().isInterrupted) return
                 try {
                     if (intento > 0) {
                         // Socket nuevo por intento: uno que ya falló con ENETUNREACH
@@ -296,6 +343,7 @@ object NetworkForwarder {
                     responseReceived = true
                     break
                 } catch (e: java.io.IOException) {
+                    if (Thread.currentThread().isInterrupted) return
                     if (intento == 0) {
                         invalidateUpstreamCache()
                     }
@@ -306,6 +354,11 @@ object NetworkForwarder {
                     android.util.Log.w("KosherVPN", "Consulta a $resolver falló (${e.javaClass.simpleName}: ${e.message})")
                 }
             }
+
+            if (Thread.currentThread().isInterrupted) return
+
+            // Contabilizar el intento upstream ya concluido (evita falsos positivos con consultas en vuelo).
+            com.ejemplo.locksuite.service.KosherVpnService.noteUpstreamQuery()
 
             if (!responseReceived) return
 
@@ -336,7 +389,19 @@ object NetworkForwarder {
                 return
             }
 
-            val responseBytes = responseBuffer.copyOfRange(0, responsePacket.length)
+            // Respetar el MTU activo del túnel: si una respuesta upstream supera `safeMaxResponseBytes`,
+            // el kernel la descartaría en silencio al escribirla en TUN. Se devuelve una respuesta
+            // DNS válida con bit TC=1 (truncada) para que quepa holgadamente dentro del MTU.
+            val responseBytes = if (responsePacket.length <= safeMaxResponseBytes) {
+                responseBuffer.copyOfRange(0, responsePacket.length)
+            } else {
+                android.util.Log.w(
+                    "KosherVPN",
+                    "Respuesta DNS (${responsePacket.length} B) excede límite MTU ($safeMaxResponseBytes B); enviando respuesta TC=1."
+                )
+                buildTruncatedDnsResponse(packet.payload, responseBuffer) ?: return
+            }
+
             val ipResponse = if (packet.isIpv6) {
                 buildResponseIpPacketV6(packet, responseBytes)
             } else {
@@ -345,9 +410,8 @@ object NetworkForwarder {
             synchronized(output) {
                 output.write(ipResponse)
             }
-            // Señal de salud: prueba que el camino de VUELTA funciona. Ver el bloque
-            // SALUD DEL TÚNEL en KosherVpnService. Cuesta un incremento atómico.
-            com.ejemplo.locksuite.service.KosherVpnService.noteTunnelResponse()
+            // Señal de salud: prueba que el camino upstream + vuelta funciona.
+            com.ejemplo.locksuite.service.KosherVpnService.noteUpstreamResponse()
 
         } catch (e: SocketTimeoutException) {
             // Sin respuesta, la app original recibirá timeout nativo.
@@ -358,6 +422,30 @@ object NetworkForwarder {
         } finally {
             socket?.close()
         }
+    }
+
+    /**
+     * Construye una respuesta DNS mínima válida con bit TC=1 (Truncated) cuando una
+     * respuesta upstream supera el MTU del túnel.
+     */
+    internal fun buildTruncatedDnsResponse(originalQuery: ByteArray, upstreamHeader: ByteArray): ByteArray? {
+        if (originalQuery.size < 12 || upstreamHeader.size < 4) return null
+        val questionEnd = findQuestionEnd(originalQuery)
+        if (questionEnd < 0) return null
+        val questionPayload = originalQuery.copyOfRange(12, questionEnd)
+        val upstreamFlags = ((upstreamHeader[2].toInt() and 0xFF) shl 8) or
+            (upstreamHeader[3].toInt() and 0xFF)
+        val flags = upstreamFlags or 0x8200 // QR=1, TC=1
+        val out = ByteBuffer.allocate(12 + questionPayload.size)
+        out.put(originalQuery[0])
+        out.put(originalQuery[1])
+        out.putShort(flags.toShort())
+        out.putShort(1.toShort()) // QDCOUNT = 1
+        out.putShort(0.toShort()) // ANCOUNT = 0
+        out.putShort(0.toShort()) // NSCOUNT = 0
+        out.putShort(0.toShort()) // ARCOUNT = 0
+        out.put(questionPayload)
+        return out.array()
     }
 
     /**
@@ -474,8 +562,9 @@ object NetworkForwarder {
             synchronized(output) {
                 output.write(ipResponse)
             }
-            // Una respuesta de bloqueo también prueba que el camino de vuelta funciona.
-            com.ejemplo.locksuite.service.KosherVpnService.noteTunnelResponse()
+            // Contabilizar aparte de las respuestas upstream para que bloqueos locales
+            // nunca oculten una caída del resolutor de salida en tunnelHealth().
+            com.ejemplo.locksuite.service.KosherVpnService.noteBlockedResponse()
         } catch (e: Exception) {
             android.util.Log.w("KosherVPN", "Fallo enviando respuesta DNS bloqueada: ${e.message}")
         }

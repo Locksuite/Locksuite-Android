@@ -67,11 +67,11 @@ object PlayButtonFinder {
     private const val MAX_DEPTH = 40
     private const val MAX_NODES = 2_500
 
-    private const val SCORE_VIEW_ID = 100
-    private const val SCORE_WORD = 80
-    private const val SCORE_POSITION = 40
+    const val SCORE_VIEW_ID = 100
+    const val SCORE_WORD = 80
+    const val SCORE_POSITION = 40
     /** Candidato por posición fuera de la franja preferida pero dentro de la tolerada. */
-    private const val SCORE_POSITION_WIDE = 25
+    const val SCORE_POSITION_WIDE = 25
 
     /**
      * Alto del encabezado de la ficha de Play Store, en dp. Es constante entre
@@ -178,6 +178,40 @@ object PlayButtonFinder {
         "המשך", "אישור", "הורד", "כן", "נסה שוב",
         "متابعة", "موافق", "تنزيل", "نعم"
     )
+
+    /**
+     * Frases de metadatos de la ficha que contienen "actualizacion" / "updated" pero NO son
+     * botones de actualizar (ej. "Última actualización: 15 nov 2026" / "Last updated").
+     */
+    private val ACTION_EXCLUSION_PHRASES = setOf(
+        "ultima actualizacion",
+        "last updated",
+        "last update",
+        "ultima atualizacao",
+        "updated on",
+        "actualizado el"
+    )
+
+    fun isExcludedActionMetadata(folded: String): Boolean {
+        if (folded.isEmpty()) return false
+        return ACTION_EXCLUSION_PHRASES.any { containsWord(folded, it) }
+    }
+
+    /** ¿Un texto normalizado con [fold] corresponde a un botón real de Actualizar / Instalar? */
+    fun isActionText(folded: String): Boolean {
+        if (folded.isEmpty()) return false
+        if (isExcludedActionMetadata(folded)) return false
+        if (FORBIDDEN_WORDS.any { containsWord(folded, it) }) return false
+        return ACTION_WORDS.any { containsWord(folded, it) }
+    }
+
+    /**
+     * Nunca probar candidatos por posición (`score < SCORE_WORD`) cuando ya hay un botón "Abrir"
+     * visible en la ficha: evita hacer clic en tarjetas promocionales/eventos cuando la app ya
+     * está actualizada.
+     */
+    fun shouldAllowCandidateWhenOpenVisible(score: Int, hasOpenButton: Boolean): Boolean =
+        !hasOpenButton || score >= SCORE_WORD
 
     /**
      * Nunca apretar algo que matchee esto. Es una defensa en profundidad, no la
@@ -369,6 +403,19 @@ object PlayButtonFinder {
         val isEmpty: Boolean get() = actions.isEmpty() && opens.isEmpty() && dialogs.isEmpty() && dismissals.isEmpty()
         /** true si la ficha ya tiene contenido dibujado (no es una pantalla en blanco). */
         val rendered: Boolean get() = renderedNodes >= PlayButtonFinder.MIN_RENDERED_NODES
+
+        /** Libera todas las copias de [AccessibilityNodeInfo] retenidas en este resultado. */
+        fun recycle() {
+            fun safeRecycle(n: AccessibilityNodeInfo?) {
+                if (n == null) return
+                try { n.recycle() } catch (_: Exception) {}
+            }
+            for (c in actions) safeRecycle(c.node)
+            for (c in opens) safeRecycle(c.node)
+            for (c in dialogs) safeRecycle(c.node)
+            for (c in dismissals) safeRecycle(c.node)
+            safeRecycle(scrollable)
+        }
     }
 
     /**
@@ -530,7 +577,9 @@ object PlayButtonFinder {
         val className = node.className?.toString() ?: ""
         val isProgress = className.endsWith("ProgressBar")
         if (isProgress) state.sawProgressBar = true
-        if (state.scrollable == null && node.isScrollable) state.scrollable = node
+        if (state.scrollable == null && node.isScrollable) {
+            state.scrollable = AccessibilityNodeInfo.obtain(node)
+        }
 
         val rawText = node.text?.toString()?.trim() ?: ""
         val rawDesc = node.contentDescription?.toString()?.trim() ?: ""
@@ -563,7 +612,8 @@ object PlayButtonFinder {
             if (alt.length <= MAX_NOTICE_LEN && alt != probe) notices.add(alt)
         }
 
-        val forbidden = probe.isNotEmpty() && FORBIDDEN_WORDS.any { containsWord(probe, it) }
+        val forbidden = probe.isNotEmpty() &&
+            (FORBIDDEN_WORDS.any { containsWord(probe, it) } || isExcludedActionMetadata(probe))
         val clickable = node.isClickable || className.endsWith("Button")
 
         // Diagnóstico: etiquetas de lo clickeable, de TODA la pantalla.
@@ -581,11 +631,13 @@ object PlayButtonFinder {
         }
 
         if (!forbidden) {
+            var addedToPrimaryList = false
             // 1. Por ID de vista — lo más confiable donde existe (excluyendo barra de toolbar).
             if (viewId in ACTION_VIEW_IDS && onScreen && top >= state.bandTop) {
-                actions.add(Candidate(node, SCORE_VIEW_ID, "viewId=$viewId", top, left))
+                actions.add(Candidate(AccessibilityNodeInfo.obtain(node), SCORE_VIEW_ID, "viewId=$viewId", top, left))
+                addedToPrimaryList = true
             } else if (probe.isNotEmpty()) {
-                val isActionWord = ACTION_WORDS.any { containsWord(probe, it) }
+                val isActionWord = isActionText(probe)
                 // En Compose, el contentDescription puede ser "Instalar [Nombre de la app]" (más de 40 chars).
                 val maxAllowedLen = if (isActionWord) 80 else MAX_LABEL_LEN
                 if (probe.length <= maxAllowedLen) {
@@ -602,7 +654,8 @@ object PlayButtonFinder {
                                     inBand -> SCORE_WORD - 10
                                     else -> SCORE_WORD - 20
                                 }
-                                actions.add(Candidate(node, score, "texto='$probe'", top, left))
+                                actions.add(Candidate(AccessibilityNodeInfo.obtain(node), score, "texto='$probe'", top, left))
+                                addedToPrimaryList = true
                             }
                         }
                         OPEN_WORDS.any { containsWord(probe, it) } -> {
@@ -611,15 +664,19 @@ object PlayButtonFinder {
                             val isStoreBranding = probe.contains("google play") || probe.contains("play store") ||
                                 probe.contains("play pass") || probe.contains("play juegos")
                             if (inBand && !isStoreBranding) {
-                                opens.add(Candidate(node, SCORE_WORD, "texto='$probe'", top, left))
+                                opens.add(Candidate(AccessibilityNodeInfo.obtain(node), SCORE_WORD, "texto='$probe'", top, left))
+                                addedToPrimaryList = true
                             }
                         }
                         DIALOG_WORDS.any { containsWord(probe, it) } ->
                             // Los diálogos y confirmaciones aparecen abajo o al centro
-                            if (clickable) dialogs.add(Candidate(node, SCORE_WORD, "dialogo='$probe'", top, left))
+                            if (clickable) dialogs.add(Candidate(AccessibilityNodeInfo.obtain(node), SCORE_WORD, "dialogo='$probe'", top, left))
                         DISMISS_WORDS.any { containsWord(probe, it) } ->
                             // Hojas emergentes y banners publicitarios (ej. "Cerrar hoja", "No gracias")
-                            if (clickable) dismissals.add(Candidate(node, SCORE_WORD, "descartar='$probe'", top, left))
+                            if (clickable) {
+                                dismissals.add(Candidate(AccessibilityNodeInfo.obtain(node), SCORE_WORD, "descartar='$probe'", top, left))
+                                addedToPrimaryList = true
+                            }
                     }
                 }
             }
@@ -632,17 +689,21 @@ object PlayButtonFinder {
             //    Excluimos explícitamente cualquier cosa en la toolbar (top < bandTop),
             //    así como botones de descarte o apertura ya reconocidos.
             if (inBand && clickable && width >= state.minWidth && top >= state.bandTop &&
-                actions.none { it.node == node } &&
-                opens.none { it.node == node } &&
-                dismissals.none { it.node == node }
+                !addedToPrimaryList
             ) {
                 val score = if (inPreferred) SCORE_POSITION else SCORE_POSITION_WIDE
-                actions.add(Candidate(node, score, "posicion top=$top", top, left))
+                actions.add(Candidate(AccessibilityNodeInfo.obtain(node), score, "posicion top=$top", top, left))
             }
         }
 
-        for (i in 0 until node.childCount) {
-            walk(node.getChild(i), depth + 1, state, actions, opens, dialogs, dismissals, labels, notices)
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
+            val child = node.getChild(i) ?: continue
+            try {
+                walk(child, depth + 1, state, actions, opens, dialogs, dismissals, labels, notices)
+            } finally {
+                child.recycle()
+            }
         }
     }
 

@@ -13,11 +13,13 @@ import java.io.FileOutputStream
 
 object ApkInstaller {
     fun installApk(context: Context, apkUri: Uri): String? {
-        val tempFile = File(context.cacheDir, "temp_install.apk")
+        val tempFile = File.createTempFile("temp_install_", ".apk", context.cacheDir)
         try {
-            context.contentResolver.openInputStream(apkUri)?.use { input ->
+            val input = context.contentResolver.openInputStream(apkUri)
+                ?: return "No se pudo abrir el archivo APK seleccionado."
+            input.use { stream ->
                 FileOutputStream(tempFile).use { output ->
-                    input.copyTo(output)
+                    stream.copyTo(output)
                 }
             }
 
@@ -59,7 +61,7 @@ object ApkInstaller {
             // B.6 sigue necesitando el `sha256` publicado en `storeApps`. Se deja pasar,
             // porque negarlo rompería la Tienda administrada entera.
             val verifyResult = if (prepared is SplitApkInstaller.PrepareResult.ReadySplits) {
-                val baseTmp = File(context.cacheDir, "temp_install_base.apk")
+                val baseTmp = File.createTempFile("temp_install_base_", ".apk", context.cacheDir)
                 try {
                     SplitApkInstaller.extractEntryToTempFile(tempFile, prepared.base.entryName, baseTmp)
                     ApkSignatureVerifier.verify(context, baseTmp.absolutePath, packageName)
@@ -139,7 +141,9 @@ object ApkInstaller {
                             }
                         }
 
-                        val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
+                        val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java).apply {
+                            putExtra(com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver.EXTRA_LS_PACKAGE, packageName)
+                        }
                         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
                         } else {

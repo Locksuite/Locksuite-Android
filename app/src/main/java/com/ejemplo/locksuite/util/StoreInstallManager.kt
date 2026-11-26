@@ -88,7 +88,7 @@ object StoreInstallManager {
                     } catch (t: Throwable) {
                         Safe.report("StoreInstallManager.applyOnInstall", t)
                     }
-                    toast(app, "$label instalado correctamente.")
+                    toast(app, "Instalación de $label en curso…")
                 }
             }
         )

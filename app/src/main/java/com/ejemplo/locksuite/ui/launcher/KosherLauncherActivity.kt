@@ -101,10 +101,12 @@ class KosherLauncherActivity : ComponentActivity() {
     private var toqueEsquinaDesde = 0L
     private val emergencyHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val openAdminRunnable = Runnable {
+        toqueEsquinaDesde = 0L
         abrirAdminEmergencia()
     }
 
     private fun abrirAdminEmergencia() {
+        toqueEsquinaDesde = 0L
         try {
             startActivity(
                 Intent(this, com.ejemplo.locksuite.ui.auth.LoginActivity::class.java)
@@ -455,6 +457,9 @@ class KosherLauncherActivity : ComponentActivity() {
         val cambioModo = nuevoModoNokia != nokiaKeypadMode
         nokiaKeypadMode = nuevoModoNokia
         nokiaTouchEnabled = nuevoTouchNokia
+        if (nuevoModoNokia) {
+            actualizarFechaNokia()
+        }
         if (currentPkgVer != launcherPackagesVersion || cambioModo || (nuevoModoNokia && nokiaApps.isEmpty())) {
             launcherPackagesVersion = currentPkgVer
             if (nuevoModoNokia) {
@@ -535,6 +540,9 @@ class KosherLauncherActivity : ComponentActivity() {
     private fun updateTime() {
         val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
         currentTime = sdf.format(Date())
+        if (nokiaKeypadMode) {
+            actualizarFechaNokia()
+        }
     }
 
     private fun startClockUpdates() {
@@ -607,7 +615,7 @@ fun LauncherScreen(
             }
 
             AppItem(pkg, kosherIcon.label, launchIntent, kosherIcon, resolveInfo)
-        }.toMutableList()
+        }.distinctBy { it.packageName }.toMutableList()
 
         // Añadir nuestros propios Ajustes Kosher al final
         val settingsIcon = AppIconMapper.getMapping("com.ejemplo.locksuite.settings", "Ajustes")

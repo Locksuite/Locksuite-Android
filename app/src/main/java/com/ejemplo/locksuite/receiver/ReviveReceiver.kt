@@ -26,18 +26,32 @@ class ReviveReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         com.ejemplo.locksuite.util.Safe.guard("ReviveReceiver.onReceive") {
-            if (intent.action != ProcessHealth.ACTION_REVIVE) return@guard
+            val action = intent.action
+            if (action == BootReceiver.ACTION_BOOT_GATE_TIMEOUT) {
+                if (!com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(context)) return@guard
+                com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(context, "alarma de arranque protegido")
+                com.ejemplo.locksuite.util.BootGate.healStuckProxy(context, "alarma de seguridad")
+                return@guard
+            }
+            if (action != ProcessHealth.ACTION_REVIVE) return@guard
+            if (!com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(context)) return@guard
+            if (com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context).getBoolean("locksuite_purged", false)) {
+                ProcessHealth.cancelAll(context)
+                return@guard
+            }
             DiagLog.firstEntry("alarma de rescate")
             com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(context, "alarma de rescate")
-            try {
-                val watchdog = Intent(context, WatchdogForegroundService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(watchdog)
-                } else {
-                    context.startService(watchdog)
+            if (!WatchdogForegroundService.isRunning()) {
+                try {
+                    val watchdog = Intent(context, WatchdogForegroundService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(watchdog)
+                    } else {
+                        context.startService(watchdog)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("ReviveReceiver", "No se pudo arrancar el Watchdog: ${e.message}")
                 }
-            } catch (e: Exception) {
-                android.util.Log.w("ReviveReceiver", "No se pudo arrancar el Watchdog: ${e.message}")
             }
             BootReceiver.ensureVpnRunning(context)
             // Se vuelve a armar sola: si el Watchdog no llegara a correr, esto sigue vigilando.

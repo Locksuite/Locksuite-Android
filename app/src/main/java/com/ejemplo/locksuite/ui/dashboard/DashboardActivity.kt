@@ -38,6 +38,7 @@ import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.ui.draw.scale
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -72,8 +73,29 @@ import java.util.Locale
 class DashboardActivity : ComponentActivity() {
 
     companion object {
+        private const val INTERNAL_FLOW_TTL_MS = 60_000L
+
         @Volatile
-        var isLaunchingInternalFlow: Boolean = false
+        private var internalFlowActive: Boolean = false
+
+        @Volatile
+        private var internalFlowSetAtElapsedMs: Long = 0L
+
+        var isLaunchingInternalFlow: Boolean
+            get() {
+                if (!internalFlowActive) return false
+                val elapsed = android.os.SystemClock.elapsedRealtime() - internalFlowSetAtElapsedMs
+                if (elapsed < 0L || elapsed > INTERNAL_FLOW_TTL_MS) {
+                    internalFlowActive = false
+                    internalFlowSetAtElapsedMs = 0L
+                    return false
+                }
+                return true
+            }
+            set(value) {
+                internalFlowActive = value
+                internalFlowSetAtElapsedMs = if (value) android.os.SystemClock.elapsedRealtime() else 0L
+            }
     }
 
     private val vpnUiRefreshTick = mutableIntStateOf(0)
@@ -249,10 +271,12 @@ fun DashboardScreen(
         }
     }
 
+    val dashboardScope = rememberCoroutineScope()
     var showReauthDialogForPermissions by remember { mutableStateOf(false) }
     var showReauthDialogForUninstall by remember { mutableStateOf(false) }
     var reauthPinInput by remember { mutableStateOf("") }
     var reauthError by remember { mutableStateOf("") }
+    var reauthBusy by remember { mutableStateOf(false) }
 
     val navyDark = Color(0xFF0E141B)
     val navyMedium = Color(0xFF1A222C)
@@ -262,10 +286,12 @@ fun DashboardScreen(
         val actionText = if (showReauthDialogForPermissions) "revocar todos los privilegios" else "desinstalar la aplicación"
         AlertDialog(
             onDismissRequest = {
-                showReauthDialogForPermissions = false
-                showReauthDialogForUninstall = false
-                reauthPinInput = ""
-                reauthError = ""
+                if (!reauthBusy) {
+                    showReauthDialogForPermissions = false
+                    showReauthDialogForUninstall = false
+                    reauthPinInput = ""
+                    reauthError = ""
+                }
             },
             title = {
                 Text("Re-autenticación Requerida", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -283,6 +309,7 @@ fun DashboardScreen(
                             reauthPinInput = it
                             reauthError = ""
                         },
+                        enabled = !reauthBusy,
                         label = { Text("PIN de Administrador", color = Color.White.copy(alpha = 0.8f)) },
                         visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                         singleLine = true,
@@ -303,63 +330,42 @@ fun DashboardScreen(
             },
             confirmButton = {
                 Button(
+                    enabled = !reauthBusy,
                     onClick = {
                         if (com.ejemplo.locksuite.security.PinManager.verifyPin(context, reauthPinInput)) {
                             com.ejemplo.locksuite.security.PinManager.resetAttempts(context)
-                            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
-                            val pm = context.packageManager
-                            val adminComponent = ComponentName(context, com.ejemplo.locksuite.receiver.DeviceAdminReceiver::class.java)
-                            val aliasComponent = ComponentName(context, "com.ejemplo.locksuite.LauncherAlias")
-
-                            if (showReauthDialogForPermissions) {
-                                showReauthDialogForPermissions = false
+                            val isRevokeOnly = showReauthDialogForPermissions
+                            val isUninstall = showReauthDialogForUninstall
+                            val appCtx = context.applicationContext
+                            reauthPinInput = ""
+                            reauthBusy = true
+                            dashboardScope.launch {
                                 try {
-                                    val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
-                                    policyManager.clearAllRestrictions()
-                                    pm.setComponentEnabledSetting(
-                                        aliasComponent,
-                                        PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                                        PackageManager.DONT_KILL_APP
-                                    )
-                                    if (dpm.isDeviceOwnerApp(context.packageName)) {
-                                        dpm.clearDeviceOwnerApp(context.packageName)
+                                    val released = withContext(Dispatchers.IO) {
+                                        com.ejemplo.locksuite.mdm.DeviceRelease.releaseAndPrepareUninstall(
+                                            context = appCtx,
+                                            promptUninstall = isUninstall
+                                        )
                                     }
-                                    dpm.removeActiveAdmin(adminComponent)
-                                    com.ejemplo.locksuite.security.SessionManager.closeSession()
-                                    Toast.makeText(context, "Permisos MDM revocados con éxito.", Toast.LENGTH_LONG).show()
-                                    (context as? Activity)?.finishAffinity()
+                                    reauthBusy = false
+                                    showReauthDialogForPermissions = false
+                                    showReauthDialogForUninstall = false
+                                    if (isRevokeOnly) {
+                                        val msg = if (released) {
+                                            "Permisos MDM revocados con éxito."
+                                        } else {
+                                            "Restricciones levantadas (verifique estado de Device Owner)."
+                                        }
+                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                        (context as? Activity)?.finishAffinity()
+                                    } else if (isUninstall) {
+                                        (context as? Activity)?.finish()
+                                    }
                                 } catch (e: Exception) {
-                                    e.printStackTrace()
-                                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
-                                }
-                            } else if (showReauthDialogForUninstall) {
-                                showReauthDialogForUninstall = false
-                                try {
-                                    val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
-                                    policyManager.clearAllRestrictions()
-                                    pm.setComponentEnabledSetting(
-                                        aliasComponent,
-                                        PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                                        PackageManager.DONT_KILL_APP
-                                    )
-                                    if (dpm.isDeviceOwnerApp(context.packageName)) {
-                                        dpm.clearDeviceOwnerApp(context.packageName)
-                                    }
-                                    dpm.removeActiveAdmin(adminComponent)
-                                    com.ejemplo.locksuite.security.SessionManager.closeSession()
-                                    @Suppress("DEPRECATION")
-                                    val uninstallIntent = Intent(Intent.ACTION_UNINSTALL_PACKAGE).apply {
-                                        data = Uri.parse("package:${context.packageName}")
-                                        putExtra(Intent.EXTRA_RETURN_RESULT, true)
-                                    }
-                                    context.startActivity(uninstallIntent)
-                                    (context as? Activity)?.finish()
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
-                                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                                    reauthBusy = false
+                                    reauthError = "Error: ${e.message ?: e.javaClass.simpleName}"
                                 }
                             }
-                            reauthPinInput = ""
                         } else {
                             reauthPinInput = ""
                             when (val status = com.ejemplo.locksuite.security.PinManager.recordFailedAttempt(context)) {
@@ -1242,15 +1248,20 @@ fun PoliciesTabContent(context: Context) {
     val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     val isDeviceOwner = dpm.isDeviceOwnerApp(context.packageName)
 
+    val policyScope = rememberCoroutineScope()
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        uri?.let {
-            val error = com.ejemplo.locksuite.util.ApkInstaller.installApk(context, it)
-            if (error != null) {
-                Toast.makeText(context, error, Toast.LENGTH_LONG).show()
-            } else {
-                Toast.makeText(context, "Iniciando instalación programática...", Toast.LENGTH_SHORT).show()
+        uri?.let { selectedUri ->
+            policyScope.launch {
+                val error = withContext(Dispatchers.IO) {
+                    com.ejemplo.locksuite.util.ApkInstaller.installApk(context, selectedUri)
+                }
+                if (error != null) {
+                    Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, "Iniciando instalación programática...", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -1516,7 +1527,6 @@ fun PoliciesTabContent(context: Context) {
                         }
                         Button(
                             onClick = {
-                                DashboardActivity.isLaunchingInternalFlow = true
                                 showMultimediaDialog = true
                             },
                             colors = ButtonDefaults.buttonColors(
@@ -1532,11 +1542,9 @@ fun PoliciesTabContent(context: Context) {
                 if (showMultimediaDialog) {
                     com.ejemplo.locksuite.ui.provisioning.MultimediaProvisioningDialog(
                         onDismiss = {
-                            DashboardActivity.isLaunchingInternalFlow = false
                             showMultimediaDialog = false
                         },
                         onActivated = {
-                            DashboardActivity.isLaunchingInternalFlow = false
                             showMultimediaDialog = false
                             refreshKey++
                             Toast.makeText(context, "¡Device Owner activado con éxito!", Toast.LENGTH_LONG).show()
@@ -2600,17 +2608,20 @@ fun TempInstallWindowCard(refreshKey: Int, onChanged: () -> Unit) {
     var amountText by remember { mutableStateOf("30") }
     var unitMultiplierMs by remember { mutableLongStateOf(60_000L) } // 60_000 = Min, 3_600_000 = H, 86_400_000 = D
 
-    LaunchedEffect(status.active, status.deadlineWall, refreshKey) {
-        while (status.active) {
-            val rem = com.ejemplo.locksuite.mdm.TempInstallWindowManager.remainingMs(context)
-            remainingMs = rem
-            if (rem <= 0L) {
-                com.ejemplo.locksuite.mdm.TempInstallWindowManager.checkAndExpire(context)
-                status = com.ejemplo.locksuite.mdm.TempInstallWindowManager.statusForSync(context)
-                onChanged()
-                break
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    LaunchedEffect(status.active, status.deadlineWall, refreshKey, lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (status.active) {
+                val rem = com.ejemplo.locksuite.mdm.TempInstallWindowManager.remainingMs(context)
+                remainingMs = rem
+                if (rem <= 0L) {
+                    com.ejemplo.locksuite.mdm.TempInstallWindowManager.checkAndExpire(context)
+                    status = com.ejemplo.locksuite.mdm.TempInstallWindowManager.statusForSync(context)
+                    onChanged()
+                    break
+                }
+                kotlinx.coroutines.delay(1_000L)
             }
-            kotlinx.coroutines.delay(1_000L)
         }
     }
 
@@ -3017,6 +3028,7 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PresetsTabContent(context: Context) {
     val policyManager = remember { PolicyManager(context) }
@@ -3031,19 +3043,24 @@ fun PresetsTabContent(context: Context) {
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri: Uri? ->
-        uri?.let {
-            try {
-                val jsonToWrite = pendingExportJson
-                if (!jsonToWrite.isNullOrEmpty()) {
-                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                        outputStream.bufferedWriter().use { writer ->
-                            writer.write(jsonToWrite)
+        uri?.let { targetUri ->
+            val jsonToWrite = pendingExportJson
+            val exportName = pendingExportName
+            if (!jsonToWrite.isNullOrEmpty()) {
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            context.contentResolver.openOutputStream(targetUri)?.use { outputStream ->
+                                outputStream.bufferedWriter().use { writer ->
+                                    writer.write(jsonToWrite)
+                                }
+                            }
                         }
+                        Toast.makeText(context, "✅ Perfil '$exportName' exportado con éxito.", Toast.LENGTH_LONG).show()
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "❌ Error al exportar perfil: ${e.message}", Toast.LENGTH_LONG).show()
                     }
-                    Toast.makeText(context, "✅ Perfil '$pendingExportName' exportado con éxito.", Toast.LENGTH_LONG).show()
                 }
-            } catch (e: Exception) {
-                Toast.makeText(context, "❌ Error al exportar perfil: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -3127,9 +3144,10 @@ fun PresetsTabContent(context: Context) {
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Row(
+                    FlowRow(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Button(
                             onClick = {
@@ -3148,8 +3166,7 @@ fun PresetsTabContent(context: Context) {
                                     Toast.makeText(context, "Perfil guardado con éxito.", Toast.LENGTH_SHORT).show()
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C438), contentColor = Color(0xFF0E141B)),
-                            modifier = Modifier.weight(1f)
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C438), contentColor = Color(0xFF0E141B))
                         ) {
                             Text("Guardar Local", fontWeight = FontWeight.Bold)
                         }
@@ -3162,12 +3179,16 @@ fun PresetsTabContent(context: Context) {
                                     }
                                     pendingExportJson = jsonStr
                                     pendingExportName = name
-                                    DashboardActivity.isLaunchingInternalFlow = true
-                                    exportLauncher.launch("${name.replace("\\s+".toRegex(), "_")}.locksuite")
+                                    try {
+                                        DashboardActivity.isLaunchingInternalFlow = true
+                                        exportLauncher.launch("${name.replace("\\s+".toRegex(), "_")}.locksuite")
+                                    } catch (e: Exception) {
+                                        DashboardActivity.isLaunchingInternalFlow = false
+                                        Toast.makeText(context, "Error al abrir selector: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2980B9), contentColor = Color.White),
-                            modifier = Modifier.weight(1f)
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2980B9), contentColor = Color.White)
                         ) {
                             Text("Exportar a Archivo", fontWeight = FontWeight.Bold)
                         }
@@ -3195,6 +3216,7 @@ fun PresetsTabContent(context: Context) {
                                 DashboardActivity.isLaunchingInternalFlow = true
                                 importLauncher.launch("*/*")
                             } catch (e: Exception) {
+                                DashboardActivity.isLaunchingInternalFlow = false
                                 Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
                         },
@@ -3223,15 +3245,16 @@ fun PresetsTabContent(context: Context) {
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier.padding(12.dp).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
                             Button(
                                 onClick = {
                                     scope.launch {
@@ -3258,8 +3281,13 @@ fun PresetsTabContent(context: Context) {
                                 onClick = {
                                     pendingExportJson = jsonStr
                                     pendingExportName = name
-                                    DashboardActivity.isLaunchingInternalFlow = true
-                                    exportLauncher.launch("${name.replace("\\s+".toRegex(), "_")}.locksuite")
+                                    try {
+                                        DashboardActivity.isLaunchingInternalFlow = true
+                                        exportLauncher.launch("${name.replace("\\s+".toRegex(), "_")}.locksuite")
+                                    } catch (e: Exception) {
+                                        DashboardActivity.isLaunchingInternalFlow = false
+                                        Toast.makeText(context, "Error al exportar: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    }
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2980B9)),
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
@@ -3762,10 +3790,19 @@ fun ServicesTabContent(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Comprobar dinámicamente si el servicio de accesibilidad está activo (Evaluación en recomposición)
-                        val expectedService = "com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService"
-                        val settingValue = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
-                        val accessibilityEnabled = settingValue.contains(expectedService)
+                        // Comprobar dinámicamente si el servicio de accesibilidad está activo o en estado zombie
+                        val accRunning = com.ejemplo.locksuite.util.AccessibilityEnforcer.isServiceRunning(context)
+                        val accZombie = !accRunning && com.ejemplo.locksuite.util.AccessibilityEnforcer.isZombie(context)
+                        val badgeColor = when {
+                            accRunning -> Color(0xFF27AE60)
+                            accZombie -> Color(0xFFD35400)
+                            else -> Color(0xFFE74C3C)
+                        }
+                        val badgeLabel = when {
+                            accRunning -> "ACTIVO"
+                            accZombie -> "ZOMBIE"
+                            else -> "INACTIVO"
+                        }
 
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3774,11 +3811,11 @@ fun ServicesTabContent(
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(4.dp))
-                                        .background(if (accessibilityEnabled) Color(0xFF27AE60) else Color(0xFFE74C3C))
+                                        .background(badgeColor)
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
-                                        text = if (accessibilityEnabled) "ACTIVO" else "INACTIVO",
+                                        text = badgeLabel,
                                         color = Color.White,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold
@@ -3803,6 +3840,7 @@ fun ServicesTabContent(
                                     }
                                     context.startActivity(intent)
                                 } catch (e: Exception) {
+                                    DashboardActivity.isLaunchingInternalFlow = false
                                     Toast.makeText(context, "No se pudo abrir los Ajustes de Accesibilidad. Vaya manualmente.", Toast.LENGTH_LONG).show()
                                 }
                             },
@@ -4112,26 +4150,39 @@ fun ServicesTabContent(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DnsActivityTabContent(context: Context) {
     val engine = remember { LockSuiteApplication.domainRuleEngine }
     val buffer = remember { LockSuiteApplication.dnsActivityBuffer }
     val ruleManager = remember { LockSuiteApplication.domainRuleManager }
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
 
     var windowMinutes by remember { mutableIntStateOf(5) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
     var newDomainText by remember { mutableStateOf("") }
 
-    LaunchedEffect(windowMinutes) {
-        while (true) {
-            kotlinx.coroutines.delay(2000)
-            refreshKey++
+    LaunchedEffect(windowMinutes, lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                kotlinx.coroutines.delay(2000)
+                refreshKey++
+            }
         }
     }
 
-    LaunchedEffect(Unit) {
-        buffer.events.collect { refreshKey++ }
+    LaunchedEffect(lifecycleOwner) {
+        var lastBumpMs = 0L
+        lifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            buffer.events.collect {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastBumpMs >= 750L) {
+                    lastBumpMs = now
+                    refreshKey++
+                }
+            }
+        }
     }
 
     // Reglas guardadas (persistentes): NO dependen de la ventana de 1h. Aca
@@ -4192,7 +4243,11 @@ fun DnsActivityTabContent(context: Context) {
                     )
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Button(
                         onClick = {
                             val d = newDomainText.trim()
@@ -4203,8 +4258,7 @@ fun DnsActivityTabContent(context: Context) {
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB71C1C)),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                        modifier = Modifier.weight(1f)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                     ) { Text("Bloquear", fontSize = 10.sp) }
                     Button(
                         onClick = {
@@ -4216,8 +4270,7 @@ fun DnsActivityTabContent(context: Context) {
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF1744)),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                        modifier = Modifier.weight(1f)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                     ) { Text("Forzar bloq.", fontSize = 10.sp) }
                     Button(
                         onClick = {
@@ -4229,8 +4282,7 @@ fun DnsActivityTabContent(context: Context) {
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                        modifier = Modifier.weight(1f)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                     ) { Text("Permitir", fontSize = 10.sp) }
                     Button(
                         onClick = {
@@ -4242,8 +4294,7 @@ fun DnsActivityTabContent(context: Context) {
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676), contentColor = Color.Black),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                        modifier = Modifier.weight(1f)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                     ) { Text("Forzar perm.", fontSize = 10.sp) }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
@@ -4524,12 +4575,15 @@ private fun WhitelistTabContent(context: Context) {
         audit = com.ejemplo.locksuite.mdm.WhitelistManager.auditSnapshot()
     }
 
-    // La auditoría se refresca sola mientras la pantalla está abierta: durante la
+    // La auditoría se refresca sola mientras la pantalla está abierta y en STARTED: durante la
     // simulación es un contador vivo y mirarlo es justamente lo que hay que hacer.
-    LaunchedEffect(enabled) {
-        while (true) {
-            kotlinx.coroutines.delay(3000)
-            audit = com.ejemplo.locksuite.mdm.WhitelistManager.auditSnapshot()
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    LaunchedEffect(enabled, lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                kotlinx.coroutines.delay(3000)
+                audit = com.ejemplo.locksuite.mdm.WhitelistManager.auditSnapshot()
+            }
         }
     }
 

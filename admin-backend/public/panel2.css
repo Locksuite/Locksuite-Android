@@ -342,23 +342,26 @@
   background: var(--md-sys-color-surface-container, #1A222C);
   transition: border-color 150ms, background-color 150ms;
 }
-.ls-approw.allow { border-left: 3.5px solid var(--md-sys-color-success, #34D399); }
-.ls-approw.block { border-left: 3.5px solid var(--md-sys-color-error, #F87171); }
-.ls-approw-head {
+.ls-approw.allow, .ls-approw.st-allow { border-left: 3.5px solid var(--md-sys-color-success, #34D399); }
+.ls-approw.block, .ls-approw.st-block { border-left: 3.5px solid var(--md-sys-color-error, #F87171); }
+.ls-approw.pending { border-color: var(--md-sys-color-primary, #F5C438); }
+.ls-approw-head, .ls-apphead {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
-.ls-approw-title {
+.ls-appgrow { flex: 1; min-width: 180px; }
+.ls-approw-title, .ls-appname {
   font-weight: 600;
   font-size: 13.5px;
   color: var(--md-sys-color-on-surface, #E2E8F0);
 }
-.ls-approw-pkg {
+.ls-approw-pkg, .ls-apppkg {
   color: var(--text-muted);
   font-size: 11.5px;
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+  word-break: break-all;
 }
 .ls-approw-badges {
   display: flex;
@@ -406,17 +409,29 @@
   font-weight: 700;
 }
 
-.ls-approw-doms {
+.ls-approw-doms, .ls-appbody {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px dashed var(--md-sys-color-outline-variant, #2A3647);
   font-size: 12px;
   color: var(--md-sys-color-on-surface-variant, #94A3B8);
-  display: none;
 }
+.ls-approw-doms { display: none; }
+.ls-appbody.hidden { display: none; }
 .ls-approw.open .ls-approw-doms { display: block; }
+.ls-domtitle {
+  margin: 10px 0 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.ls-domlist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
 
-.ls-domtag {
+.ls-domtag, .ls-dom {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -425,26 +440,31 @@
   border-radius: var(--md-sys-shape-corner-extra-small, 4px);
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 11.5px;
+  word-break: break-all;
 }
-.ls-domtag.allow {
+.ls-domtag.allow, .ls-dom.allow {
   background: rgba(52, 211, 153, 0.14);
   color: var(--md-sys-color-on-success-container, #A7F3D0);
   border: 1px solid rgba(52, 211, 153, 0.3);
 }
-.ls-domtag.block {
+.ls-domtag.block, .ls-dom.block {
   background: rgba(248, 113, 113, 0.14);
   color: var(--md-sys-color-on-error-container, #FECACA);
   border: 1px solid rgba(248, 113, 113, 0.32);
 }
-.ls-domtag.base  { opacity: 0.82; }
-.ls-domtag button {
+.ls-domtag.base, .ls-dom.off {
+  opacity: 0.82;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+.ls-domtag button, .ls-dom button {
   all: unset;
   cursor: pointer;
   opacity: 0.7;
   padding: 0 2px;
   font-weight: 700;
 }
-.ls-domtag button:hover { opacity: 1; }
+.ls-domtag button:hover, .ls-dom button:hover { opacity: 1; }
 
 /* ── Policies Accordion & M3 Switch ───────────────────────────────────────── */
 .ls-polgroup {
@@ -563,11 +583,19 @@
 }
 
 /* ── Toast / Snackbar (M3 Inverse-Style High-Contrast Snackbar) ───────────── */
-.ls-toast {
+.ls-toasts {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  z-index: 80;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 24px));
+  pointer-events: none;
+}
+.ls-toast {
+  pointer-events: auto;
   padding: 12px 18px;
   border-radius: var(--md-sys-shape-corner-small, 8px);
   font-size: 13px;
@@ -576,9 +604,12 @@
   color: var(--md-sys-color-on-surface, #E2E8F0);
   border: 1px solid var(--md-sys-color-outline-variant, #2A3647);
   box-shadow: var(--md-sys-elevation-level3, 0 8px 20px rgba(0,0,0,0.38));
+  transition: opacity 260ms ease;
+  word-break: break-word;
 }
-.ls-toast.ok  { border-left: 4px solid var(--md-sys-color-success, #34D399); }
-.ls-toast.err { border-left: 4px solid var(--md-sys-color-error, #F87171); }
+.ls-toast.ok   { border-left: 4px solid var(--md-sys-color-success, #34D399); }
+.ls-toast.warn { border-left: 4px solid var(--md-sys-color-primary, #F5C438); }
+.ls-toast.err, .ls-toast.error { border-left: 4px solid var(--md-sys-color-error, #F87171); }
 
 /* ── Progress Log ─────────────────────────────────────────────────────────── */
 .ls-progress {
@@ -776,7 +807,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ls-irow- acts, .ls-irow-acts {
+.ls-irow-acts {
   display: flex;
   gap: 5px;
   flex-wrap: wrap;
@@ -961,7 +992,8 @@
   .ls-irow { padding: 9px 11px; }
   .ls-irow-acts { width: 100%; justify-content: flex-start; }
   .ls-tog { padding: 6px 9px; font-size: 11px; }
-  .ls-approw-head { gap: 6px; }
+  .ls-approw-head, .ls-apphead { gap: 6px; }
+  .ls-toasts { left: 12px; right: 12px; bottom: 82px; max-width: none; }
   .ls-seg button { padding: 6px 9px; }
   .ls-cart {
     left: 8px;

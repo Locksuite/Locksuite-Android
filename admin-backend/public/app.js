@@ -70,7 +70,11 @@ function arrayOrCsv(value) {
     return value || "";
 }
 
-let groupsListener = null;
+let groupsListener = null,
+    allowedPackagesListener = null,
+    storeAppsListener = null,
+    whitelistDecisionsListener = null,
+    whitelistCustomListener = null;
 
 function startRealtimeSync() {
     devicesListener && database.ref("devices").off("value", devicesListener), devicesListener = database.ref("devices").on("value", e => {
@@ -128,6 +132,31 @@ function startRealtimeSync() {
     }, e => {
         // Reglas viejas sin el nodo `deviceClaims`: no es un error del panel.
         console.warn("Pedidos de re-vinculación no disponibles:", e && e.message);
+    });
+
+    allowedPackagesListener && database.ref("globalSettings/allowedPackages").off("value", allowedPackagesListener),
+    allowedPackagesListener = database.ref("globalSettings/allowedPackages").on("value", snap => {
+        if (globalAllowedPackagesInput) {
+            const val = snap.val() || [];
+            globalAllowedPackagesInput.value = Array.isArray(val) ? val.join(", ") : Object.values(val).join(", ");
+        }
+    });
+
+    storeAppsListener && database.ref("storeApps").off("value", storeAppsListener),
+    storeAppsListener = database.ref("storeApps").on("value", snap => {
+        renderStoreApps(snap.val() || {});
+    });
+
+    whitelistDecisionsListener && database.ref("globalSettings/whitelist/decisions").off("value", whitelistDecisionsListener),
+    whitelistDecisionsListener = database.ref("globalSettings/whitelist/decisions").on("value", snap => {
+        whitelistDecisions = snap.val() || {};
+        renderWhitelistCatalog();
+    });
+
+    whitelistCustomListener && database.ref("globalSettings/whitelist/custom").off("value", whitelistCustomListener),
+    whitelistCustomListener = database.ref("globalSettings/whitelist/custom").on("value", snap => {
+        whitelistCustom = snap.val() || {};
+        renderWhitelistCatalog();
     });
 }
 
@@ -224,6 +253,10 @@ function stopRealtimeSync() {
     devicesListener && (database.ref("devices").off("value", devicesListener), devicesListener = null)
     groupsListener && (database.ref("groups").off("value", groupsListener), groupsListener = null)
     archivedListener && (database.ref("archivedDevices").off("value", archivedListener), archivedListener = null)
+    allowedPackagesListener && (database.ref("globalSettings/allowedPackages").off("value", allowedPackagesListener), allowedPackagesListener = null)
+    storeAppsListener && (database.ref("storeApps").off("value", storeAppsListener), storeAppsListener = null)
+    whitelistDecisionsListener && (database.ref("globalSettings/whitelist/decisions").off("value", whitelistDecisionsListener), whitelistDecisionsListener = null)
+    whitelistCustomListener && (database.ref("globalSettings/whitelist/custom").off("value", whitelistCustomListener), whitelistCustomListener = null)
 }
 
 function renderDevicesList(e) {
@@ -842,7 +875,7 @@ function getAppIconUrl(packageName) {
     if (presetIcons[packageName]) {
         return presetIcons[packageName];
     }
-    return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a0aec0'><path d='M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z'/></svg>";
+    return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAKklEQVR42mNgGAWDDixYd+A/MiZXfNQC8i0YTUWjFoymotFIHk1FIxIAAKijt2CeA9AhAAAAAElFTkSuQmCC";
 }
 
 const PER_APP_INTERNET_SUPPORTED = new Set([
@@ -1543,7 +1576,7 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
             }
             d = t.pin, s = t.remember;
             verifiedDevicePins[e] = t.pin;
-            const dHash = c.pinHash || (c.info && c.info.pinHash);
+            const dHash = c && (c.pinHash || (c.info && c.info.pinHash));
             if (dHash) {
                 verifiedDevicePinHashes[e] = dHash;
             }
@@ -2111,27 +2144,9 @@ sidebarLockBtn.addEventListener("click", () => {
     runCommandOnDevice(selectedDeviceId, "CHANGE_PIN", null, sidebarChangePinBtn, null, { newPin: pin });
     sidebarNewPinInput.value = "";
 }), auth.onAuthStateChanged(async e => {
-    if (e) {
+    if (e && !e.isAnonymous) {
         loginError.textContent = "Verificando permisos...";
-        // ─────────────────────────────────────────────────────────────────────
-        // Por qué esto no es una simple lectura:
-        //
-        // La regla de `authorizedAdminsUids` en database.rules.json es
-        // auto-referencial: para poder LEER si sos admin, tenés que YA estar en
-        // la lista. Entonces una cuenta no autorizada no recibe "vacío", recibe
-        // permission_denied — que antes caía en el catch de abajo y mostraba
-        // "Error al verificar permisos: ... Client doesn't have permission to
-        // access the desired data". Eso parece una falla del sistema (o de la
-        // app Android) cuando en realidad significa, simplemente, que esa cuenta
-        // no está autorizada. Se perdió tiempo real buscándolo en el lugar
-        // equivocado.
-        //
-        // leerFlag() trata permission_denied como "no autorizado" y deja pasar
-        // cualquier otro error (red, base caída) al catch, que sí es un error de
-        // verdad. Y cuando no está autorizada, se muestra el UID en pantalla:
-        // es el dato exacto que hay que copiar a la consola de Firebase.
-        // ─────────────────────────────────────────────────────────────────────
-        const esHtml = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+        const esHtml = v => String(v || "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
         const leerFlag = async ruta => {
             try {
                 const snap = await database.ref(ruta).once("value");
@@ -2143,12 +2158,9 @@ sidebarLockBtn.addEventListener("click", () => {
             }
         };
         try {
-            let autorizado = await leerFlag(`authorizedAdminsUids/${e.uid}`);
+            const autorizado = await leerFlag(`authorizedAdminsUids/${e.uid}`);
             if (!autorizado) {
-                autorizado = await leerFlag(`authorizedAdmins/${e.email.toLowerCase().replace(/[.@]/g, "_")}`);
-            }
-            if (!autorizado) {
-                loginError.innerHTML = "Esta cuenta no está autorizada para administrar.<br>Cuenta: <b>" + esHtml(e.email) +
+                loginError.innerHTML = "Esta cuenta no está autorizada para administrar.<br>Cuenta: <b>" + esHtml(e.email || "(sin email)") +
                     "</b><br>UID: <b style=\"word-break:break-all\">" + esHtml(e.uid) + "</b><br>" +
                     "<span style=\"color:var(--text-gray)\">Para autorizarla: Firebase Console \u2192 Realtime Database \u2192 " +
                     "<code>authorizedAdminsUids</code> \u2192 agregar el UID de arriba con valor <code>true</code>.</span>";
@@ -2158,7 +2170,10 @@ sidebarLockBtn.addEventListener("click", () => {
         } catch (err) {
             loginError.textContent = "Error al verificar permisos: " + err.message, auth.signOut()
         }
-    } else stopRealtimeSync(), closeDeviceSidebar(), dashboardScreen.classList.add("hidden"), loginScreen.classList.remove("hidden")
+    } else {
+        if (e && e.isAnonymous) auth.signOut().catch(() => {});
+        stopRealtimeSync(), closeDeviceSidebar(), dashboardScreen.classList.add("hidden"), loginScreen.classList.remove("hidden");
+    }
 }), loginButton.addEventListener("click", async () => {
     loginError.textContent = "";
     try {
@@ -2345,7 +2360,7 @@ globalUpdateLocksuiteBtn.addEventListener("click", () => {
         let failCount = 0;
         const promises = deviceIds.map(deviceId => {
             return runCommandOnDevice(deviceId, "UPDATE_LOCKSUITE")
-                .then(() => { successCount++; })
+                .then(ok => { if (ok) successCount++; else failCount++; })
                 .catch(() => { failCount++; });
         });
         Promise.all(promises).finally(() => {
@@ -2399,8 +2414,9 @@ if (sidebarDeleteBtn) {
         try {
             await database.ref(`devices/${selectedDeviceId}`).remove();
             await database.ref(`deviceSecrets/${selectedDeviceId}`).remove().catch(() => {});
-            // 6/11/2026 (B.110): "todos los datos del dispositivo" incluye su registro de errores.
+            // 6/11/2026 (B.110): "todos los datos del dispositivo" incluye su registro de errores y claims.
             await database.ref(`deviceDiag/${selectedDeviceId}`).remove().catch(() => {});
+            await database.ref(`deviceClaims/${selectedDeviceId}`).remove().catch(() => {});
             sidebarStatusMsg.textContent = "✔ Dispositivo eliminado.";
             closeDeviceSidebar();
         } catch (e) {
@@ -2495,7 +2511,7 @@ const whitelistPushAllBtn = document.getElementById("whitelist-push-all-btn");
 
 const WHITELIST_BUILTIN = [
     { pkg: "com.waze", label: "Waze", allow: 3, block: 5 },
-    { pkg: "com.didiglobal.passenger", label: "DiDi", allow: 4, block: 6 },
+    { pkg: "com.didiglobal.passenger", label: "DiDi", allow: 4, block: 7 },
     { pkg: "com.mercadopago.wallet", label: "Mercado Pago", allow: 10, block: 9 },
     { pkg: "com.google.android.apps.walletnfcrel", label: "Google Wallet / Pay", allow: 4, block: 0 },
     { pkg: "ar.com.personalpay", label: "Personal Pay", allow: 4, block: 0 },
@@ -3069,15 +3085,19 @@ function renderPresetsList(presets) {
 const savePresetBtn = document.getElementById("save-current-preset-btn");
 if (savePresetBtn) {
     savePresetBtn.addEventListener("click", async () => {
-        if (!selectedDeviceId || !currentDevicesData[selectedDeviceId]) {
-            alert("Seleccioná primero un celular en la pestaña 'Celulares' para usar su configuración como plantilla.");
+        const masterSelect = document.getElementById("master-profile-device");
+        const targetId = (selectedDeviceId && currentDevicesData[selectedDeviceId])
+            ? selectedDeviceId
+            : (masterSelect && masterSelect.value && currentDevicesData[masterSelect.value] ? masterSelect.value : null);
+        if (!targetId) {
+            alert("Seleccioná primero un celular en la pestaña 'Celulares' o en el desplegable superior para usar su configuración como plantilla.");
             return;
         }
 
         const name = prompt("Escribí el nombre para este perfil de bloqueo (ej. 'Bloqueo Fuerte A'):");
         if (!name || !name.trim()) return;
 
-        const dev = currentDevicesData[selectedDeviceId];
+        const dev = currentDevicesData[targetId];
         const dataObj = {
             restrictions: {
                 no_factory_reset: !!dev.factoryResetBlocked,
@@ -3428,13 +3448,7 @@ if (createGroupBtn) {
         database.ref("groups").push({
             name: groupName.trim(),
             devices: {},
-            policies: {
-                playstoreBlocked: false,
-                cameraDisabled: false,
-                adBlockingEnabled: false,
-                gifsBlocked: false,
-                webviewBlocked: false
-            }
+            policies: {}
         }).then(() => {
             console.log("Grupo creado con éxito");
         }).catch(err => {
@@ -3728,13 +3742,30 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
             blockMlInMp: ["BLOCK_ML_IN_MP", "UNBLOCK_ML_IN_MP"],
             blockPopularNonKosher: ["BLOCK_POPULAR_NON_KOSHER", "UNBLOCK_POPULAR_NON_KOSHER"],
             hideSuspendedApps: ["ENABLE_HIDE_SUSPENDED_APPS", "DISABLE_HIDE_SUSPENDED_APPS"],
-            settingsEvasionEnabled: ["ENABLE_SETTINGS_EVASION", "DISABLE_SETTINGS_EVASION"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
+            accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
+            googleAccountWebBlocked: ["BLOCK_GOOGLE_ACCOUNT_WEB", "UNBLOCK_GOOGLE_ACCOUNT_WEB"],
+            googleAccountBlockStrict: ["SET_GOOGLE_ACCOUNT_MODE_STRICT", "SET_GOOGLE_ACCOUNT_MODE_NORMAL"],
+            captivePortalGuard: ["ENABLE_CAPTIVE_PORTAL_GUARD", "DISABLE_CAPTIVE_PORTAL_GUARD"],
+            captivePortalCoverImages: ["ENABLE_CAPTIVE_PORTAL_IMAGES", "DISABLE_CAPTIVE_PORTAL_IMAGES"],
+            contactPhotoPickerBlocked: ["BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER"],
+            geminiMessagesBlocked: ["BLOCK_GEMINI_MESSAGES", "UNBLOCK_GEMINI_MESSAGES"],
+            santanderBlocked: ["BLOCK_SANTANDER", "UNBLOCK_SANTANDER"],
+            localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
+            settingsEvasionEnabled: ["ENABLE_SETTINGS_EVASION", "DISABLE_SETTINGS_EVASION"],
+            accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
+            accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],
+            accSuspendAll: ["ENABLE_ACC_SUSPEND_ALL", "DISABLE_ACC_SUSPEND_ALL"],
+            bootGateWaitAccessibility: ["ENABLE_BOOT_GATE_ACCESSIBILITY", "DISABLE_BOOT_GATE_ACCESSIBILITY"],
+            bootGateEnabled: ["ENABLE_BOOT_GATE", "DISABLE_BOOT_GATE"],
             webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
         };
 
         for (const [policyKey, mapCmds] of Object.entries(mapping)) {
+            if (!Object.prototype.hasOwnProperty.call(policies, policyKey) || typeof policies[policyKey] !== "boolean") {
+                continue;
+            }
             const active = policies[policyKey] === true;
             const cmd = active ? mapCmds[0] : mapCmds[1];
             const pkgs = (policyKey === "webviewBlocked") ? ["com.android.chrome"] : null;
@@ -3982,11 +4013,10 @@ async function restoreArchivedDevice(deviceId, device, button) {
             // Eliminar marca de archivo temporal
             const restoredData = { ...device };
             delete restoredData._archivedAt;
-            // 9/11/2026: `trustedAdmins` («recordar este celular», que saltea el PIN) solo lo escribe la
-            // Cloud Function; las reglas de la base rechazan cualquier escritura de un cliente que lo
-            // incluya, y el archivado se lleva una copia. Restaurar un equipo NO restaura esa confianza:
-            // el administrador vuelve a escribir el PIN (y a tildar «recordar» si quiere).
+            // Evitar que trustedAdmins o pendingCommands viejos del snapshot archivado disparen
+            // rechazo de reglas (.validate: false) o queden incoherentes al restaurar.
             delete restoredData.trustedAdmins;
+            delete restoredData.pendingCommands;
             if (restoredData.info && typeof restoredData.info === "object") {
                 restoredData.info = { ...restoredData.info };
                 delete restoredData.info.trustedAdmins;
@@ -4260,23 +4290,8 @@ function renderStoreApps(storeApps) {
     });
 }
 
-// Registrar Listeners en Firebase Database
-if (auth) {
-    auth.onAuthStateChanged(user => {
-        if (user) {
-            database.ref("globalSettings/allowedPackages").on("value", snap => {
-                if (globalAllowedPackagesInput) {
-                    const val = snap.val() || [];
-                    globalAllowedPackagesInput.value = val.join(", ");
-                }
-            });
-
-            database.ref("storeApps").on("value", snap => {
-                renderStoreApps(snap.val() || {});
-            });
-        }
-    });
-}
+// Listeners de storeApps / allowedPackages ahora viven dentro de startRealtimeSync() / stopRealtimeSync()
+// para no suscribirse antes de validar authorizedAdminsUids ni dejar listeners colgados al cerrar sesión.
 // Cache buster: 2026-07-26T18:53
 
 
@@ -4501,15 +4516,16 @@ function renderQrPendientes() {
               'Falta bloquear el cambio de cuentas y de idioma.</div>' +
             '<div class="js-acc" style="margin-top:12px;"></div>';
         card.querySelector(".js-n").textContent =
-            d.name || (d.info && d.info.name) || d.model || (d.info && d.info.model) || id;
+            field(d, "deviceName", "") || field(d, "model", "") || id;
         const b = document.createElement("button");
         b.className = "action-btn";
         b.style.cssText = "background:var(--accent); color:var(--navy-dark); font-weight:bold; border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:12px;";
         b.textContent = "✔ Terminar alta";
         b.addEventListener("click", async () => {
             try {
-                await runCommandOnDevice(id, "FINISH_ENROLLMENT", null, b);
-                setQrStatus("Alta terminada.");
+                const ok = await runCommandOnDevice(id, "FINISH_ENROLLMENT", null, b);
+                if (ok) setQrStatus("Alta terminada.");
+                else setQrStatus("No se pudo enviar FINISH_ENROLLMENT (cancelado o con error).", true);
             } catch (e) { setQrStatus("Error: " + e.message, true); }
         });
         card.querySelector(".js-acc").appendChild(b);
@@ -4560,7 +4576,7 @@ function renderIabDeviceSelect() {
     entradas.forEach(([id, d]) => {
         const o = document.createElement("option");
         o.value = id;
-        const nombre = d.name || (d.info && d.info.name) || d.model || (d.info && d.info.model) || id;
+        const nombre = field(d, "deviceName", "") || field(d, "model", "") || id;
         const on = field(d, "iabFinderEnabled", false);
         const sim = field(d, "iabFinderSimulation", true);
         o.textContent = nombre + (on ? (sim ? " · simulando" : " · BLOQUEANDO") : " · apagado");
@@ -4634,8 +4650,9 @@ iabToggleBtn && iabToggleBtn.addEventListener("click", async () => {
     if (!id) { setIabStatus("Elegí un celular primero.", true); return; }
     const on = field(currentDevicesData[id], "iabFinderEnabled", false);
     try {
-        await runCommandOnDevice(id, on ? "DISABLE_IAB_FINDER" : "ENABLE_IAB_FINDER", null, iabToggleBtn);
-        setIabStatus(on ? "Detector apagado." : "Detector encendido, en simulación: no bloquea nada todavía.");
+        const ok = await runCommandOnDevice(id, on ? "DISABLE_IAB_FINDER" : "ENABLE_IAB_FINDER", null, iabToggleBtn);
+        if (ok) setIabStatus(on ? "Detector apagado." : "Detector encendido, en simulación: no bloquea nada todavía.");
+        else setIabStatus("No se pudo cambiar el estado del detector.", true);
     } catch (e) { setIabStatus("Error: " + e.message, true); }
 });
 
@@ -4652,8 +4669,9 @@ iabSimBtn && iabSimBtn.addEventListener("click", async () => {
         "ningún mensaje que lo explique.\n\n¿Seguimos?"
     )) return;
     try {
-        await runCommandOnDevice(id, sim ? "DISABLE_IAB_SIMULATION" : "ENABLE_IAB_SIMULATION", null, iabSimBtn);
-        setIabStatus(sim ? "El detector ahora bloquea en este celular." : "Vuelto a simulación: no bloquea.");
+        const ok = await runCommandOnDevice(id, sim ? "DISABLE_IAB_SIMULATION" : "ENABLE_IAB_SIMULATION", null, iabSimBtn);
+        if (ok) setIabStatus(sim ? "El detector ahora bloquea en este celular." : "Vuelto a simulación: no bloquea.");
+        else setIabStatus("No se pudo cambiar el modo de simulación.", true);
     } catch (e) { setIabStatus("Error: " + e.message, true); }
 });
 
@@ -4661,8 +4679,9 @@ iabClearBtn && iabClearBtn.addEventListener("click", async () => {
     const id = iabDeviceSelect && iabDeviceSelect.value;
     if (!id) { setIabStatus("Elegí un celular primero.", true); return; }
     try {
-        await runCommandOnDevice(id, "CLEAR_IAB_AUDIT", null, iabClearBtn);
-        setIabStatus("Lista vaciada.");
+        const ok = await runCommandOnDevice(id, "CLEAR_IAB_AUDIT", null, iabClearBtn);
+        if (ok) setIabStatus("Lista vaciada.");
+        else setIabStatus("No se pudo vaciar la lista.", true);
     } catch (e) { setIabStatus("Error: " + e.message, true); }
 });
 
@@ -4689,7 +4708,7 @@ function collectAppRequests() {
             if (!p) return;
             salida.push({
                 deviceId,
-                deviceName: (dev.name || (dev.info && dev.info.name) || dev.model || (dev.info && dev.info.model) || deviceId),
+                deviceName: (field(dev, "deviceName", "") || field(dev, "model", "") || deviceId),
                 key: clave,
                 packageName: p.packageName || clave.replace(/_/g, "."),
                 label: p.label || p.packageName || clave,
@@ -4864,8 +4883,8 @@ async function resolveAppRequest(p, aprobar, btn) {
             // Pedido de la Tienda Play: el extra ya está guardado (arriba). Falta que el celular lo lea
             // y avisarle al usuario. No hay nada que des-suspender: la app todavía no se instaló.
             const fallidos = [];
-            try { await runCommandOnDevice(p.deviceId, "SYNC_PLAY_STORE"); } catch (e) { fallidos.push("SYNC_PLAY_STORE"); }
-            try { await runCommandOnDevice(p.deviceId, "SYNC_APP_REQUESTS"); } catch (e) { fallidos.push("SYNC_APP_REQUESTS"); }
+            try { if (!(await runCommandOnDevice(p.deviceId, "SYNC_PLAY_STORE"))) fallidos.push("SYNC_PLAY_STORE"); } catch (e) { fallidos.push("SYNC_PLAY_STORE"); }
+            try { if (!(await runCommandOnDevice(p.deviceId, "SYNC_APP_REQUESTS"))) fallidos.push("SYNC_APP_REQUESTS"); } catch (e) { fallidos.push("SYNC_APP_REQUESTS"); }
             if (fallidos.length) {
                 setRequestsStatus("Aprobada y guardada, pero el celular no contestó a: " +
                     fallidos.join(", ") + ". Se aplica cuando vuelva a estar en línea.", true);
@@ -4877,14 +4896,14 @@ async function resolveAppRequest(p, aprobar, btn) {
             await setWhitelistDecision(p.packageName, "allow");
             // 2) Que el catálogo llegue a ESE equipo.
             const fallidos = [];
-            try { await runCommandOnDevice(p.deviceId, "SYNC_WHITELIST"); } catch (e) { fallidos.push("SYNC_WHITELIST"); }
+            try { if (!(await runCommandOnDevice(p.deviceId, "SYNC_WHITELIST"))) fallidos.push("SYNC_WHITELIST"); } catch (e) { fallidos.push("SYNC_WHITELIST"); }
             // 3) Despertarla si estaba suspendida u oculta. Si no está instalada, el
             //    equipo responde que no la encontró y no pasa nada: es lo esperable
             //    cuando el pedido es justamente para instalarla por primera vez.
-            try { await runCommandOnDevice(p.deviceId, "UNSUSPEND_APP", p.packageName); } catch (e) { fallidos.push("UNSUSPEND_APP"); }
-            try { await runCommandOnDevice(p.deviceId, "UNHIDE_APP", p.packageName); } catch (e) { fallidos.push("UNHIDE_APP"); }
+            try { if (!(await runCommandOnDevice(p.deviceId, "UNSUSPEND_APP", p.packageName))) fallidos.push("UNSUSPEND_APP"); } catch (e) { fallidos.push("UNSUSPEND_APP"); }
+            try { if (!(await runCommandOnDevice(p.deviceId, "UNHIDE_APP", p.packageName))) fallidos.push("UNHIDE_APP"); } catch (e) { fallidos.push("UNHIDE_APP"); }
             // 4) Avisarle al usuario del celular.
-            try { await runCommandOnDevice(p.deviceId, "SYNC_APP_REQUESTS"); } catch (e) { fallidos.push("SYNC_APP_REQUESTS"); }
+            try { if (!(await runCommandOnDevice(p.deviceId, "SYNC_APP_REQUESTS"))) fallidos.push("SYNC_APP_REQUESTS"); } catch (e) { fallidos.push("SYNC_APP_REQUESTS"); }
 
             if (fallidos.length) {
                 setRequestsStatus("Aprobada y guardada, pero el celular no contestó a: " +
@@ -4894,8 +4913,9 @@ async function resolveAppRequest(p, aprobar, btn) {
             }
         } else {
             try {
-                await runCommandOnDevice(p.deviceId, "SYNC_APP_REQUESTS");
-                setRequestsStatus("Pedido rechazado. Se le avisó al celular.");
+                const ok = await runCommandOnDevice(p.deviceId, "SYNC_APP_REQUESTS");
+                if (ok) setRequestsStatus("Pedido rechazado. Se le avisó al celular.");
+                else setRequestsStatus("Pedido rechazado y guardado, pero el celular no contestó: se le va a avisar cuando vuelva a estar en línea.", true);
             } catch (e) {
                 setRequestsStatus("Pedido rechazado y guardado, pero el celular no contestó: se le va a avisar cuando vuelva a estar en línea.", true);
             }
@@ -5027,7 +5047,7 @@ if (whitelistPushAllBtn) {
         whitelistPushAllBtn.disabled = true;
         let ok = 0, fail = 0;
         for (const id of ids) {
-            try { await runCommandOnDevice(id, "SYNC_WHITELIST"); ok++; } catch (e) { fail++; }
+            try { if (await runCommandOnDevice(id, "SYNC_WHITELIST")) ok++; else fail++; } catch (e) { fail++; }
         }
         whitelistPushAllBtn.disabled = false;
         setWhitelistStatus(`Enviado a ${ok} celular(es)` + (fail ? `, ${fail} fallaron` : "") + ".", fail > 0);
@@ -5081,7 +5101,8 @@ function renderWhitelistAudit(deviceId, audit) {
                     label: actual.label || (base && base.label) || pkg,
                     packageName: pkg,
                     allow: allow,
-                    block: actual.block || []
+                    block: Array.isArray(actual.block) ? actual.block : [],
+                    unblock: Array.isArray(actual.unblock) ? actual.unblock : []
                 });
                 // Lo que se guarda acá se SUMA a los dominios de fábrica de esa app, no
                 // los reemplaza (ver WhitelistManager.allowedDomainsOf). Así el camino
@@ -5117,17 +5138,4 @@ document.addEventListener("click", ev => {
     runCommandOnDevice(selectedDeviceId, btn.getAttribute("data-cmd"), null, btn);
 });
 
-// Listeners de Firebase para el catálogo global.
-if (auth) {
-    auth.onAuthStateChanged(user => {
-        if (!user) return;
-        database.ref("globalSettings/whitelist/decisions").on("value", snap => {
-            whitelistDecisions = snap.val() || {};
-            renderWhitelistCatalog();
-        });
-        database.ref("globalSettings/whitelist/custom").on("value", snap => {
-            whitelistCustom = snap.val() || {};
-            renderWhitelistCatalog();
-        });
-    });
-}
+// Listeners de globalSettings/whitelist ahora viven dentro de startRealtimeSync() / stopRealtimeSync().

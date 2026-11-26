@@ -72,6 +72,7 @@ class PackageReceiver : BroadcastReceiver() {
                     lastEventKey = key
                     lastEventAt = now
                 }
+                AppController.invalidateEligibleCache()
             }
         
             val prefs = PrefsHelper.getMdmPrefs(context)
@@ -180,9 +181,24 @@ class PackageReceiver : BroadcastReceiver() {
                         appController.isCritical(packageName) ||
                         appController.isPartialBlockOnly(packageName)
                     if (!isAllowed) {
-                        Log.w("PackageReceiver", "🚫 Intento de instalación no autorizado: $packageName. Desinstalando...")
+                        Log.w("PackageReceiver", "🚫 Intento de instalación no autorizado: $packageName. Suspendiendo, ocultando y desinstalando...")
+                        try {
+                            appController.suspendApp(packageName, true)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                        try {
+                            appController.hideApp(packageName, true)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                         try {
                             appController.uninstallApp(packageName)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                        try {
+                            FirebaseDeviceSync.requestSync(context)
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
@@ -307,6 +323,9 @@ class PackageReceiver : BroadcastReceiver() {
     }
 
     private fun isPackageBrowser(context: Context, packageName: String): Boolean {
+        if (packageName in com.ejemplo.locksuite.mdm.PolicyManager.KNOWN_BROWSER_PACKAGES) {
+            return true
+        }
         val pm = context.packageManager
         val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.google.com"))
         val list = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {

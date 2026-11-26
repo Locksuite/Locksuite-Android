@@ -51,6 +51,13 @@ class AppController(private val context: Context) {
         @Volatile private var eligibleCacheAt = 0L
         @Volatile private var eligibleCacheSize = 0
         private const val ELIGIBLE_TTL_MS = 5 * 60 * 1000L
+
+        /** Invalida el cache de elegibles cuando se instala, actualiza o desinstala un paquete. */
+        fun invalidateEligibleCache() {
+            eligibleCache = null
+            eligibleCacheAt = 0L
+            eligibleCacheSize = 0
+        }
     }
 
     /**
@@ -87,10 +94,11 @@ class AppController(private val context: Context) {
     private val pm = context.packageManager
     private val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
 
-    // La lista de launchers no cambia durante la vida corta de este controlador.
-    // Resolverla una sola vez evita una consulta al PackageManager por cada app de
-    // la grilla (y por cada verificacion de ocultamiento/suspension).
+    // La lista de launchers, marcadores telefónicos y teclados habilitados no cambia durante
+    // la vida corta de este controlador. Resolverlas una sola vez evita consultas repetidas.
     private val launcherPackages: Set<String> by lazy { queryLauncherPackages() }
+    private val dialerPackages: Set<String> by lazy { queryDialerPackages() }
+    private val enabledImePackages: Set<String> by lazy { queryEnabledImePackages() }
 
     private val systemEssential = setOf(
         "com.android.systemui", 
@@ -112,7 +120,10 @@ class AppController(private val context: Context) {
     )
 
     fun isCritical(packageName: String): Boolean {
-        return packageName in systemEssential || packageName in launcherPackages ||
+        return packageName in systemEssential ||
+            packageName in launcherPackages ||
+            packageName in dialerPackages ||
+            (packageName in enabledImePackages && packageName !in partialBlockOnly) ||
             // Los stubs de Android Auto (B.88): si se ocultan, suspenden o desinstalan,
             // Android Auto vuelve a pedir "Descargar" y no deja seguir. Se reconocen por
             // la FIRMA, no por el nombre: la Maps y la App de Google reales (y cualquier
@@ -237,15 +248,17 @@ class AppController(private val context: Context) {
                     android.util.Log.w("AppController", "No se pudo suspender una tanda: ${e.message}")
                 }
             }
+            var anyFailed = false
             aLiberar.chunked(50).forEach { tanda ->
                 try {
                     dpm.setPackagesSuspended(adminComponent, tanda.toTypedArray(), false)
                     cambios += tanda.size
                 } catch (e: Exception) {
+                    anyFailed = true
                     android.util.Log.w("AppController", "No se pudo liberar una tanda: ${e.message}")
                 }
             }
-            cambios
+            if (anyFailed) -1 else cambios
         } catch (e: Exception) {
             android.util.Log.e("AppController", "reconcileEmergencySuspend($emergencyActive) falló: ${e.message}")
             -1
@@ -445,6 +458,20 @@ class AppController(private val context: Context) {
             android.util.Log.w("AppController", "Se rechazó desinstalar app crítica/protegida: $packageName")
             return false
         }
+        val policyManager = PolicyManager(context)
+        val hadDisallowUninstall = try {
+            dpm.getUserRestrictions(adminComponent)
+                .getBoolean(android.os.UserManager.DISALLOW_UNINSTALL_APPS, false)
+        } catch (_: Exception) {
+            false
+        }
+        if (hadDisallowUninstall) {
+            try {
+                dpm.clearUserRestriction(adminComponent, android.os.UserManager.DISALLOW_UNINSTALL_APPS)
+            } catch (e: Exception) {
+                android.util.Log.w("AppController", "No se pudo levantar temporalmente DISALLOW_UNINSTALL_APPS: ${e.message}")
+            }
+        }
         return try {
             val packageInstaller = pm.packageInstaller
             val intent = Intent(context, com.ejemplo.locksuite.receiver.UninstallReceiver::class.java)
@@ -464,6 +491,17 @@ class AppController(private val context: Context) {
         } catch (e: Exception) {
             e.printStackTrace()
             false
+        } finally {
+            if (hadDisallowUninstall &&
+                policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_UNINSTALL_APPS) &&
+                !policyManager.isLockSuiteSuspended()
+            ) {
+                try {
+                    dpm.addUserRestriction(adminComponent, android.os.UserManager.DISALLOW_UNINSTALL_APPS)
+                } catch (e: Exception) {
+                    android.util.Log.w("AppController", "No se pudo restaurar DISALLOW_UNINSTALL_APPS: ${e.message}")
+                }
+            }
         }
     }
 
@@ -546,6 +584,44 @@ class AppController(private val context: Context) {
         return list.mapNotNull { it.activityInfo?.packageName }
             .filterNot { PopularNonKosherApps.isPopularNonKosher(it) }
             .toSet()
+    }
+
+    private fun queryDialerPackages(): Set<String> {
+        val out = LinkedHashSet<String>()
+        try {
+            val telecom = context.getSystemService(Context.TELECOM_SERVICE) as? android.telecom.TelecomManager
+            telecom?.defaultDialerPackage?.takeIf { it.isNotBlank() }?.let { out.add(it) }
+        } catch (_: Exception) { }
+        try {
+            val dialIntent = Intent(Intent.ACTION_DIAL)
+            val list = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.queryIntentActivities(
+                    dialIntent,
+                    PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_SYSTEM_ONLY.toLong())
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                pm.queryIntentActivities(dialIntent, PackageManager.MATCH_SYSTEM_ONLY)
+            }
+            for (ri in list) {
+                val pkg = ri.activityInfo?.packageName
+                if (!pkg.isNullOrBlank() && !PopularNonKosherApps.isPopularNonKosher(pkg)) {
+                    out.add(pkg)
+                }
+            }
+        } catch (_: Exception) { }
+        return out
+    }
+
+    private fun queryEnabledImePackages(): Set<String> {
+        return try {
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE)
+                as? android.view.inputmethod.InputMethodManager
+                ?: return emptySet()
+            imm.enabledInputMethodList.mapNotNull { it.packageName }.toSet()
+        } catch (_: Exception) {
+            emptySet()
+        }
     }
 }
 

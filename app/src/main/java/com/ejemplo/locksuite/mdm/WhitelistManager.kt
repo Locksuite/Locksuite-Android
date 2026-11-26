@@ -92,6 +92,8 @@ class WhitelistManager(private val context: Context) {
         const val KEY_DEVICE_DECISIONS = "whitelist_device_decisions"
         /** JSON: {"pkg": {"label":…, "allow":[…], "block":[…], "apkUrl":…}} — apps agregadas desde el panel. */
         const val KEY_CUSTOM = "whitelist_custom_apps"
+        /** Paquetes ocultos/suspendidos específicamente por la lista blanca (para destaparlos al quitarlos sin tocar bloqueos manuales). */
+        const val KEY_WHITELIST_HIDDEN_PKGS = "whitelist_hidden_pkgs"
 
         const val STATE_ALLOW = "allow"
         const val STATE_BLOCK = "block"
@@ -138,7 +140,7 @@ class WhitelistManager(private val context: Context) {
         /**
          * Decisión para un dominio. Es LA función del camino caliente: una resolución de
          * Trie y nada más. Devuelve:
-         *   - `RuleType.BLOCK`       → bloquear (dominio de app prohibida o bloqueo fijo)
+         *   - `RuleType.FORCE_BLOCK` / `RuleType.BLOCK` → bloquear (dominio de app prohibida o bloqueo fijo)
          *   - `RuleType.ALLOW`       → permitido por una app permitida
          *   - `RuleType.FORCE_ALLOW` → infraestructura: permitido pase lo que pase
          *   - `null`                 → no figura en ninguna lista
@@ -315,7 +317,10 @@ class WhitelistManager(private val context: Context) {
             for ((pkg, state) in decisions) {
                 if (state != STATE_BLOCK) continue
                 val todos = allowedDomainsOf(pkg, custom) + blockedDomainsOf(pkg, custom)
-                for (d in todos) rules[normalizeDomain(d)] = RuleType.BLOCK
+                // FORCE_BLOCK garantiza que subdominios de infraestructura (ej. translate.googleapis.com)
+                // también queden bloqueados cuando se prohíbe la app, mientras que un dominio exacto
+                // de INFRASTRUCTURE vuelve a sobrescribirse en la pasada siguiente.
+                for (d in todos) rules[normalizeDomain(d)] = RuleType.FORCE_BLOCK
             }
 
             for ((pkg, state) in decisions) {
@@ -326,17 +331,17 @@ class WhitelistManager(private val context: Context) {
             for (d in WhitelistCatalog.INFRASTRUCTURE) rules[normalizeDomain(d)] = RuleType.FORCE_ALLOW
 
             // ── PASADA FINAL DE BLOQUEOS ──
-            // Va DESPUÉS de la infraestructura a propósito: si un host estuviera por
-            // error en las dos listas, acá gana el bloqueo. Es el mismo motivo por el que
-            // BLOCK_ALWAYS ya estaba último — `tenor.googleapis.com` tiene que ganarle a
-            // `googleapis.com`, y ninguna app personalizada puede destapar un bloqueo
-            // fijo escribiendo un permiso.
+            // Va DESPUÉS de la infraestructura y usa FORCE_BLOCK a propósito: como DomainRuleTrie
+            // impide que una regla normal debilite un FORCE_ALLOW padre (ej. googleapis.com,
+            // googleusercontent.com, ggpht.com), usar FORCE_BLOCK garantiza que subdominios
+            // peligrosos (tenor.googleapis.com, webcache.googleusercontent.com, yt3.ggpht.com, etc.)
+            // SIEMPRE le ganen a INFRASTRUCTURE, y ninguna app personalizada pueda destaparlos.
             //
             // Los dos van juntos porque son la misma idea: contenido no kosher que vive
             // adentro de algo que por lo demás hace falta. Ver alwaysBlockedInAppDomains.
-            for (d in alwaysBlockedInAppDomains(custom)) rules[normalizeDomain(d)] = RuleType.BLOCK
+            for (d in alwaysBlockedInAppDomains(custom)) rules[normalizeDomain(d)] = RuleType.FORCE_BLOCK
 
-            for (d in WhitelistCatalog.BLOCK_ALWAYS) rules[normalizeDomain(d)] = RuleType.BLOCK
+            for (d in WhitelistCatalog.BLOCK_ALWAYS) rules[normalizeDomain(d)] = RuleType.FORCE_BLOCK
 
             return rules
         }
@@ -361,6 +366,9 @@ class WhitelistManager(private val context: Context) {
         // configuración y confunden más de lo que ayudan.
         if (!enabled) clearAudit()
         reload()
+        if (enabled) {
+            com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+        }
     }
 
     fun setSimulation(simulation: Boolean) {
@@ -456,11 +464,18 @@ class WhitelistManager(private val context: Context) {
         if (pkg.isEmpty()) return false
         val json = readDeviceDecisions()
         if (!json.has(pkg)) return true
+        // Capturar el estado previo ANTES de borrar el override para que los efectos
+        // secundarios vean la transición real y no destapen bloqueos manuales del admin.
+        val previous = stateOf(pkg)
         json.remove(pkg)
         prefs().edit().putString(KEY_DEVICE_DECISIONS, json.toString()).apply()
         reload()
+        val effective = stateOf(pkg)
+        if (effective == STATE_BLOCK) {
+            com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+        }
         return try {
-            applyAppSideEffects(pkg, stateOf(pkg), STATE_BLOCK)
+            applyAppSideEffects(pkg, effective, previous)
             true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -533,11 +548,16 @@ class WhitelistManager(private val context: Context) {
 
         reload()
 
+        val effectiveState = stateOf(pkg)
+        if (effectiveState == STATE_BLOCK) {
+            com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+        }
+
         return try {
             // El efecto sobre la app se decide con el estado EFECTIVO, no con el que se
             // acaba de escribir: si el catálogo global dice `block` y este equipo escribe
             // `unset`, lo que corresponde es destapar, no "no hacer nada".
-            applyAppSideEffects(pkg, stateOf(pkg), previous)
+            applyAppSideEffects(pkg, effectiveState, previous)
             true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -563,6 +583,23 @@ class WhitelistManager(private val context: Context) {
      * `PolicyManager.deferIfSuspended`). La decisión igual queda guardada y
      * `reconcileApps()` la aplica cuando se reanude.
      */
+    private fun readWhitelistHiddenPkgs(): MutableSet<String> =
+        (prefs().getStringSet(KEY_WHITELIST_HIDDEN_PKGS, emptySet()) ?: emptySet()).toMutableSet()
+
+    private fun saveWhitelistHiddenPkgs(pkgs: Set<String>) {
+        prefs().edit().putStringSet(KEY_WHITELIST_HIDDEN_PKGS, HashSet(pkgs)).apply()
+    }
+
+    private fun markWhitelistHidden(pkg: String) {
+        val set = readWhitelistHiddenPkgs()
+        if (set.add(pkg)) saveWhitelistHiddenPkgs(set)
+    }
+
+    private fun unmarkWhitelistHidden(pkg: String) {
+        val set = readWhitelistHiddenPkgs()
+        if (set.remove(pkg)) saveWhitelistHiddenPkgs(set)
+    }
+
     private fun applyAppSideEffects(packageName: String, state: String, previous: String = STATE_UNSET) {
         val policyManager = PolicyManager(context)
         if (policyManager.isLockSuiteSuspended()) {
@@ -576,6 +613,7 @@ class WhitelistManager(private val context: Context) {
             STATE_BLOCK -> {
                 controller.hideApp(packageName, true)
                 controller.suspendApp(packageName, true)
+                markWhitelistHidden(packageName)
             }
             STATE_ALLOW -> {
                 // Se destapa SOLO lo que la lista blanca había cerrado. Si el
@@ -583,29 +621,31 @@ class WhitelistManager(private val context: Context) {
                 // eso es una intención distinta y no se pisa acá.
                 controller.hideApp(packageName, false)
                 controller.suspendApp(packageName, false)
+                unmarkWhitelistHidden(packageName)
             }
             STATE_UNSET -> {
                 // Volver a "sin marcar" no toca la app… SALVO que veníamos de
-                // `block`, en cuyo caso la que la ocultó fue la lista blanca y
-                // tiene que destaparla. Sin esta rama, quitarle el override a un
-                // equipo (o sacar la app del catálogo global) dejaba la app
-                // oculta para siempre y el panel mostrándola como "sin marcar":
-                // el administrador ve una app sin bloquear que el usuario no
-                // encuentra por ningún lado, sin ningún motivo a la vista.
-                //
-                // Se mira `previous` y no el estado real de la app a propósito:
-                // así una app que el administrador ocultó A MANO desde la sección
+                // `block` o que esté registrada en KEY_WHITELIST_HIDDEN_PKGS, en cuyo
+                // caso la que la ocultó fue la lista blanca y tiene que destaparla.
+                // Así una app que el administrador ocultó A MANO desde la sección
                 // Aplicaciones no se destapa sola por pasar por acá.
-                if (previous == STATE_BLOCK) {
+                if (previous == STATE_BLOCK || packageName in readWhitelistHiddenPkgs()) {
                     controller.hideApp(packageName, false)
                     controller.suspendApp(packageName, false)
+                    unmarkWhitelistHidden(packageName)
                 }
             }
         }
     }
 
     private fun isInstalled(packageName: String): Boolean = try {
-        context.packageManager.getPackageInfo(packageName, 0)
+        val flags = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            android.content.pm.PackageManager.MATCH_UNINSTALLED_PACKAGES
+        } else {
+            @Suppress("DEPRECATION")
+            android.content.pm.PackageManager.GET_UNINSTALLED_PACKAGES
+        }
+        context.packageManager.getPackageInfo(packageName, flags)
         true
     } catch (e: Exception) {
         false
@@ -618,25 +658,97 @@ class WhitelistManager(private val context: Context) {
      * un comando del panel, el flujo de Play Store— pueden des-ocultar una app por su
      * cuenta, y sin reconciliar nadie se entera. Ordenar "ocultá" una vez no alcanza.
      *
+     * También destapa y des-suspende las apps registradas en [KEY_WHITELIST_HIDDEN_PKGS]
+     * que ya dejaron de estar en `block` (o fueron quitadas del catálogo) sin tocar
+     * bloqueos manuales hechos por el administrador desde la sección Aplicaciones.
+     *
      * @return cuántas apps hubo que corregir.
      */
     fun reconcileApps(): Int {
         val policyManager = PolicyManager(context)
         if (policyManager.isLockSuiteSuspended()) return 0
         val controller = AppController(context)
+        val decisions = allDecisions()
+        val trackedHidden = readWhitelistHiddenPkgs()
+        var trackedChanged = false
         var fixed = 0
-        for ((pkg, state) in allDecisions()) {
+
+        for ((pkg, state) in decisions) {
             if (!isInstalled(pkg)) continue
             if (isNeverBlockable(pkg)) continue
             try {
-                val shouldHide = (state == STATE_BLOCK)
-                if (controller.isAppHidden(pkg) != shouldHide) {
-                    controller.hideApp(pkg, shouldHide)
-                    fixed++
+                when (state) {
+                    STATE_BLOCK -> {
+                        if (!controller.isAppHidden(pkg)) {
+                            controller.hideApp(pkg, true)
+                            fixed++
+                        }
+                        if (!controller.isAppSuspended(pkg)) {
+                            controller.suspendApp(pkg, true)
+                            fixed++
+                        }
+                        if (trackedHidden.add(pkg)) trackedChanged = true
+                    }
+                    STATE_ALLOW -> {
+                        if (controller.isAppHidden(pkg)) {
+                            controller.hideApp(pkg, false)
+                            fixed++
+                        }
+                        if (controller.isAppSuspended(pkg)) {
+                            controller.suspendApp(pkg, false)
+                            fixed++
+                        }
+                        if (trackedHidden.remove(pkg)) trackedChanged = true
+                    }
+                    STATE_UNSET -> {
+                        if (pkg in trackedHidden) {
+                            if (controller.isAppHidden(pkg)) {
+                                controller.hideApp(pkg, false)
+                                fixed++
+                            }
+                            if (controller.isAppSuspended(pkg)) {
+                                controller.suspendApp(pkg, false)
+                                fixed++
+                            }
+                            trackedHidden.remove(pkg)
+                            trackedChanged = true
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+        }
+
+        // Apps que antes había ocultado/suspendido la lista blanca pero que ya no están
+        // marcadas como `block` (p. ej. borradas del catálogo global o sin override).
+        val noLongerBlocked = trackedHidden.filter { decisions[it] != STATE_BLOCK }
+        for (pkg in noLongerBlocked) {
+            if (isNeverBlockable(pkg)) {
+                trackedHidden.remove(pkg)
+                trackedChanged = true
+                continue
+            }
+            try {
+                if (isInstalled(pkg)) {
+                    if (controller.isAppHidden(pkg)) {
+                        controller.hideApp(pkg, false)
+                        fixed++
+                    }
+                    if (controller.isAppSuspended(pkg)) {
+                        controller.suspendApp(pkg, false)
+                        fixed++
+                    }
+                }
+                trackedHidden.remove(pkg)
+                trackedChanged = true
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        if (trackedChanged) {
+            saveWhitelistHiddenPkgs(trackedHidden)
         }
         return fixed
     }

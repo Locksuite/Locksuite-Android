@@ -22,7 +22,14 @@ import androidx.compose.ui.window.DialogProperties
 import com.ejemplo.locksuite.provisioning.LocalProvisioningProbe
 import com.ejemplo.locksuite.provisioning.MultimediaDeviceOwnerActivator
 import com.ejemplo.locksuite.provisioning.adb.ClassicAdbChannelOpener
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
+
+private val provisioningScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 @Composable
 fun MultimediaProvisioningDialog(
@@ -30,7 +37,14 @@ fun MultimediaProvisioningDialog(
     onActivated: () -> Unit
 ) {
     val context = LocalContext.current
+    val appContext = remember(context) { context.applicationContext }
     val scope = rememberCoroutineScope()
+    val dialogAlive = remember { AtomicBoolean(true) }
+    val currentOnActivated by rememberUpdatedState(onActivated)
+
+    DisposableEffect(Unit) {
+        onDispose { dialogAlive.set(false) }
+    }
 
     var probeReport by remember { mutableStateOf<LocalProvisioningProbe.Report?>(null) }
     var isBusy by remember { mutableStateOf(false) }
@@ -73,37 +87,46 @@ fun MultimediaProvisioningDialog(
     }
 
     fun runActivation(port: Int? = null) {
-        scope.launch {
-            isBusy = true
-            errorDetail = ""
-            showAuthPromptNotice = false
-            statusTitle = "Congelando autenticadores de cuentas temporalmente y activando Device Owner…"
-            statusDetail = "Tus cuentas NO se borrarán; se reactivarán automáticamente en unos segundos."
+        provisioningScope.launch {
+            withContext(Dispatchers.Main) {
+                if (!dialogAlive.get()) return@withContext
+                isBusy = true
+                errorDetail = ""
+                showAuthPromptNotice = false
+                statusTitle = "Congelando autenticadores de cuentas temporalmente y activando Device Owner…"
+                statusDetail = "Tus cuentas NO se borrarán; se reactivarán automáticamente en unos segundos."
+            }
 
             val outcome = MultimediaDeviceOwnerActivator.activate(
-                context = context,
+                context = appContext,
                 preferredAdbPort = port,
                 onAdbAuthPrompt = {
-                    showAuthPromptNotice = true
+                    if (dialogAlive.get()) {
+                        showAuthPromptNotice = true
+                    }
                 }
             )
-            pendingRestore = MultimediaDeviceOwnerActivator.getPendingRestorePackages(context)
-            when (outcome) {
-                is MultimediaDeviceOwnerActivator.Outcome.Activated -> {
-                    statusTitle = "¡Activación completada por ${outcome.channel}!"
-                    statusDetail = if (outcome.temporarilyDisabledPackages.isEmpty()) {
-                        "Device Owner activo."
-                    } else {
-                        "Device Owner activo. Paquetes de cuentas restaurados (${outcome.temporarilyDisabledPackages.size})."
+            val refreshedPending = MultimediaDeviceOwnerActivator.getPendingRestorePackages(appContext)
+            withContext(Dispatchers.Main) {
+                if (!dialogAlive.get()) return@withContext
+                pendingRestore = refreshedPending
+                when (outcome) {
+                    is MultimediaDeviceOwnerActivator.Outcome.Activated -> {
+                        statusTitle = "¡Activación completada por ${outcome.channel}!"
+                        statusDetail = if (outcome.temporarilyDisabledPackages.isEmpty()) {
+                            "Device Owner activo."
+                        } else {
+                            "Device Owner activo. Paquetes de cuentas restaurados (${outcome.temporarilyDisabledPackages.size})."
+                        }
+                        isBusy = false
+                        currentOnActivated()
                     }
-                    isBusy = false
-                    onActivated()
-                }
-                is MultimediaDeviceOwnerActivator.Outcome.Failed -> {
-                    statusTitle = "No se pudo completar la activación"
-                    statusDetail = outcome.reason
-                    errorDetail = outcome.technicalDetail
-                    isBusy = false
+                    is MultimediaDeviceOwnerActivator.Outcome.Failed -> {
+                        statusTitle = "No se pudo completar la activación"
+                        statusDetail = outcome.reason
+                        errorDetail = outcome.technicalDetail
+                        isBusy = false
+                    }
                 }
             }
         }
@@ -214,11 +237,16 @@ fun MultimediaProvisioningDialog(
                             )
                             Button(
                                 onClick = {
-                                    scope.launch {
-                                        isBusy = true
-                                        val rem = MultimediaDeviceOwnerActivator.restoreAccounts(context)
-                                        pendingRestore = rem.toSet()
-                                        isBusy = false
+                                    provisioningScope.launch {
+                                        withContext(Dispatchers.Main) {
+                                            if (dialogAlive.get()) isBusy = true
+                                        }
+                                        val rem = MultimediaDeviceOwnerActivator.restoreAccounts(appContext)
+                                        withContext(Dispatchers.Main) {
+                                            if (!dialogAlive.get()) return@withContext
+                                            pendingRestore = rem.toSet()
+                                            isBusy = false
+                                        }
                                     }
                                 },
                                 enabled = !isBusy,
@@ -298,34 +326,49 @@ fun MultimediaProvisioningDialog(
                         )
                         Button(
                             onClick = {
-                                scope.launch {
-                                    isBusy = true
-                                    isWaitingForToggle = true
-                                    statusTitle = "Preparando propiedad TCP 5555…"
-                                    when (val prep = ClassicAdbChannelOpener.prepareClassicPort(context, 5555)) {
+                                provisioningScope.launch {
+                                    withContext(Dispatchers.Main) {
+                                        if (!dialogAlive.get()) return@withContext
+                                        isBusy = true
+                                        isWaitingForToggle = true
+                                        statusTitle = "Preparando propiedad TCP 5555…"
+                                    }
+                                    when (val prep = ClassicAdbChannelOpener.prepareClassicPort(appContext, 5555)) {
                                         is ClassicAdbChannelOpener.PrepOutcome.AlreadyOpen -> {
-                                            isWaitingForToggle = false
+                                            withContext(Dispatchers.Main) {
+                                                if (dialogAlive.get()) isWaitingForToggle = false
+                                            }
                                             runActivation(prep.port)
                                         }
                                         is ClassicAdbChannelOpener.PrepOutcome.OpenedViaRoot -> {
-                                            isWaitingForToggle = false
+                                            withContext(Dispatchers.Main) {
+                                                if (dialogAlive.get()) isWaitingForToggle = false
+                                            }
                                             runActivation(prep.port)
                                         }
                                         is ClassicAdbChannelOpener.PrepOutcome.WaitingForUsbDebuggingToggle -> {
-                                            statusTitle = "Apaga y vuelve a encender «Depuración por USB»"
-                                            statusDetail = "Vigilando el puerto local 5555 durante 5 minutos…"
-                                            openDeveloperSettingsSafely(context)
+                                            withContext(Dispatchers.Main) {
+                                                if (!dialogAlive.get()) return@withContext
+                                                statusTitle = "Apaga y vuelve a encender «Depuración por USB»"
+                                                statusDetail = "Vigilando el puerto local 5555 durante 5 minutos…"
+                                                openDeveloperSettingsSafely(context)
+                                            }
                                             val opened = ClassicAdbChannelOpener.waitForLoopbackPort(
                                                 port = prep.port,
                                                 timeoutMs = 300_000L
                                             )
-                                            isWaitingForToggle = false
+                                            withContext(Dispatchers.Main) {
+                                                if (dialogAlive.get()) isWaitingForToggle = false
+                                            }
                                             if (opened) {
                                                 runActivation(prep.port)
                                             } else {
-                                                statusTitle = "Tiempo de espera agotado"
-                                                statusDetail = "El puerto 5555 no se abrió. Verifica en Opciones de Desarrollador si el equipo tiene «ADB sobre red» o «Depuración inalámbrica»."
-                                                isBusy = false
+                                                withContext(Dispatchers.Main) {
+                                                    if (!dialogAlive.get()) return@withContext
+                                                    statusTitle = "Tiempo de espera agotado"
+                                                    statusDetail = "El puerto 5555 no se abrió. Verifica en Opciones de Desarrollador si el equipo tiene «ADB sobre red» o «Depuración inalámbrica»."
+                                                    isBusy = false
+                                                }
                                             }
                                         }
                                     }

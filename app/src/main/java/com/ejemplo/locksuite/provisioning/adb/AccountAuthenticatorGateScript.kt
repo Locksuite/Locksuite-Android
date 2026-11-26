@@ -52,22 +52,22 @@ object AccountAuthenticatorGateScript {
                     "[ -z \"\$p\" ] && continue; " +
                     "pm enable --user 0 \"\$p\" >/dev/null 2>&1; " +
                     "if ! pm list packages --user 0 -d 2>/dev/null | grep -Fqx \"package:\$p\"; then " +
-                    "if [ \"\$MODE\" = 'recover' ]; then echo '"
-            ).append(MARKER_RECOVERED_PREFIX).append("\$p'; else echo '")
-                .append(MARKER_ENABLED_PREFIX).append("\$p'; fi; " +
-                    "else echo '").append(MARKER_RESTORE_FAILED_PREFIX)
-                .append("\$p'; ANY_FAIL=1; fi; " +
+                    "if [ \"\$MODE\" = 'recover' ]; then echo \""
+            ).append(MARKER_RECOVERED_PREFIX).append("\$p\"; else echo \"")
+                .append(MARKER_ENABLED_PREFIX).append("\$p\"; fi; " +
+                    "else echo \"").append(MARKER_RESTORE_FAILED_PREFIX)
+                .append("\$p\"; ANY_FAIL=1; fi; " +
                     "done < \"\$SNAPSHOT\"; " +
                     "[ \"\$ANY_FAIL\" -eq 0 ] && rm -f \"\$SNAPSHOT\"; " +
                     "fi; return \"\$ANY_FAIL\"; }; ")
             append("restore_snapshot recover; ")
-            append("if [ -f \"\$SNAPSHOT\" ]; then echo '")
-                .append(MARKER_DISABLE_ABORTED).append("'; exit 70; fi; ")
+            append("if [ -f \"\$SNAPSHOT\" ]; then echo \"")
+                .append(MARKER_DISABLE_ABORTED).append("\"; exit 70; fi; ")
             append(
                 "USERS=\$(pm list users 2>/dev/null | grep -c 'UserInfo{'); " +
                     "if [ -n \"\$USERS\" ] && [ \"\$USERS\" -gt 1 ]; then " +
-                    "echo '"
-            ).append(MARKER_MULTI_USER_ABORT).append("\$USERS'; exit 72; fi; ")
+                    "echo \""
+            ).append(MARKER_MULTI_USER_ABORT).append("\$USERS\"; exit 72; fi; ")
             append("rm -f \"\$SNAPSHOT_TMP\"; ")
             append(
                 "PKGS=\$(cmd package query-services -a android.accounts.AccountAuthenticator 2>/dev/null " +
@@ -82,22 +82,22 @@ object AccountAuthenticatorGateScript {
                     "echo \"\$p\" >> \"\$SNAPSHOT_TMP\"; " +
                     "cp \"\$SNAPSHOT_TMP\" \"\$SNAPSHOT\" 2>/dev/null || true; " +
                     "if pm disable-user --user 0 \"\$p\" >/dev/null 2>&1; then " +
-                    "echo '"
-            ).append(MARKER_DISABLED_PREFIX).append("\$p'; " +
+                    "echo \""
+            ).append(MARKER_DISABLED_PREFIX).append("\$p\"; " +
                     "else DISABLE_FAIL=1; break; fi; " +
                     "fi; done; " +
                     "rm -f \"\$SNAPSHOT_TMP\"; ")
             append(
                 "if [ \"\$DISABLE_FAIL\" -ne 0 ]; then " +
-                    "echo '"
-            ).append(MARKER_DISABLE_ABORTED).append("'; restore_snapshot active; exit 71; fi; ")
+                    "echo \""
+            ).append(MARKER_DISABLE_ABORTED).append("\"; restore_snapshot active; exit 71; fi; ")
             append(
                 "pm grant \"\$SELF\" android.permission.WRITE_SECURE_SETTINGS >/dev/null 2>&1 || true; " +
                     "appops set \"\$SELF\" 10008 allow >/dev/null 2>&1 || true; " +
                     "dpm set-device-owner \"\$ADMIN\" 2>&1; " +
                     "DPM_RC=\$?; " +
-                    "echo '"
-            ).append(MARKER_DPM_EXIT_PREFIX).append("\$DPM_RC'; " +
+                    "echo \""
+            ).append(MARKER_DPM_EXIT_PREFIX).append("\$DPM_RC\"; " +
                     "restore_snapshot active; " +
                     "if [ \"\$DPM_RC\" -eq 0 ]; then " +
                     "appops set \"\$SELF\" ACCESS_RESTRICTED_SETTINGS allow >/dev/null 2>&1 || true; " +
@@ -135,9 +135,9 @@ object AccountAuthenticatorGateScript {
             append("enable_pkg() { p=\"\$1\"; [ -z \"\$p\" ] && return 0; ")
             append("pm enable --user 0 \"\$p\" >/dev/null 2>&1; ")
             append("if ! pm list packages --user 0 -d 2>/dev/null | grep -Fqx \"package:\$p\"; then ")
-            append("echo '").append(MARKER_ENABLED_PREFIX).append("\$p'; ")
-            append("else echo '").append(MARKER_RESTORE_FAILED_PREFIX)
-                .append("\$p'; ANY_FAIL=1; fi; }; ")
+            append("echo \"").append(MARKER_ENABLED_PREFIX).append("\$p\"; ")
+            append("else echo \"").append(MARKER_RESTORE_FAILED_PREFIX)
+                .append("\$p\"; ANY_FAIL=1; fi; }; ")
             append(
                 "if [ -f \"\$SNAPSHOT\" ]; then " +
                     "while IFS= read -r p; do enable_pkg \"\$p\"; done < \"\$SNAPSHOT\"; " +

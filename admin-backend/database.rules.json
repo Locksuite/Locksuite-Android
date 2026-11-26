@@ -14,7 +14,29 @@
           "trustedAdmins": {
             ".validate": "false",
             "$uid": { ".validate": "false" }
+          },
+          "allowedPackages": {
+            ".validate": "auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists()"
           }
+        },
+        "appPolicy": {
+          ".validate": "auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists()",
+          "$pkg": {
+            ".validate": "auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists()"
+          }
+        },
+        "playStoreExtras": {
+          ".validate": "auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists()",
+          "$pkg": {
+            ".validate": "auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists()"
+          }
+        },
+        "allowedPackages": {
+          ".validate": "auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists()"
+        },
+        "pendingCommands": {
+          ".validate": "false",
+          "$cmd_id": { ".validate": "false" }
         }
       }
     },

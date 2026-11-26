@@ -467,4 +467,82 @@ class SplitApkBundleTest {
         assertTrue(s1.length <= 80)
         assertTrue(s1 != s2)
     }
+
+    @Test
+    fun inspectBundleZip_rejectsInnerApkWithTooManyEntries() {
+        val innerApk = ByteArrayOutputStream().use { bos ->
+            ZipOutputStream(bos).use { zos ->
+                zos.setLevel(java.util.zip.Deflater.NO_COMPRESSION)
+                val manifestBytes = buildAxml(
+                    attrs = listOf(
+                        AxmlAttr(0, "package", 0x03, strValue = "com.example.manyentries"),
+                        AxmlAttr(0x0101021b, "versionCode", 0x10, intValue = 1),
+                        AxmlAttr(0x0101021c, "versionName", 0x03, strValue = "1.0")
+                    ),
+                    minSdk = 24
+                )
+                zos.putNextEntry(ZipEntry("AndroidManifest.xml"))
+                zos.write(manifestBytes)
+                zos.closeEntry()
+
+                for (i in 0 until SplitApkBundle.MAX_INNER_ZIP_ENTRIES) {
+                    zos.putNextEntry(ZipEntry("res/raw/e_$i.txt"))
+                    zos.closeEntry()
+                }
+            }
+            bos.toByteArray()
+        }
+
+        val bundleFile = writeZipFile(
+            File(tempFolder.root, "many_entries.apks"),
+            listOf("base.apk" to innerApk)
+        )
+        val res = SplitApkBundle.inspectBundleZip(bundleFile, tempFolder.root)
+        assertTrue("Expected Error on inner entries > MAX_INNER_ZIP_ENTRIES, got $res", res is InspectResult.Error)
+    }
+
+    @Test
+    fun inspectBundleZip_rejectsCumulativeInnerZipBomb() {
+        // Dos APKs internos de ~530 MB descomprimidos cada uno (superan 1 GB acumulados entre ambos,
+        // aunque ninguno individualmente excede 1 GB). Comprimidos al vuelo en pocos KB.
+        fun makeLargeInnerApk(pkg: String, uncompressedBytes: Long): ByteArray {
+            val zeroChunk = ByteArray(1024 * 1024)
+            return ByteArrayOutputStream().use { bos ->
+                ZipOutputStream(bos).use { zos ->
+                    zos.setLevel(java.util.zip.Deflater.BEST_SPEED)
+                    val manifestBytes = buildAxml(
+                        attrs = listOf(
+                            AxmlAttr(0, "package", 0x03, strValue = pkg),
+                            AxmlAttr(0x0101021b, "versionCode", 0x10, intValue = 1),
+                            AxmlAttr(0x0101021c, "versionName", 0x03, strValue = "1.0")
+                        ),
+                        minSdk = 24
+                    )
+                    zos.putNextEntry(ZipEntry("AndroidManifest.xml"))
+                    zos.write(manifestBytes)
+                    zos.closeEntry()
+
+                    zos.putNextEntry(ZipEntry("assets/padding.bin"))
+                    var remaining = uncompressedBytes
+                    while (remaining > 0L) {
+                        val toWrite = minOf(zeroChunk.size.toLong(), remaining).toInt()
+                        zos.write(zeroChunk, 0, toWrite)
+                        remaining -= toWrite
+                    }
+                    zos.closeEntry()
+                }
+                bos.toByteArray()
+            }
+        }
+
+        val perApk = 530L * 1024L * 1024L
+        val apk1 = makeLargeInnerApk("com.example.bomb", perApk)
+        val apk2 = makeLargeInnerApk("com.example.bomb", perApk)
+        val bundleFile = writeZipFile(
+            File(tempFolder.root, "cumulative_bomb.apks"),
+            listOf("base.apk" to apk1, "split_config.arm64_v8a.apk" to apk2)
+        )
+        val res = SplitApkBundle.inspectBundleZip(bundleFile, tempFolder.root)
+        assertTrue("Expected Error on cumulative inner bomb > 1GB, got $res", res is InspectResult.Error)
+    }
 }

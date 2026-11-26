@@ -291,6 +291,7 @@ class PlayStoreCatalogTest {
         val ok = "https://play-lh.googleusercontent.com/abc=w96-h96"
         assertEquals(ok, PlayStoreCatalog.cleanIconUrl(ok))
         assertEquals("https://lh3.googleusercontent.com/x", PlayStoreCatalog.cleanIconUrl(" https://lh3.googleusercontent.com/x "))
+        assertEquals("https://play-lh.googleusercontent.com:443/abc", PlayStoreCatalog.cleanIconUrl("https://play-lh.googleusercontent.com:443/abc"))
         assertNull(PlayStoreCatalog.cleanIconUrl(null))
         assertNull(PlayStoreCatalog.cleanIconUrl("http://play-lh.googleusercontent.com/abc"))
         assertNull(PlayStoreCatalog.cleanIconUrl("https://evil.com/abc"))
@@ -299,6 +300,10 @@ class PlayStoreCatalogTest {
         assertNull(PlayStoreCatalog.cleanIconUrl("https://play-lh.googleusercontent.com@evil.com/abc"))
         assertNull(PlayStoreCatalog.cleanIconUrl("https://evil.com@play-lh.googleusercontent.com/abc"))
         assertNull(PlayStoreCatalog.cleanIconUrl("https://play-lh.googleusercontent.com/a b"))
+        assertNull(PlayStoreCatalog.cleanIconUrl("https://play-lh.googleusercontent.com/abc#fragment"))
+        assertNull(PlayStoreCatalog.cleanIconUrl("https://play-lh.googleusercontent.com/a\\b"))
+        assertNull(PlayStoreCatalog.cleanIconUrl("https://play-lh.googleusercontent.com:8443/abc"))
+        assertNull(PlayStoreCatalog.cleanIconUrl("https://play-lh.googleusercontent.com:80/abc"))
         assertNull(PlayStoreCatalog.cleanIconUrl("javascript:alert(1)"))
         assertNull(PlayStoreCatalog.cleanIconUrl("https://googleusercontent.com/abc")) // sin subdominio
     }

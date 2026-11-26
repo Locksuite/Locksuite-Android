@@ -256,14 +256,33 @@ object PlayStoreCatalog {
         return text.ifEmpty { packageName }
     }
 
-    /** Solo https hacia el CDN de Google; cualquier otra cosa se descarta. */
+    /** Solo https hacia el CDN de Google (puerto estándar, sin fragmentos ni userinfo); cualquier otra cosa se descarta. */
     fun cleanIconUrl(raw: String?): String? {
         val url = raw?.trim() ?: return null
-        if (url.length > 600 || !url.startsWith("https://")) return null
-        if (url.any { it.isWhitespace() || it == '"' || it == '\'' || it == '<' || it == '>' }) return null
-        val authority = url.removePrefix("https://").substringBefore('/').substringBefore('?')
-        if (authority.contains('@')) return null // usuario@host: ambiguo, se descarta
-        val host = authority.substringBefore(':').lowercase()
+        if (url.isEmpty() || url.length > 600) return null
+        if (url.any { it <= ' ' || it == '"' || it == '\'' || it == '<' || it == '>' || it == '\\' || it == '#' }) {
+            return null
+        }
+        val doubleSlashIdx = url.indexOf("://")
+        if (doubleSlashIdx <= 0) return null
+        val authorityStart = doubleSlashIdx + 3
+        val slashIdx = url.indexOf('/', authorityStart)
+        val questionIdx = url.indexOf('?', authorityStart)
+        val authorityEnd = listOf(slashIdx, questionIdx).filter { it >= 0 }.minOrNull() ?: url.length
+        if (url.substring(authorityStart, authorityEnd).contains('@')) return null
+
+        val uri = try {
+            java.net.URI(url)
+        } catch (_: Exception) {
+            return null
+        }
+        val scheme = uri.scheme?.lowercase() ?: return null
+        if (scheme != "https") return null
+        if (uri.rawUserInfo != null || uri.userInfo != null) return null
+        if (uri.rawFragment != null || uri.fragment != null) return null
+        if (uri.port != -1 && uri.port != 443) return null
+
+        val host = uri.host?.lowercase() ?: return null
         if (host.isEmpty()) return null
         return if (ICON_HOST_SUFFIXES.any { host.endsWith(it) }) url else null
     }

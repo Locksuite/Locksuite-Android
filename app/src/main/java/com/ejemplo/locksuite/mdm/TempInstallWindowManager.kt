@@ -262,33 +262,35 @@ object TempInstallWindowManager {
 
         val closeReason: String?
         synchronized(lock) {
-            val state = readState(ctx) ?: run {
+            val state = readState(ctx)
+            if (state == null) {
                 clearStatePrefs(ctx, "estado_invalido")
                 cancelAlarm(ctx)
-                return true
-            }
-            val elapsed = SystemClock.elapsedRealtime()
-            val tick = TempInstallWindowClock.evaluate(
-                state,
-                System.currentTimeMillis(),
-                elapsed,
-                currentBootCount(ctx)
-            )
-
-            if (tick.expired) {
-                closeReason = tick.expireReason ?: "vencido"
-                clearStatePrefs(ctx, closeReason)
-                cancelAlarm(ctx)
+                closeReason = "estado_invalido"
             } else {
-                closeReason = null
-                if (tick.rebootDetected ||
-                    tick.updatedState.deadlineWall != state.deadlineWall ||
-                    elapsed - lastDiskSaveRealtime >= 60_000L
-                ) {
-                    writeState(ctx, tick.updatedState, null)
-                    lastDiskSaveRealtime = elapsed
-                    if (tick.rebootDetected) {
-                        scheduleAlarm(ctx, tick.remainingMs.coerceAtLeast(1_000L))
+                val elapsed = SystemClock.elapsedRealtime()
+                val tick = TempInstallWindowClock.evaluate(
+                    state,
+                    System.currentTimeMillis(),
+                    elapsed,
+                    currentBootCount(ctx)
+                )
+
+                if (tick.expired) {
+                    closeReason = tick.expireReason ?: "vencido"
+                    clearStatePrefs(ctx, closeReason)
+                    cancelAlarm(ctx)
+                } else {
+                    closeReason = null
+                    if (tick.rebootDetected ||
+                        tick.updatedState.deadlineWall != state.deadlineWall ||
+                        elapsed - lastDiskSaveRealtime >= 60_000L
+                    ) {
+                        writeState(ctx, tick.updatedState, null)
+                        lastDiskSaveRealtime = elapsed
+                        if (tick.rebootDetected) {
+                            scheduleAlarm(ctx, tick.remainingMs.coerceAtLeast(1_000L))
+                        }
                     }
                 }
             }

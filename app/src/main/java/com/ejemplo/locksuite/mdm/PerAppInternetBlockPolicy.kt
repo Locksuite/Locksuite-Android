@@ -199,8 +199,13 @@ object PerAppInternetBlockPolicy {
      */
     fun matchesAnyDomain(domain: String, blockedDomains: Set<String>): Boolean {
         if (blockedDomains.isEmpty()) return false
-        var candidate = normalizeDomain(domain)
-        if (candidate.isEmpty()) return false
+        val normalized = normalizeDomain(domain)
+        if (normalized.isEmpty()) return false
+        return matchesNormalizedDomain(normalized, blockedDomains)
+    }
+
+    private fun matchesNormalizedDomain(normalized: String, blockedDomains: Set<String>): Boolean {
+        var candidate = normalized
         while (true) {
             if (candidate in blockedDomains) return true
             val dot = candidate.indexOf('.')
@@ -220,10 +225,9 @@ object PerAppInternetBlockPolicy {
         if (activeBlockedPackages.isEmpty()) return null
         val normalized = normalizeDomain(domain)
         if (normalized.isEmpty()) return null
-        val active = filterSupported(activeBlockedPackages)
-        if (active.isEmpty()) return null
-        for (pkg in active) {
-            if (matchesAnyDomain(normalized, domainsForPackage(pkg))) {
+        for (pkg in activeBlockedPackages) {
+            val domains = domainsForPackage(pkg)
+            if (domains.isNotEmpty() && matchesNormalizedDomain(normalized, domains)) {
                 return pkg
             }
         }

@@ -85,9 +85,15 @@ class LockSuiteApplication : Application(), Configuration.Provider {
         lateinit var domainRuleManager: DomainRuleManager
             private set
 
+        private val domainRulesLock = Any()
+
         /** Las reglas DNS ya se cargaron en este proceso. */
         @Volatile
-        private var rulesLoaded = false
+        private var domainRulesLoaded = false
+
+        /** La lista blanca ya se cargó en este proceso (reintenta si falló de forma transitoria). */
+        @Volatile
+        private var whitelistLoaded = false
 
         /**
          * ¿Está montado el almacenamiento cifrado por credencial (o sea, ya se puede
@@ -147,32 +153,39 @@ class LockSuiteApplication : Application(), Configuration.Provider {
          * @return true si el motor de reglas ya tiene las reglas cargadas.
          */
         fun ensureDomainRulesLoaded(context: Context): Boolean {
-            if (rulesLoaded) return true
+            if (domainRulesLoaded && whitelistLoaded) return true
             if (!isStorageUnlocked(context)) return false
-            return try {
-                domainRuleManager.loadRules()
+            synchronized(domainRulesLock) {
+                if (domainRulesLoaded && whitelistLoaded) return true
+                if (!isStorageUnlocked(context)) return false
+                if (!domainRulesLoaded) {
+                    try {
+                        domainRuleManager.loadRules()
+                        domainRulesLoaded = true
+                    } catch (e: Exception) {
+                        // Incluye UninitializedPropertyAccessException si alguien llama a esto
+                        // antes de que corra onCreate().
+                        android.util.Log.w(TAG, "No se pudieron cargar las reglas DNS: ${e.message}")
+                        return false
+                    }
+                }
                 // La lista blanca viaja en el mismo llamado a propósito: comparte el
                 // momento exacto en que se puede leer el disco, y si se cargara por su
                 // cuenta habría una ventana en la que el filtro DNS ya está resolviendo
-                // con el Trie vacío. Con el Trie vacío la infraestructura no está
-                // marcada, y `mtalk.google.com` vuelve a caer bajo la lista negra
-                // global (B.52) justo durante el arranque, que es cuando el equipo más
-                // necesita recibir comandos.
-                // En su propio try: si la lista blanca fallara, las reglas DNS de
-                // siempre tienen que cargar igual. Nunca al revés.
-                try {
-                    com.ejemplo.locksuite.mdm.WhitelistManager(context.applicationContext).reload()
-                } catch (e: Exception) {
-                    android.util.Log.w(TAG, "No se pudo cargar la lista blanca: ${e.message}")
+                // con el Trie vacío. Si falla de forma transitoria, `whitelistLoaded`
+                // queda en false para reintentar en la siguiente llamada.
+                if (!whitelistLoaded) {
+                    try {
+                        com.ejemplo.locksuite.mdm.WhitelistManager(context.applicationContext).reload()
+                        whitelistLoaded = true
+                    } catch (e: Exception) {
+                        android.util.Log.w(TAG, "No se pudo cargar la lista blanca: ${e.message}")
+                    }
                 }
-                rulesLoaded = true
-                android.util.Log.i(TAG, "Reglas DNS y lista blanca cargadas.")
-                true
-            } catch (e: Exception) {
-                // Incluye UninitializedPropertyAccessException si alguien llama a esto
-                // antes de que corra onCreate().
-                android.util.Log.w(TAG, "No se pudieron cargar las reglas DNS: ${e.message}")
-                false
+                if (domainRulesLoaded && whitelistLoaded) {
+                    android.util.Log.i(TAG, "Reglas DNS y lista blanca cargadas.")
+                }
+                return domainRulesLoaded
             }
         }
     }
@@ -346,6 +359,20 @@ class LockSuiteApplication : Application(), Configuration.Provider {
             com.ejemplo.locksuite.util.LocaleManager.init(this)
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+
+        val purged = try {
+            com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+                .getBoolean("locksuite_purged", false)
+        } catch (_: Throwable) {
+            false
+        }
+        if (purged) {
+            android.util.Log.i(TAG, "LockSuite purgado: omitiendo inicialización MDM y servicios.")
+            try {
+                com.ejemplo.locksuite.util.ProcessHealth.cancelAll(this)
+            } catch (_: Throwable) {}
+            return
         }
 
         // 1c. (26/10/2026, B.97) Una actualización de app por la Tienda de LockSuite que

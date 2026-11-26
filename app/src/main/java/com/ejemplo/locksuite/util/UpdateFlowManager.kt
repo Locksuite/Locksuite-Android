@@ -273,15 +273,29 @@ object UpdateFlowManager {
 
     /** Corre en el hilo principal (ya, si se está en él). Lo usa la ruta de la Tienda. */
     fun runOnMain(block: () -> Unit) {
-        if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            Safe.guard("updateFlow.runOnMain") { block() }
+        } else {
+            mainHandler.post { Safe.guard("updateFlow.runOnMainPost") { block() } }
+        }
     }
 
+    private val stateLock = Any()
     @Volatile private var lastSyncAt = 0L
     @Volatile private var finishing = false
+    /**
+     * true mientras se muestra el aviso final en el overlay negro (hasta 5 s) o corre la
+     * ventana de restauración posterior al cierre: impide que la guardia de Play Store de
+     * `LockSuiteAccessibilityService` o un `finish()` duplicado borren el aviso antes de tiempo
+     * o disparen un `GLOBAL_ACTION_HOME` duplicado.
+     */
+    @Volatile private var finishingNoticeActive = false
     private var finishRunnable: Runnable? = null
     private var restoreRunnable: Runnable? = null
     private const val KEY_PREV_UNINSTALL_BLOCKED = "update_flow_prev_uninstall_blocked"
     private const val KEY_PREV_UNINSTALL_PKG = "update_flow_prev_uninstall_pkg"
+
+    fun isFinishingNoticeActive(): Boolean = finishingNoticeActive
 
     private fun restorePreviousUninstallBlock(context: Context) {
         val prefs = PrefsHelper.getMdmPrefs(context)
@@ -461,6 +475,10 @@ object UpdateFlowManager {
      */
     @Volatile private var keyguardCachedAt = 0L
     @Volatile private var keyguardCached = false
+
+    fun invalidateKeyguardCache() {
+        keyguardCachedAt = 0L
+    }
 
     /**
      * Se consulta en cada evento de accesibilidad mientras dura el flujo (hasta diez por
@@ -1004,42 +1022,61 @@ object UpdateFlowManager {
             return reason
         }
 
-        finishRunnable?.let { mainHandler.removeCallbacks(it) }
-        restoreRunnable?.let { mainHandler.removeCallbacks(it) }
-        finishRunnable = null
-        restoreRunnable = null
-        finishing = false
+        val claimError = synchronized(stateLock) {
+            if (hasLiveFlow(ctx)) {
+                val other = currentPackage(ctx)
+                val enCurso = if (isInstallMode(ctx)) "una instalacion" else "una actualizacion"
+                return@synchronized if (other == packageName) {
+                    "Ya hay $enCurso en curso para esta aplicacion."
+                } else {
+                    "Ya hay $enCurso en curso (${appLabel(ctx, other ?: "")}). Espera a que termine o cancelala."
+                }
+            }
+            if (prefs.getBoolean(KEY_IN_PROGRESS, false)) {
+                return@synchronized "Hay otra instalacion en curso en este equipo. Espera a que termine."
+            }
 
-        restorePreviousUninstallBlock(ctx)
+            finishRunnable?.let { mainHandler.removeCallbacks(it) }
+            restoreRunnable?.let { mainHandler.removeCallbacks(it) }
+            finishRunnable = null
+            restoreRunnable = null
+            finishing = false
+            finishingNoticeActive = false
+            invalidateKeyguardCache()
 
-        prefs.edit()
-            .putString(KEY_PKG, packageName)
-            .putString(KEY_MODE, mode)
-            .putString(KEY_LABEL, if (install) label else "")
-            .putString(KEY_LABEL_PKG, if (install) packageName else "")
-            // B.97: la marca de instalación NO se prende acá. La prende el camino que la
-            // necesita, cuando la necesita: beginPlayStoreRoute() para Google Play, y
-            // SelfUpdater por los segundos que dura la instalación silenciosa. Mientras se
-            // elige el camino o se baja la copia de la Tienda, el equipo queda con todas
-            // sus restricciones puestas (ver isRunning).
-            .putString(KEY_STAGE, STAGE_PREPARING)
-            .remove(KEY_DETAIL)
-            .remove(KEY_DEBUG_LABELS)
-            .putLong(KEY_STARTED_AT, System.currentTimeMillis())
-            .putString(KEY_SOURCE, source)
-            .putBoolean(KEY_CANCELABLE, cancelable)
-            .putLong(KEY_BASE_VERSION, baseVc)
-            // B.97 — ruta todavía sin elegir: hasta que se elija, nada tapa la pantalla
-            // ni maneja Play Store (ver isPlayStoreFlowRunning).
-            .putString(KEY_ROUTE, UpdateRoutePlanner.ROUTE_UNDECIDED)
-            .putString(KEY_ROUTE_PREF, pref)
-            .remove(KEY_ROUTE_WHY)
-            .putInt(KEY_PROGRESS, -1)
-            .putString(KEY_INSTALLER, installer)
-            .putString(KEY_BASE_VERSION_NAME, baseVn)
-            .remove(KEY_VERSION_AFTER)
-            .putString(KEY_STEPS, "")
-            .apply()
+            restorePreviousUninstallBlock(ctx)
+
+            prefs.edit()
+                .putString(KEY_PKG, packageName)
+                .putString(KEY_MODE, mode)
+                .putString(KEY_LABEL, if (install) label else "")
+                .putString(KEY_LABEL_PKG, if (install) packageName else "")
+                // B.97: la marca de instalación NO se prende acá. La prende el camino que la
+                // necesita, cuando la necesita: beginPlayStoreRoute() para Google Play, y
+                // SelfUpdater por los segundos que dura la instalación silenciosa. Mientras se
+                // elige el camino o se baja la copia de la Tienda, el equipo queda con todas
+                // sus restricciones puestas (ver isRunning).
+                .putString(KEY_STAGE, STAGE_PREPARING)
+                .remove(KEY_DETAIL)
+                .remove(KEY_DEBUG_LABELS)
+                .putLong(KEY_STARTED_AT, System.currentTimeMillis())
+                .putString(KEY_SOURCE, source)
+                .putBoolean(KEY_CANCELABLE, cancelable)
+                .putLong(KEY_BASE_VERSION, baseVc)
+                // B.97 — ruta todavía sin elegir: hasta que se elija, nada tapa la pantalla
+                // ni maneja Play Store (ver isPlayStoreFlowRunning).
+                .putString(KEY_ROUTE, UpdateRoutePlanner.ROUTE_UNDECIDED)
+                .putString(KEY_ROUTE_PREF, pref)
+                .remove(KEY_ROUTE_WHY)
+                .putInt(KEY_PROGRESS, -1)
+                .putString(KEY_INSTALLER, installer)
+                .putString(KEY_BASE_VERSION_NAME, baseVn)
+                .remove(KEY_VERSION_AFTER)
+                .putString(KEY_STEPS, "")
+                .apply()
+            null
+        }
+        if (claimError != null) return claimError
 
         LockSuiteAccessibilityService.instance?.invalidateFlagsCache()
         LockSuiteAccessibilityService.instance?.overlayManager?.clearBlockingSteps()
@@ -1190,7 +1227,20 @@ object UpdateFlowManager {
 
         setStage(ctx, STAGE_WAITING_STORE)
         syncToPanel(ctx, force = true)
+        invalidateKeyguardCache()
 
+        ensureSessionWatcherStarted(ctx, packageName)
+        LockSuiteAccessibilityService.instance?.startUpdateTicker()
+
+        return null
+    }
+
+    /**
+     * Registra (o reafirma al reconectarse el servicio de accesibilidad) el observador de
+     * sesiones de `PackageInstaller` con los callbacks del flujo de actualización.
+     */
+    fun ensureSessionWatcherStarted(context: Context, packageName: String) {
+        val ctx = context.applicationContext
         PlayUpdateSessionWatcher.start(
             ctx, packageName,
             onProgress = { pct -> setStage(ctx, STAGE_DOWNLOADING, "Descargando... $pct%", progress = pct) },
@@ -1213,9 +1263,6 @@ object UpdateFlowManager {
                 }
             }
         )
-        LockSuiteAccessibilityService.instance?.startUpdateTicker()
-
-        return null
     }
 
     /**
@@ -1429,7 +1476,7 @@ object UpdateFlowManager {
     fun fallbackToPlayStore(context: Context, packageName: String, reason: String) {
         val ctx = context.applicationContext
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { fallbackToPlayStore(ctx, packageName, reason) }
+            mainHandler.post { Safe.guard("updateFlow.fallback") { fallbackToPlayStore(ctx, packageName, reason) } }
             return
         }
         if (!isActiveFor(ctx, packageName)) return
@@ -1468,20 +1515,30 @@ object UpdateFlowManager {
         // B.97 — SIEMPRE en el hilo principal. Desde el 26/10 hay cierres que llegan de
         // hilos de fondo (la ruta de la Tienda, el WatchdogWorker vía healStaleInstall) y
         // otros del principal (PackageReceiver, el ticker, el botón Cancelar). Con un
-        // solo hilo, la marca `finishing` de abajo no puede tener carreras.
+        // solo hilo + stateLock, `finishing` y los runnables de cierre quedan serializados.
         if (Looper.myLooper() != Looper.getMainLooper()) {
             val appCtx = context.applicationContext
-            mainHandler.post { finish(appCtx, result, message, reason) }
+            mainHandler.post { Safe.guard("updateFlow.finishPost") { finish(appCtx, result, message, reason) } }
             return
         }
         val ctx = context.applicationContext
         val prefs = PrefsHelper.getMdmPrefs(ctx)
-        val pkg = prefs.getString(KEY_PKG, null)
-        val wasRunning = isRunning(ctx)
-
-        if (finishing) {
-            LockSuiteAccessibilityService.instance?.overlayManager?.hideBlockingMessageOverlay()
-            return
+        val pkg: String?
+        val wasRunning: Boolean
+        synchronized(stateLock) {
+            if (finishing) {
+                if (!finishingNoticeActive) {
+                    LockSuiteAccessibilityService.instance?.overlayManager?.hideBlockingMessageOverlay()
+                }
+                return
+            }
+            pkg = prefs.getString(KEY_PKG, null)
+            wasRunning = isRunning(ctx)
+            finishing = true
+            finishRunnable?.let { mainHandler.removeCallbacks(it) }
+            restoreRunnable?.let { mainHandler.removeCallbacks(it) }
+            finishRunnable = null
+            restoreRunnable = null
         }
 
         // B.97: lo que hace falta saber del flujo ANTES de borrarlo.
@@ -1518,8 +1575,6 @@ object UpdateFlowManager {
             }
             step(ctx, kind, texto, evenIfIdle = true)
         }
-
-        finishing = true
 
         Log.i(TAG, "Cerrando flujo de actualizacion: result=$result pkg=$pkg running=$wasRunning route=$route")
 
@@ -1633,56 +1688,82 @@ object UpdateFlowManager {
             result == RESULT_ERROR
         val delayMs = if (!showNoticeOnOverlay) 0L else if (needsReading) 5000L else 1800L
 
-        val outerRunnable = Runnable {
-            finishRunnable = null
-            service?.overlayManager?.hideBlockingMessageOverlay()
-            service?.overlayManager?.clearBlockingSteps()
-
-            // Volver al INICIO solo si se abrió Google Play (es para sacarla de adelante).
-            // En la ruta de la Tienda el usuario estaba usando el teléfono: mandarlo al
-            // inicio le cerraría lo que tenía abierto sin ningún motivo. Lo mismo si el
-            // flujo nunca llegó a elegir camino.
-            if (route == ROUTE_PLAY_STORE) {
-                try {
-                    if (service != null) {
-                        service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
-                    } else {
-                        val home = Intent(Intent.ACTION_MAIN).apply {
-                            addCategory(Intent.CATEGORY_HOME)
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        ctx.startActivity(home)
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "No se pudo volver al inicio: ${e.message}")
-                }
-            }
-
-            val innerRunnable = Runnable {
-                restoreRunnable = null
-                try {
-                    PolicyManager(ctx).restoreInstallRestrictions()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error restaurando restricciones: ${e.message}")
-                }
-                restorePreviousUninstallBlock(ctx)
-
-                cancelWatchdog(ctx)
-                releaseWake()
-                finishing = false
-                LockSuiteAccessibilityService.instance?.overlayManager?.hideBlockingMessageOverlay()
-                syncToPanel(ctx, force = true)
-            }
-            restoreRunnable = innerRunnable
-            mainHandler.postDelayed(innerRunnable, RESTORE_DELAY_MS)
+        synchronized(stateLock) {
+            finishingNoticeActive = showNoticeOnOverlay || route == ROUTE_PLAY_STORE
         }
-        finishRunnable = outerRunnable
+
+        val outerRunnable = Runnable {
+            var innerPosted = false
+            try {
+                Safe.guard("updateFlow.finishOuter") {
+                    synchronized(stateLock) { finishRunnable = null }
+                    service?.overlayManager?.hideBlockingMessageOverlay()
+                    service?.overlayManager?.clearBlockingSteps()
+
+                    // Volver al INICIO solo si se abrió Google Play (es para sacarla de adelante).
+                    // En la ruta de la Tienda el usuario estaba usando el teléfono: mandarlo al
+                    // inicio le cerraría lo que tenía abierto sin ningún motivo. Lo mismo si el
+                    // flujo nunca llegó a elegir camino.
+                    if (route == ROUTE_PLAY_STORE) {
+                        try {
+                            if (service != null) {
+                                service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+                            } else {
+                                val home = Intent(Intent.ACTION_MAIN).apply {
+                                    addCategory(Intent.CATEGORY_HOME)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                ctx.startActivity(home)
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "No se pudo volver al inicio: ${e.message}")
+                        }
+                    }
+
+                    val innerRunnable = Runnable {
+                        try {
+                            Safe.guard("updateFlow.finishInner") {
+                                synchronized(stateLock) { restoreRunnable = null }
+                                try {
+                                    PolicyManager(ctx).restoreInstallRestrictions()
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Error restaurando restricciones: ${e.message}")
+                                }
+                                restorePreviousUninstallBlock(ctx)
+
+                                cancelWatchdog(ctx)
+                                releaseWake()
+                                LockSuiteAccessibilityService.instance?.overlayManager?.hideBlockingMessageOverlay()
+                                syncToPanel(ctx, force = true)
+                            }
+                        } finally {
+                            synchronized(stateLock) {
+                                finishing = false
+                                finishingNoticeActive = false
+                            }
+                        }
+                    }
+                    synchronized(stateLock) { restoreRunnable = innerRunnable }
+                    innerPosted = mainHandler.postDelayed(innerRunnable, RESTORE_DELAY_MS)
+                }
+            } finally {
+                if (!innerPosted) {
+                    synchronized(stateLock) {
+                        finishing = false
+                        finishingNoticeActive = false
+                    }
+                }
+            }
+        }
+        synchronized(stateLock) { finishRunnable = outerRunnable }
         mainHandler.postDelayed(outerRunnable, delayMs)
 
         if (!finalNotice.isNullOrBlank() && result != RESULT_UPDATED) {
             try {
                 mainHandler.post {
-                    android.widget.Toast.makeText(ctx, finalNotice, android.widget.Toast.LENGTH_LONG).show()
+                    Safe.guard("updateFlow.finishToast") {
+                        android.widget.Toast.makeText(ctx, finalNotice, android.widget.Toast.LENGTH_LONG).show()
+                    }
                 }
             } catch (e: Exception) {
                 // Toast desde un contexto sin UI: no es critico.
@@ -1698,7 +1779,18 @@ object UpdateFlowManager {
      */
     fun forceCleanup(context: Context, result: String) {
         val ctx = context.applicationContext
-        finishing = false
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { Safe.guard("updateFlow.forceCleanup") { forceCleanup(ctx, result) } }
+            return
+        }
+        synchronized(stateLock) {
+            finishRunnable?.let { mainHandler.removeCallbacks(it) }
+            restoreRunnable?.let { mainHandler.removeCallbacks(it) }
+            finishRunnable = null
+            restoreRunnable = null
+            finishing = false
+            finishingNoticeActive = false
+        }
         finish(ctx, result, null)
     }
 
@@ -1840,8 +1932,10 @@ object UpdateFlowManager {
                 syncPendiente = true
                 val appCtx = context.applicationContext
                 mainHandler.postDelayed({
-                    syncPendiente = false
-                    syncToPanel(appCtx, force = true)
+                    Safe.guard("updateFlow.syncPanel") {
+                        syncPendiente = false
+                        syncToPanel(appCtx, force = true)
+                    }
                 }, (1500L - (now - lastSyncAt)).coerceAtLeast(0L) + 50L)
             }
             return

@@ -36,20 +36,20 @@ class DomainBlockingTest {
             includeSharedCdn = true
         )
         assertEquals(
-            "rides.sng.link debe resolverse como BLOCK en buildRules",
-            RuleType.BLOCK,
+            "rides.sng.link debe resolverse como FORCE_BLOCK en buildRules",
+            RuleType.FORCE_BLOCK,
             rules["rides.sng.link"]
         )
 
         val trie = DomainRuleTrie.build(rules)
         assertEquals(
-            "rides.sng.link debe resolverse como BLOCK en el Trie",
-            RuleType.BLOCK,
+            "rides.sng.link debe resolverse como FORCE_BLOCK en el Trie",
+            RuleType.FORCE_BLOCK,
             trie.resolve("rides.sng.link")
         )
         assertEquals(
-            "subdominios de rides.sng.link deben resolverse como BLOCK en el Trie",
-            RuleType.BLOCK,
+            "subdominios de rides.sng.link deben resolverse como FORCE_BLOCK en el Trie",
+            RuleType.FORCE_BLOCK,
             trie.resolve("track.rides.sng.link")
         )
     }
@@ -79,18 +79,18 @@ class DomainBlockingTest {
         val trie = DomainRuleTrie.build(rules)
         for (domain in listOf("apps.apple.com", "x.com")) {
             assertEquals(
-                "$domain debe resolverse como BLOCK en buildRules",
-                RuleType.BLOCK,
+                "$domain debe resolverse como FORCE_BLOCK en buildRules",
+                RuleType.FORCE_BLOCK,
                 rules[domain]
             )
             assertEquals(
-                "$domain debe resolverse como BLOCK en el Trie",
-                RuleType.BLOCK,
+                "$domain debe resolverse como FORCE_BLOCK en el Trie",
+                RuleType.FORCE_BLOCK,
                 trie.resolve(domain)
             )
             assertEquals(
-                "subdominios de $domain deben resolverse como BLOCK en el Trie",
-                RuleType.BLOCK,
+                "subdominios de $domain deben resolverse como FORCE_BLOCK en el Trie",
+                RuleType.FORCE_BLOCK,
                 trie.resolve("sub.$domain")
             )
         }
@@ -190,5 +190,87 @@ class DomainBlockingTest {
         assertTrue("CORE_DOMAINS debe contener transitapp.com", core!!.contains("transitapp.com"))
         assertTrue("CORE_DOMAINS debe contener mapbox.com", core.contains("mapbox.com"))
         assertTrue("CORE_DOMAINS debe contener googleapis.com", core.contains("googleapis.com"))
+    }
+
+    @Test
+    fun domainRuleTrie_stripsWildcardAndNeverWeakensForceRules() {
+        val trie = DomainRuleTrie.build(
+            mapOf(
+                "*.example.com" to RuleType.FORCE_BLOCK,
+                "safe.example.com" to RuleType.ALLOW,
+                "*.example.org" to RuleType.FORCE_ALLOW,
+                "ads.example.org" to RuleType.BLOCK,
+                "override.example.com" to RuleType.FORCE_ALLOW,
+                "override-block.example.org" to RuleType.FORCE_BLOCK
+            )
+        )
+        // Wildcard stripping
+        assertEquals(RuleType.FORCE_BLOCK, trie.resolve("example.com"))
+        assertEquals(RuleType.FORCE_BLOCK, trie.resolve("sub.example.com"))
+        // Normal child rules NEVER weaken parent FORCE_* rules
+        assertEquals(RuleType.FORCE_BLOCK, trie.resolve("safe.example.com"))
+        assertEquals(RuleType.FORCE_BLOCK, trie.resolve("deep.safe.example.com"))
+        assertEquals(RuleType.FORCE_ALLOW, trie.resolve("ads.example.org"))
+        // Child FORCE_* rule CAN override parent FORCE_* rule
+        assertEquals(RuleType.FORCE_ALLOW, trie.resolve("override.example.com"))
+        assertEquals(RuleType.FORCE_BLOCK, trie.resolve("override-block.example.org"))
+    }
+
+    @Test
+    fun dohAndProxyDomains_areBlockedInCatalogWebViewPolicyAndTrie() {
+        val evadeDomains = listOf(
+            "dns.google",
+            "dns.google.com",
+            "cloudflare-dns.com",
+            "mozilla.cloudflare-dns.com",
+            "dns.quad9.net",
+            "doh.opendns.com",
+            "dns.adguard-dns.com",
+            "dns.nextdns.io",
+            "doh.cleanbrowsing.org",
+            "dns.mullvad.net",
+            "freedns.controld.com",
+            "dns.alidns.com",
+            "use-application-dns.net",
+            "mask.icloud.com",
+            "croxyproxy.com",
+            "proxysite.com",
+            "torproject.org",
+            "webcache.googleusercontent.com",
+            "translate.goog",
+            "youtubeembeddedplayer.googleapis.com"
+        )
+        val rules = WhitelistManager.buildRules(
+            decisions = emptyMap(),
+            custom = emptyMap(),
+            includeSharedCdn = true
+        )
+        val trie = DomainRuleTrie.build(rules)
+        for (domain in evadeDomains) {
+            assertTrue("$domain debe estar en BLOCK_ALWAYS", WhitelistCatalog.BLOCK_ALWAYS.contains(domain))
+            assertTrue("$domain debe estar en WebViewPolicy.GLOBAL_BLACKLIST", WebViewPolicy.getGlobalBlacklist().contains(domain))
+            assertTrue("$domain debe quedar bloqueado globalmente en WebViewPolicy", WebViewPolicy.isGloballyBlacklisted(domain))
+            assertEquals("$domain debe resolverse como FORCE_BLOCK en Trie", RuleType.FORCE_BLOCK, trie.resolve(domain))
+            assertEquals("sub.$domain debe resolverse como FORCE_BLOCK en Trie", RuleType.FORCE_BLOCK, trie.resolve("sub.$domain"))
+        }
+    }
+
+    @Test
+    fun didi_includesGameXiaojukejiAndSevenBlockedHosts() {
+        val didi = WhitelistCatalog.entryFor("com.didiglobal.passenger")
+        org.junit.Assert.assertNotNull(didi)
+        assertEquals(7, didi!!.block.size)
+        assertTrue(didi.block.contains("game.xiaojukeji.com"))
+        assertTrue(WebViewPolicy.isGloballyBlacklisted("game.xiaojukeji.com"))
+    }
+
+    @Test
+    fun webViewPolicy_genericAppFailsClosedOnEmptyTokens() {
+        org.junit.Assert.assertFalse(WebViewPolicy.isDomainAllowedForGenericApp("com.android.app", "arbitrary-web.com"))
+        org.junit.Assert.assertFalse(WebViewPolicy.isDomainAllowedForGenericApp("com.mobile.user", "anything.org"))
+        org.junit.Assert.assertFalse(WebViewPolicy.isDomainAllowedForGenericApp("", "anything.org"))
+        // Legitimate token match works while hidden substring fails
+        assertTrue(WebViewPolicy.isDomainAllowedForGenericApp("com.cabify.passenger", "api.cabify.com"))
+        org.junit.Assert.assertFalse(WebViewPolicy.isDomainAllowedForGenericApp("com.cabify.passenger", "evilcabifyscam.ru"))
     }
 }

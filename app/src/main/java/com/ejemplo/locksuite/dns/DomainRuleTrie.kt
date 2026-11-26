@@ -1,8 +1,13 @@
 package com.ejemplo.locksuite.dns
 
-// Normalización centralizada
-fun normalizeDomain(domain: String): String =
-    domain.trim().trimEnd('.').lowercase()
+// Normalización centralizada (incluye saneamiento de comodines "*.dominio")
+fun normalizeDomain(domain: String): String {
+    var normalized = domain.trim().lowercase()
+    while (normalized.startsWith("*.")) {
+        normalized = normalized.substring(2)
+    }
+    return normalized.trimStart('.').trimEnd('.')
+}
 
 fun domainLabelsReversed(domain: String): List<String> =
     normalizeDomain(domain).split(".").filter { it.isNotEmpty() }.asReversed()
@@ -41,18 +46,27 @@ class DomainRuleTrie private constructor(private val root: TrieNode) {
 
     /**
      * Camina desde el TLD hacia las subetiquetas.
-     * Si encuentra múltiples reglas en el camino, la más específica (más profunda) gana.
+     * Rastrea por separado las reglas forzadas (FORCE_BLOCK/FORCE_ALLOW) y las normales
+     * (BLOCK/ALLOW): entre reglas del mismo nivel gana la más específica, pero una regla
+     * normal más específica nunca puede debilitar o pisar un FORCE_BLOCK/FORCE_ALLOW padre.
      * Retorna null si no hay regla que aplique.
      */
     fun resolve(domain: String): RuleType? {
         val labels = domainLabelsReversed(domain)
         if (labels.isEmpty()) return null
         var node = root
-        var lastMatch: RuleType? = null
+        var lastForceMatch: RuleType? = null
+        var lastNormalMatch: RuleType? = null
         for (label in labels) {
             node = node.children[label] ?: break
-            node.rule?.let { lastMatch = it }
+            node.rule?.let { rule ->
+                if (rule.isForce) {
+                    lastForceMatch = rule
+                } else {
+                    lastNormalMatch = rule
+                }
+            }
         }
-        return lastMatch
+        return lastForceMatch ?: lastNormalMatch
     }
 }

@@ -74,6 +74,38 @@ class TempInstallWindowClockTest {
     }
 
     @Test
+    fun `no extiende deadline por salto hacia adelante cuando el reloj previo ya era valido`() {
+        val dur = 30L * 60_000L
+        val t0 = 1_790_000_000_000L // >= 1_700_000_000_000L
+        val s0 = TempInstallWindowClock.createState(nowWall = t0, elapsedMs = 10_000L, bootCount = 2, durationMs = dur)
+        // El usuario adelanta el reloj +2 horas estando ya en fecha válida: debe vencer, no extenderse
+        val t = TempInstallWindowClock.evaluate(s0, nowWall = t0 + 2L * 3600_000L, elapsedMs = 40_000L, bootCount = 2)
+        assertFalse(t.active)
+        assertTrue(t.expired)
+        assertEquals(0L, t.remainingMs)
+    }
+
+    @Test
+    fun `cierra exploit de atrasar reloj a 1970 y luego saltar por NTP`() {
+        val dur = 30L * 60_000L
+        val realStart = 1_790_000_000_000L
+        val s0 = TempInstallWindowClock.createState(nowWall = realStart, elapsedMs = 10_000L, bootCount = 2, durationMs = dur)
+
+        // Paso 1: el usuario atrasa el reloj a 1970 mientras pasan 10 min reales
+        val t1 = TempInstallWindowClock.evaluate(s0, nowWall = 1_000_000L, elapsedMs = 10_000L + 10L * 60_000L, bootCount = 2)
+        assertTrue(t1.active)
+        assertEquals(20L * 60_000L, t1.remainingMs)
+
+        // Paso 2: el reloj vuelve a la hora real (+56 años) después de otros 5 min reales (quedan 15 min)
+        val restoredWall = realStart + 15L * 60_000L
+        val t2 = TempInstallWindowClock.evaluate(t1.updatedState, nowWall = restoredWall, elapsedMs = 10_000L + 15L * 60_000L, bootCount = 2)
+        assertTrue(t2.active)
+        assertFalse(t2.expired)
+        assertTrue(t2.updatedState.deadlineWall <= restoredWall + 15L * 60_000L)
+        assertEquals(15L * 60_000L, t2.remainingMs)
+    }
+
+    @Test
     fun `formatRemaining formatea segundos minutos horas y dias correctamente`() {
         assertEquals("45 s", TempInstallWindowClock.formatRemaining(45_000L))
         assertEquals("15 min", TempInstallWindowClock.formatRemaining(15L * 60_000L))

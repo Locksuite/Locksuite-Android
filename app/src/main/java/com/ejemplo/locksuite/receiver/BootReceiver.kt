@@ -16,6 +16,8 @@ class BootReceiver : BroadcastReceiver() {
         // 7/11/2026 (B.112): onReceive corre en el hilo principal; una excepción acá mataba el proceso.
         com.ejemplo.locksuite.util.Safe.guard("BootReceiver.onReceive") {
             val action = intent.action
+            if (action == null || action !in ALLOWED_ACTIONS) return
+
             // 19/11/2026 (B.125, T2): quién arrancó este proceso, anotado una sola vez.
             com.ejemplo.locksuite.diag.DiagLog.firstEntry("broadcast $action")
             // 6/11/2026 (B.110): rastro del arranque / actualización para el panel (anda también en
@@ -32,7 +34,14 @@ class BootReceiver : BroadcastReceiver() {
 
             // Alarma de respaldo: si la ventana de arranque protegido venció sin que la VPN
             // o el Watchdog hayan podido confirmar el filtro, se libera el proxy huérfano.
+            // healStuckProxy() verifica isGateProxyPresent() y que la ventana NO esté vigente
+            // según reloj monotónico, por lo que un caller externo no puede liberar antes de tiempo.
             if (action == ACTION_BOOT_GATE_TIMEOUT) {
+                if (!com.ejemplo.locksuite.util.BootGate.isActive(context) &&
+                    !com.ejemplo.locksuite.util.BootGate.isGateProxyPresent(context)
+                ) {
+                    return
+                }
                 android.util.Log.w("BootReceiver", "Alarma de seguridad de arranque protegido disparada. Verificando proxy huérfano.")
                 com.ejemplo.locksuite.util.BootGate.healStuckProxy(context, "alarma de seguridad")
                 return
@@ -129,6 +138,13 @@ class BootReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_BOOT_GATE_TIMEOUT = "com.ejemplo.locksuite.action.BOOT_GATE_TIMEOUT"
 
+        private val ALLOWED_ACTIONS = setOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            "android.intent.action.LOCKED_BOOT_COMPLETED",
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            ACTION_BOOT_GATE_TIMEOUT
+        )
+
         /**
          * Determina si alguna política activa requiere que la VPN Kosher esté
          * corriendo. Extraído a una función compartida (antes esta condición
@@ -184,9 +200,23 @@ class BootReceiver : BroadcastReceiver() {
                 } catch (e: Exception) {
                     false
                 }
+                val isWhitelistEnabled = try {
+                    com.ejemplo.locksuite.mdm.WhitelistManager(context).isEnabled()
+                } catch (e: Exception) {
+                    false
+                }
+                val hasWhitelistBlockedApps = try {
+                    com.ejemplo.locksuite.mdm.WhitelistManager(context)
+                        .allDecisions()
+                        .values
+                        .any { it == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_BLOCK }
+                } catch (e: Exception) {
+                    false
+                }
 
                 isVpnConfigBlocked || hasAdBlocking || hasGifsBlocked || hasWebViewBlocked ||
-                    hasPerAppInternetBlocked || hasMercadoPagoVpnBlock || hasCustomDnsRules
+                    hasPerAppInternetBlocked || hasMercadoPagoVpnBlock || hasCustomDnsRules ||
+                    isWhitelistEnabled || hasWhitelistBlockedApps
             } catch (e: Exception) {
                 android.util.Log.e("BootReceiver", "Fallo evaluando shouldVpnBeRunning: ${e.message}")
                 false

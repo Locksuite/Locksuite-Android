@@ -360,4 +360,39 @@ class GeminiMessagesPolicyTest {
         )
         assertNotEquals("", GeminiMessagesPolicy.motivo(r2))
     }
+
+    @Test
+    fun `esTituloTopBarCandidato captura nombres reales y descarta Chrome o numeros`() {
+        assertTrue(GeminiMessagesPolicy.esTituloTopBarCandidato("Juan Pérez"))
+        assertTrue(GeminiMessagesPolicy.esTituloTopBarCandidato("Mamá"))
+        assertTrue(GeminiMessagesPolicy.esTituloTopBarCandidato("Gemini"))
+        assertTrue(GeminiMessagesPolicy.esTituloTopBarCandidato("Grupo Familia"))
+
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato(null))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato(""))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato("   "))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato("A".repeat(61)))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato("Mensajes"))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato("Messages"))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato("הודעות"))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato("Buscar mensajes"))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato("Iniciar chat"))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato("Ajustes de mensajes"))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato("12:30"))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato("100%"))
+        assertFalse(GeminiMessagesPolicy.esTituloTopBarCandidato("+54 9 11"))
+    }
+
+    @Test
+    fun `titulo no vacio de contacto real evita falso positivo aunque no haya botones de llamada`() {
+        val retrato = GeminiMessagesPolicy.Retrato(
+            packageName = PKG,
+            isConversationScreen = true,
+            conversationTitle = "Banco Galicia",
+            composerHint = "Mensaje de texto",
+            hasCallButtons = false,
+            hasPrivacyDisclaimer = true
+        )
+        assertEquals(GeminiMessagesPolicy.Veredicto.NORMAL, GeminiMessagesPolicy.evaluar(retrato))
+    }
 }

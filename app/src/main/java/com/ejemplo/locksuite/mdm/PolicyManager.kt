@@ -25,11 +25,89 @@ class PolicyManager(private val context: Context) {
 
         private const val KEY_INITIAL_AUTO_PROVISION = "initial_auto_provision_v1"
         private const val KEY_VPN_TEMP_UNLOCK_UNTIL = "vpn_config_temp_unlock_until"
+        private const val KEY_VPN_TEMP_UNLOCK_UNTIL_ELAPSED = "vpn_config_temp_unlock_until_elapsed"
+        private const val KEY_VPN_TEMP_UNLOCK_BOOT_COUNT = "vpn_config_temp_unlock_boot_count"
         private const val KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED = "vpn_config_temp_unlock_was_blocked"
-        private const val VPN_TEMP_UNLOCK_WINDOW_MS = 60_000L
+        private const val KEY_POPULAR_NON_KOSHER_PENDING_APPLY = "popular_non_kosher_pending_apply"
+        internal const val VPN_TEMP_UNLOCK_WINDOW_MS = 60_000L
         const val KEY_PROFILE_AUTO_BLOCK_WAZE_DIDI = "profile_auto_block_waze_didi"
         const val KEY_WEBVIEW_MANUAL_UNBLOCK_PREFIX = "webview_manual_unblock_"
         const val KEY_PLAY_STORE_A11Y_BLOCKED = "play_store_accessibility_blocked"
+
+        /**
+         * Restricciones de creación de perfiles/usuarios secundarios asociadas a
+         * `DISALLOW_USER_SWITCH`. Bloquean evasión vía usuario secundario, Perfil de Trabajo,
+         * App Clone / Dual Messenger (API 34+) y Espacio Privado (API 35+).
+         */
+        val PROFILE_CREATION_RESTRICTIONS: List<String>
+            get() = profileCreationRestrictions(Build.VERSION.SDK_INT)
+
+        internal fun profileCreationRestrictions(sdkInt: Int = Build.VERSION.SDK_INT): List<String> = buildList {
+            add(UserManager.DISALLOW_ADD_USER)
+            add(UserManager.DISALLOW_ADD_MANAGED_PROFILE)
+            if (sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                add("no_add_clone_profile")
+            }
+            if (sdkInt >= 35) { // Build.VERSION_CODES.VANILLA_ICE_CREAM
+                add("no_add_private_profile")
+            }
+        }
+
+        /**
+         * Comparación en tiempo constante de firmas HMAC en hex, con fallo cerrado ante cadenas
+         * vacías o en blanco (evita bypass si el cálculo HMAC devolviera vacío).
+         */
+        internal fun signaturesMatchConstantTime(expectedHex: String, providedHex: String): Boolean {
+            if (expectedHex.isBlank() || providedHex.isBlank()) return false
+            val expectedBytes = expectedHex.trim().lowercase(java.util.Locale.ROOT).toByteArray(Charsets.UTF_8)
+            val providedBytes = providedHex.trim().lowercase(java.util.Locale.ROOT).toByteArray(Charsets.UTF_8)
+            return java.security.MessageDigest.isEqual(expectedBytes, providedBytes)
+        }
+
+        /**
+         * Evalúa si la ventana temporal de configuración de VPN sigue vigente usando reloj
+         * monotónico (`elapsedRealtime` + `BOOT_COUNT`), con lectura retrocompatible segura ante
+         * atraso de reloj para preferencias heredadas de versiones anteriores.
+         */
+        internal fun isTempVpnUnlockActive(
+            untilElapsed: Long,
+            savedBootCount: Int,
+            nowElapsed: Long,
+            currentBootCount: Int,
+            legacyUntilWall: Long,
+            nowWall: Long,
+            maxWindowMs: Long = VPN_TEMP_UNLOCK_WINDOW_MS
+        ): Boolean {
+            if (untilElapsed > 0L) {
+                if (savedBootCount != -1 && currentBootCount != -1 && savedBootCount != currentBootCount) {
+                    return false
+                }
+                val remaining = untilElapsed - nowElapsed
+                return remaining > 0L && remaining <= maxWindowMs
+            }
+            if (legacyUntilWall > 0L) {
+                val remainingWall = legacyUntilWall - nowWall
+                return remainingWall > 0L && remainingWall <= maxWindowMs
+            }
+            return false
+        }
+
+        internal val KNOWN_BROWSER_PACKAGES = listOf(
+            "com.android.chrome",
+            "com.chrome.beta",
+            "org.mozilla.firefox",
+            "org.mozilla.focus",
+            "com.opera.browser",
+            "com.opera.mini.native",
+            "com.microsoft.emmx",              // Edge
+            "com.sec.android.app.sbrowser",    // Samsung Internet
+            "com.brave.browser",
+            "com.duckduckgo.mobile.android",
+            "com.android.browser",             // Navegador AOSP antiguo
+            "com.UCMobile.intl",
+            "com.kiwibrowser.browser",
+            "com.google.android.googlequicksearchbox" // App de Google / Asistente / Lens (Punto 1)
+        )
 
         /** Guarda de una vez por proceso para autoGrantDeclaredPermissions(). Ver B.55. */
         @Volatile private var permissionsAutoGranted = false
@@ -73,6 +151,34 @@ class PolicyManager(private val context: Context) {
             "listado.mercadolibre.com",
             "snoopy.mercadolibre.com"
         )
+    }
+
+    private fun currentBootCount(): Int = try {
+        android.provider.Settings.Global.getInt(
+            context.contentResolver,
+            android.provider.Settings.Global.BOOT_COUNT,
+            -1
+        )
+    } catch (_: Exception) {
+        -1
+    }
+
+    private fun applySelfUserControlProtection(enable: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        try {
+            if (!dpm.isDeviceOwnerApp(context.packageName)) return
+            val desired = if (enable) listOf(context.packageName) else emptyList()
+            val current = try {
+                dpm.getUserControlDisabledPackages(adminComponent)
+            } catch (_: Exception) {
+                null
+            }
+            if (current == null || current.toSet() != desired.toSet()) {
+                dpm.setUserControlDisabledPackages(adminComponent, desired)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "applySelfUserControlProtection($enable): ${e.message}")
+        }
     }
 
     private fun setRestriction(restriction: String, enable: Boolean): Boolean {
@@ -424,17 +530,11 @@ class PolicyManager(private val context: Context) {
     }
 
     fun setHideSuspendedApps(block: Boolean) {
+        if (deferIfSuspended("hide_suspended_apps", block)) return
         val prefs = PrefsHelper.getMdmPrefs(context)
         prefs.edit().putBoolean("hide_suspended_apps", block).apply()
-        // BUG: este bucle llamaba a appController.suspendApp(app.packageName, true)
-        // — es decir, para toda app YA suspendida, la volvía a suspender (sin
-        // depender de "block"), sin tocar nunca el ícono. "hide_suspended_apps" no
-        // se lee en ningún otro lugar del código, así que el switch "Ocultar ícono
-        // al suspender aplicaciones" no ocultaba ningún ícono: un botón fantasma.
-        // Corregido para que realmente oculte/muestre el ícono de las apps
-        // actualmente suspendidas según el nuevo valor del switch.
         val appController = AppController(context)
-        val installedApps = appController.getUserApps()
+        val installedApps = appController.getUserApps(loadIcon = false)
         for (app in installedApps) {
             if (app.isSuspended) {
                 appController.hideApp(app.packageName, block)
@@ -453,16 +553,21 @@ class PolicyManager(private val context: Context) {
     fun setDebuggingFeaturesBlocked(block: Boolean) =
         setRestriction(UserManager.DISALLOW_DEBUGGING_FEATURES, block)
 
+    fun isUserSwitchBlocked(): Boolean =
+        isRestrictionEnabled(UserManager.DISALLOW_USER_SWITCH)
+
     fun setUserSwitchBlocked(block: Boolean): Boolean {
         val ok = setRestriction(UserManager.DISALLOW_USER_SWITCH, block)
-        if (!isLockSuiteSuspended()) {
-            try {
-                if (block) {
-                    dpm.addUserRestriction(adminComponent, UserManager.DISALLOW_ADD_USER)
-                } else {
-                    dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_ADD_USER)
-                }
-            } catch (_: Exception) {}
+        if (!(block && isLockSuiteSuspended())) {
+            PROFILE_CREATION_RESTRICTIONS.forEach { restriction ->
+                try {
+                    if (block) {
+                        dpm.addUserRestriction(adminComponent, restriction)
+                    } else {
+                        dpm.clearUserRestriction(adminComponent, restriction)
+                    }
+                } catch (_: Exception) {}
+            }
         }
         return ok
     }
@@ -1124,6 +1229,7 @@ class PolicyManager(private val context: Context) {
                 UserManager.DISALLOW_INSTALL_APPS,
                 UserManager.DISALLOW_UNINSTALL_APPS,
                 UserManager.DISALLOW_DEBUGGING_FEATURES,
+                UserManager.DISALLOW_USER_SWITCH,
                 UserManager.DISALLOW_SAFE_BOOT,
                 UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
                 UserManager.DISALLOW_CONFIG_WIFI,
@@ -1133,18 +1239,20 @@ class PolicyManager(private val context: Context) {
                 UserManager.DISALLOW_CONFIG_LOCALE,
                 UserManager.DISALLOW_APPS_CONTROL,
                 UserManager.DISALLOW_MODIFY_ACCOUNTS
-            )
+            ) + PROFILE_CREATION_RESTRICTIONS
             val tempInstallActive = TempInstallWindowManager.isActive(context)
+            val userSwitchBlocked = isUserSwitchBlocked()
             candidatas.distinct().filter { r ->
                 if (tempInstallActive &&
                     (r == UserManager.DISALLOW_INSTALL_APPS || r == UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
                 ) {
                     return@filter false
                 }
+                val pedida = if (r in PROFILE_CREATION_RESTRICTIONS) userSwitchBlocked else isRestrictionEnabled(r)
                 // Solo interesa el caso peligroso: la pedimos y NO está puesta.
                 // Al revés (puesta sin pedirla) puede ser política de otro origen y no es
                 // un agujero de seguridad.
-                isRestrictionEnabled(r) && !reales.getBoolean(r, false)
+                pedida && !reales.getBoolean(r, false)
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -1245,6 +1353,8 @@ class PolicyManager(private val context: Context) {
                 }
                 PrefsHelper.getMdmPrefs(context).edit()
                     .remove(KEY_VPN_TEMP_UNLOCK_UNTIL)
+                    .remove(KEY_VPN_TEMP_UNLOCK_UNTIL_ELAPSED)
+                    .remove(KEY_VPN_TEMP_UNLOCK_BOOT_COUNT)
                     .remove(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED)
                     .apply()
                 setRestriction(UserManager.DISALLOW_CONFIG_VPN, true)
@@ -1252,6 +1362,8 @@ class PolicyManager(private val context: Context) {
             } else {
                 PrefsHelper.getMdmPrefs(context).edit()
                     .remove(KEY_VPN_TEMP_UNLOCK_UNTIL)
+                    .remove(KEY_VPN_TEMP_UNLOCK_UNTIL_ELAPSED)
+                    .remove(KEY_VPN_TEMP_UNLOCK_BOOT_COUNT)
                     .remove(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED)
                     .apply()
                 try {
@@ -1303,8 +1415,15 @@ class PolicyManager(private val context: Context) {
     }
 
     private fun isTemporaryVpnUnlockActive(): Boolean {
-        val until = PrefsHelper.getMdmPrefs(context).getLong(KEY_VPN_TEMP_UNLOCK_UNTIL, 0L)
-        return until > System.currentTimeMillis()
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        return isTempVpnUnlockActive(
+            untilElapsed = prefs.getLong(KEY_VPN_TEMP_UNLOCK_UNTIL_ELAPSED, 0L),
+            savedBootCount = prefs.getInt(KEY_VPN_TEMP_UNLOCK_BOOT_COUNT, -1),
+            nowElapsed = android.os.SystemClock.elapsedRealtime(),
+            currentBootCount = currentBootCount(),
+            legacyUntilWall = prefs.getLong(KEY_VPN_TEMP_UNLOCK_UNTIL, 0L),
+            nowWall = System.currentTimeMillis()
+        )
     }
 
     private fun tryPrepareVpnSilentlyAsDeviceOwner() {
@@ -1339,8 +1458,11 @@ class PolicyManager(private val context: Context) {
         val isDo = try { dpm.isDeviceOwnerApp(context.packageName) } catch (_: Exception) { false }
         return try {
             if (wasBlocked && isDo) {
+                val nowElapsed = android.os.SystemClock.elapsedRealtime()
                 prefs.edit()
-                    .putLong(KEY_VPN_TEMP_UNLOCK_UNTIL, System.currentTimeMillis() + VPN_TEMP_UNLOCK_WINDOW_MS)
+                    .remove(KEY_VPN_TEMP_UNLOCK_UNTIL)
+                    .putLong(KEY_VPN_TEMP_UNLOCK_UNTIL_ELAPSED, nowElapsed + VPN_TEMP_UNLOCK_WINDOW_MS)
+                    .putInt(KEY_VPN_TEMP_UNLOCK_BOOT_COUNT, currentBootCount())
                     .putBoolean(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED, true)
                     .commit()
                 try {
@@ -1388,6 +1510,8 @@ class PolicyManager(private val context: Context) {
             isRestrictionEnabled(UserManager.DISALLOW_CONFIG_VPN)
         prefs.edit()
             .remove(KEY_VPN_TEMP_UNLOCK_UNTIL)
+            .remove(KEY_VPN_TEMP_UNLOCK_UNTIL_ELAPSED)
+            .remove(KEY_VPN_TEMP_UNLOCK_BOOT_COUNT)
             .remove(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED)
             .commit()
 
@@ -1408,13 +1532,16 @@ class PolicyManager(private val context: Context) {
 
     fun restoreTemporaryVpnUnlockIfPending() {
         val prefs = PrefsHelper.getMdmPrefs(context)
-        val hasPending = prefs.contains(KEY_VPN_TEMP_UNLOCK_UNTIL) ||
+        val hasPending = prefs.contains(KEY_VPN_TEMP_UNLOCK_UNTIL_ELAPSED) ||
+            prefs.contains(KEY_VPN_TEMP_UNLOCK_UNTIL) ||
             prefs.getBoolean(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED, false)
         if (!hasPending) return
         val shouldBlock = prefs.getBoolean(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED, false) ||
             isRestrictionEnabled(UserManager.DISALLOW_CONFIG_VPN)
         prefs.edit()
             .remove(KEY_VPN_TEMP_UNLOCK_UNTIL)
+            .remove(KEY_VPN_TEMP_UNLOCK_UNTIL_ELAPSED)
+            .remove(KEY_VPN_TEMP_UNLOCK_BOOT_COUNT)
             .remove(KEY_VPN_TEMP_UNLOCK_WAS_BLOCKED)
             .commit()
         if (shouldBlock && !isLockSuiteSuspended()) {
@@ -1813,6 +1940,13 @@ class PolicyManager(private val context: Context) {
     fun setWhitelistModeEnabled(enabled: Boolean): Boolean {
         if (deferIfSuspended(WhitelistManager.KEY_ENABLED, enabled)) return true
         whitelist().setEnabled(enabled)
+        if (enabled) {
+            try {
+                com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+            } catch (e: Exception) {
+                android.util.Log.w("PolicyManager", "ensureVpnRunning falló tras activar lista blanca: ${e.message}")
+            }
+        }
         return true
     }
 
@@ -2252,7 +2386,7 @@ class PolicyManager(private val context: Context) {
             // que ya quedaron guardados de antes.
             val canonicalData = canonicalizeJson(dataObj)
             val computedSignature = computeHmacSha256(canonicalData)
-            if (!computedSignature.equals(signature, ignoreCase = true)) {
+            if (!signaturesMatchConstantTime(computedSignature, signature)) {
                 // Fallback 1: formato heredado (toString() sin canonicalizar).
                 val legacyComputed = computeHmacSha256(dataObj.toString())
                 // Fallback 2: el array vacío que Realtime Database descarta al guardar.
@@ -2263,8 +2397,8 @@ class PolicyManager(private val context: Context) {
                 } else {
                     ""
                 }
-                if (!legacyComputed.equals(signature, ignoreCase = true) &&
-                    (restoredComputed.isEmpty() || !restoredComputed.equals(signature, ignoreCase = true))
+                if (!signaturesMatchConstantTime(legacyComputed, signature) &&
+                    !signaturesMatchConstantTime(restoredComputed, signature)
                 ) {
                     android.util.Log.e("PolicyManager", "🚨 FIRMA HMAC INVÁLIDA: El archivo de respaldo ha sido alterado o corrupto.")
                     throw SecurityException("Firma del archivo de respaldo inválida. Archivo alterado no autorizado.")
@@ -2294,6 +2428,8 @@ class PolicyManager(private val context: Context) {
                 } else if (restriccion == UserManager.DISALLOW_CONFIG_VPN) {
                     // Asegura Always-On VPN + DNS Privado off ANTES de bloquear ajustes VPN.
                     setVpnConfigBlocked(enabled)
+                } else if (restriccion == UserManager.DISALLOW_USER_SWITCH) {
+                    setUserSwitchBlocked(enabled)
                 } else {
                     setRestriction(restriccion, enabled)
                 }
@@ -2345,6 +2481,12 @@ class PolicyManager(private val context: Context) {
             // vienen encendidas por defecto. Un perfil solo cambia lo que dice.
             setHideSuspendedApps(dataObj.optBoolean("hideSuspendedApps", isHideSuspendedApps()))
             setSettingsEvasionEnabled(dataObj.optBoolean("settingsEvasionEnabled", isSettingsEvasionEnabled()))
+            if (dataObj.has("blockPopularNonKosher")) {
+                val targetPopular = dataObj.optBoolean("blockPopularNonKosher", isBlockPopularNonKosherEnabled())
+                if (targetPopular != isBlockPopularNonKosherEnabled()) {
+                    setBlockPopularNonKosher(targetPopular)
+                }
+            }
             setBrowsersSuspended(dataObj.optBoolean("browsersSuspended", areBrowsersSuspended()))
             setSystemWebViewSuspended(dataObj.optBoolean("systemWebViewSuspended", isSystemWebViewSuspended()))
             setAccessibilityProtection(dataObj.optBoolean("accessibilityProtection", isAccessibilityProtectionEnabled()))
@@ -2356,7 +2498,6 @@ class PolicyManager(private val context: Context) {
             setKioskLockTaskEnabled(dataObj.optBoolean("kioskLockTask", isKioskLockTaskEnabled()))
             setNokiaKeypadMode(dataObj.optBoolean("nokiaKeypadMode", isNokiaKeypadMode()))
             setNokiaTouchEnabled(dataObj.optBoolean("nokiaTouchEnabled", isNokiaTouchEnabled()))
-            setBlockPopularNonKosher(dataObj.optBoolean("blockPopularNonKosher", isBlockPopularNonKosherEnabled()))
             val hasPlayStoreApp = dataObj.has("playStoreAppBlocked")
             val playStoreAppTarget = dataObj.optBoolean("playStoreAppBlocked", isPlayStoreAppBlocked())
             if (hasPlayStoreApp) {
@@ -2975,15 +3116,14 @@ class PolicyManager(private val context: Context) {
                 if (alreadyConfigured) {
                     permissionsAutoGranted = false
                     autoGrantDeclaredPermissions()
+                    applySelfUserControlProtection(true)
                     prefs.edit().putBoolean(KEY_INITIAL_AUTO_PROVISION, true).commit()
                     return
                 }
 
-                try {
-                    dpm.setPermissionPolicy(adminComponent, DevicePolicyManager.PERMISSION_POLICY_AUTO_GRANT)
-                } catch (_: Exception) { }
                 permissionsAutoGranted = false
                 autoGrantDeclaredPermissions()
+                applySelfUserControlProtection(true)
 
                 if (!prefs.contains("accessibility_protection_enabled")) {
                     prefs.edit().putBoolean("accessibility_protection_enabled", true).commit()
@@ -3014,6 +3154,11 @@ class PolicyManager(private val context: Context) {
 
     fun reapplyAllRestrictions() {
         synchronized(reapplyLock) {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        if (prefs.getBoolean("locksuite_purged", false)) {
+            android.util.Log.i("PolicyManager", "LockSuite purgado: omitiendo reapplyAllRestrictions")
+            return
+        }
         // Mientras LockSuite está suspendido nadie vuelve a aplicar nada: ni el
         // arranque, ni el Watchdog de 15 min, ni un comando del panel. La única
         // forma de volver a aplicar es quitar la suspensión, que llama a esta
@@ -3142,16 +3287,19 @@ class PolicyManager(private val context: Context) {
                 }
             }
         }
-        if (PolicyReconciler.hayQueAplicar(
-                isRestrictionEnabled(UserManager.DISALLOW_USER_SWITCH),
-                reales.puestaPorNosotros(UserManager.DISALLOW_ADD_USER),
-                reales.efectiva(UserManager.DISALLOW_ADD_USER)
-            )
-        ) {
-            try {
-                dpm.addUserRestriction(adminComponent, UserManager.DISALLOW_ADD_USER)
-            } catch (e: Exception) {
-                e.printStackTrace()
+        val userSwitchBlocked = isUserSwitchBlocked()
+        PROFILE_CREATION_RESTRICTIONS.forEach { restriction ->
+            if (PolicyReconciler.hayQueAplicar(
+                    userSwitchBlocked,
+                    reales.puestaPorNosotros(restriction),
+                    reales.efectiva(restriction)
+                )
+            ) {
+                try {
+                    dpm.addUserRestriction(adminComponent, restriction)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
 
@@ -3171,6 +3319,7 @@ class PolicyManager(private val context: Context) {
                 }
             }
         }
+        applySelfUserControlProtection(true)
 
         timer.mark("restricciones")
 
@@ -3251,22 +3400,48 @@ class PolicyManager(private val context: Context) {
 
         timer.mark("vpn y proxy")
 
-        // Suspender Google Play Store si el bloqueo de instalación está activado o si fue suspendida individualmente
-        val prefs = PrefsHelper.getMdmPrefs(context)
+        // Ocultar/suspender Google Play Store si corresponde y no hay actualización/ventana temporal
         val appController = AppController(context)
+        val isPlayUpdateOpen = try {
+            com.ejemplo.locksuite.util.UpdateFlowManager.mustKeepPlayStoreOpen(context)
+        } catch (_: Exception) {
+            false
+        }
         // BUG CORREGIDO (16/8/2026): este bloque no miraba "mdm_install_in_progress".
         // El Watchdog corre cada 15 minutos y el flujo de actualización dura hasta
         // 10, así que se pisaban: el Watchdog volvía a suspender Play Store con la
         // descarga a medias, Android mostraba "aplicación en pausa" debajo del
         // overlay negro, la automatización ya no encontraba ningún botón y la
         // pantalla quedaba trabada hasta el watchdog de 10 minutos.
-        if (!isInstallInProgress && !isTempInstallActive) {
+        if (!isInstallInProgress && !isTempInstallActive && !isPlayUpdateOpen) {
+            val shouldHidePlayStore = prefs.getBoolean("hide_com.android.vending", false)
+            val playStoreHidden = if (shouldHidePlayStore) {
+                try {
+                    val yaOculta = try {
+                        dpm.isApplicationHidden(adminComponent, "com.android.vending")
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (!yaOculta) {
+                        appController.hideApp("com.android.vending", true)
+                    } else {
+                        true
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    false
+                }
+            } else {
+                false
+            }
             val shouldSuspendPlayStore = prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
-            try {
-                appController.suspendApp("com.android.vending", shouldSuspendPlayStore)
-                android.util.Log.i("PolicyManager", "reapplyAllRestrictions: Google Play Store estado de suspensión aplicado ($shouldSuspendPlayStore)")
-            } catch (e: Exception) {
-                e.printStackTrace()
+            if (!playStoreHidden || !shouldSuspendPlayStore) {
+                try {
+                    appController.suspendApp("com.android.vending", shouldSuspendPlayStore)
+                    android.util.Log.i("PolicyManager", "reapplyAllRestrictions: Google Play Store estado de suspensión aplicado ($shouldSuspendPlayStore)")
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
 
@@ -3344,9 +3519,17 @@ class PolicyManager(private val context: Context) {
 
         timer.mark("FRP y Knox")
 
+        // Consumo único tras reanudar si blockPopularNonKosher se activó durante suspensión (B.48)
+        if (prefs.getBoolean(KEY_POPULAR_NON_KOSHER_PENDING_APPLY, false)) {
+            prefs.edit().remove(KEY_POPULAR_NON_KOSHER_PENDING_APPLY).commit()
+            if (isBlockPopularNonKosherEnabled()) {
+                setBlockPopularNonKosher(true)
+            }
+        }
+
         // Suspender todos los navegadores independientes instalados si la política está activa
         if (areBrowsersSuspended()) {
-            setBrowsersSuspended(true)
+            setBrowsersSuspended(true, fromWatchdog = prefs.getBoolean("browsers_suspended_by_watchdog", false))
         }
 
         // Suspender Android System WebView si la política está activa
@@ -3655,13 +3838,12 @@ class PolicyManager(private val context: Context) {
      * llamada puntual no puede dejar el equipo a medio liberar.
      */
     private fun liftAllForSuspension() {
-        val allRestrictions = listOf(
+        val allRestrictions = (listOf(
             UserManager.DISALLOW_FACTORY_RESET,
             UserManager.DISALLOW_INSTALL_APPS,
             UserManager.DISALLOW_UNINSTALL_APPS,
             UserManager.DISALLOW_DEBUGGING_FEATURES,
             UserManager.DISALLOW_USER_SWITCH,
-            UserManager.DISALLOW_ADD_USER,
             UserManager.DISALLOW_MODIFY_ACCOUNTS,
             UserManager.DISALLOW_SAFE_BOOT,
             UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
@@ -3681,7 +3863,7 @@ class PolicyManager(private val context: Context) {
             // cambiar de idioma — justo lo contrario de "queda como si LockSuite no
             // estuviera instalado".
             UserManager.DISALLOW_CONFIG_LOCALE
-        ) + PolicySpec.EXTRA_RESTRICTIONS.map { it.restriction }
+        ) + PROFILE_CREATION_RESTRICTIONS + PolicySpec.EXTRA_RESTRICTIONS.map { it.restriction }).distinct()
         // ⚠️ 2/9/2026 — Las del registro declarativo se suman acá SIEMPRE, y esto no es
         // opcional: una restricción que se aplica y no se levanta convierte la suspensión
         // en mentira. Es literalmente el defecto S-3 del 1/9 (DISALLOW_CONFIG_LOCALE
@@ -3734,6 +3916,8 @@ class PolicyManager(private val context: Context) {
 
         // Protecciones anti-manipulación (decisión del 16/8/2026: se levantan)
         safely { dpm.setUninstallBlocked(adminComponent, context.packageName, false) }
+        applySelfUserControlProtection(false)
+        safely { dpm.setPermissionPolicy(adminComponent, DevicePolicyManager.PERMISSION_POLICY_PROMPT) }
         safely { dpm.setPermittedAccessibilityServices(adminComponent, null) }
         safely { clearFrpPolicy() }
         safely { KnoxHardening.setFactoryResetBlocked(context, false) }
@@ -3790,13 +3974,12 @@ class PolicyManager(private val context: Context) {
     }
 
     fun clearAllRestrictions() {
-        val restrictions = listOf(
+        val restrictions = (listOf(
             UserManager.DISALLOW_FACTORY_RESET,
             UserManager.DISALLOW_INSTALL_APPS,
             UserManager.DISALLOW_UNINSTALL_APPS,
             UserManager.DISALLOW_DEBUGGING_FEATURES,
             UserManager.DISALLOW_USER_SWITCH,
-            UserManager.DISALLOW_ADD_USER,
             UserManager.DISALLOW_MODIFY_ACCOUNTS,
             UserManager.DISALLOW_SAFE_BOOT,
             UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
@@ -3816,7 +3999,7 @@ class PolicyManager(private val context: Context) {
             // Device Owner que pueda deshacerlo.
             UserManager.DISALLOW_CONFIG_DATE_TIME,
             UserManager.DISALLOW_CONFIG_LOCALE
-        ) + PolicySpec.EXTRA_RESTRICTIONS.map { it.restriction }
+        ) + PROFILE_CREATION_RESTRICTIONS + PolicySpec.EXTRA_RESTRICTIONS.map { it.restriction }).distinct()
         // ⚠️ 2/9/2026 — Igual que en liftAllForSuspension(): las del registro se suman
         // desde la MISMA lista que las aplica. Este es el defecto P-3 del 1/9 llevado a su
         // conclusión: una restricción que la purga no limpia deja el equipo PEOR que antes
@@ -3846,12 +4029,14 @@ class PolicyManager(private val context: Context) {
             }
         }
 
-        // Permitir desinstalación de LockSuite tras la purga
+        // Permitir desinstalación, control de usuario y política de permisos tras la purga
         try {
             dpm.setUninstallBlocked(adminComponent, context.packageName, false)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        applySelfUserControlProtection(false)
+        safely { dpm.setPermissionPolicy(adminComponent, DevicePolicyManager.PERMISSION_POLICY_PROMPT) }
 
         // Permitir otros servicios de accesibilidad tras la purga
         try {
@@ -3872,6 +4057,8 @@ class PolicyManager(private val context: Context) {
         try {
             com.ejemplo.locksuite.util.BootGate.cancelSafetyAlarm(context)
         } catch (e: Exception) { }
+        safely { com.ejemplo.locksuite.util.BootGate.release(context, "purga total") }
+        safely { dpm.setRecommendedGlobalProxy(adminComponent, null) }
         setInternetBlocked(false)
 
         clearFrpPolicy()
@@ -3978,9 +4165,15 @@ class PolicyManager(private val context: Context) {
             android.util.Log.w("PolicyManager", "Purga: no se pudieron limpiar políticas de tienda clásica: ${e.message}")
         }
 
-        // Clear local preferences (incluida la marca de suspensión: tras la purga
-        // no queda ninguna política que suspender)
-        PrefsHelper.getMdmPrefs(context).edit().clear().apply()
+        // Clear local preferences synchronously before resetting in-memory tries (incluida
+        // la marca de suspensión: tras la purga no queda ninguna política que suspender)
+        PrefsHelper.getMdmPrefs(context).edit().clear().commit()
+
+        try {
+            com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.loadRules()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         // El Trie de la lista blanca vive en memoria estática, así que borrar las
         // preferencias no lo vacía solo. Sin esto, "revocar permisos" (que llama acá
@@ -3995,23 +4188,6 @@ class PolicyManager(private val context: Context) {
             com.ejemplo.locksuite.service.KosherVpnService.invalidatePerAppInternetCache()
         } catch (_: Exception) { }
     }
-
-    private val KNOWN_BROWSER_PACKAGES = listOf(
-        "com.android.chrome",
-        "com.chrome.beta",
-        "org.mozilla.firefox",
-        "org.mozilla.focus",
-        "com.opera.browser",
-        "com.opera.mini.native",
-        "com.microsoft.emmx",              // Edge
-        "com.sec.android.app.sbrowser",    // Samsung Internet
-        "com.brave.browser",
-        "com.duckduckgo.mobile.android",
-        "com.android.browser",             // Navegador AOSP antiguo
-        "com.UCMobile.intl",
-        "com.kiwibrowser.browser",
-        "com.google.android.googlequicksearchbox" // App de Google / Asistente / Lens (Punto 1)
-    )
 
     private fun getInstalledBrowserPackages(): Set<String> {
         val pm = context.packageManager
@@ -4056,11 +4232,16 @@ class PolicyManager(private val context: Context) {
         }
     }
 
-    fun setBrowsersSuspended(suspend: Boolean): Boolean {
+    @JvmOverloads
+    fun setBrowsersSuspended(suspend: Boolean, fromWatchdog: Boolean = false): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        if (!fromWatchdog) {
+            prefs.edit().remove("browsers_suspended_by_watchdog").apply()
+        }
         if (deferIfSuspended("browsers_suspended", suspend)) return true
         return try {
             suspendAllKnownBrowsers(suspend)
-            PrefsHelper.getMdmPrefs(context).edit().putBoolean("browsers_suspended", suspend).apply()
+            prefs.edit().putBoolean("browsers_suspended", suspend).apply()
             true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -4109,8 +4290,18 @@ class PolicyManager(private val context: Context) {
     }
 
     fun setBlockPopularNonKosher(block: Boolean): Boolean {
-        if (deferIfSuspended("block_popular_non_kosher", block)) return true
         val prefs = PrefsHelper.getMdmPrefs(context)
+        if (block && isLockSuiteSuspended()) {
+            prefs.edit()
+                .putBoolean("block_popular_non_kosher", true)
+                .putBoolean(KEY_POPULAR_NON_KOSHER_PENDING_APPLY, true)
+                .apply()
+            android.util.Log.i("PolicyManager", "LockSuite suspendido: 'block_popular_non_kosher' queda pendiente para aplicar al reanudar")
+            return true
+        }
+        if (!block) {
+            prefs.edit().remove(KEY_POPULAR_NON_KOSHER_PENDING_APPLY).apply()
+        }
         prefs.edit().putBoolean("block_popular_non_kosher", block).apply()
         return try {
             val appController = AppController(context)
@@ -4141,8 +4332,16 @@ class PolicyManager(private val context: Context) {
                     }
                 }
             } else {
+                val browsersAreSuspended = areBrowsersSuspended()
+                val browserPkgs = if (browsersAreSuspended) getBrowserPackagesForReconcile() else emptySet()
                 for (app in nonKosherApps) {
                     appController.hideApp(app.packageName, false)
+                    if (browsersAreSuspended && app.packageName in browserPkgs) {
+                        try {
+                            dpm.setPackagesSuspended(adminComponent, arrayOf(app.packageName), true)
+                        } catch (_: Exception) { }
+                        continue
+                    }
                     try {
                         dpm.setPackagesSuspended(adminComponent, arrayOf(app.packageName), false)
                     } catch (e: Exception) { }
@@ -4182,6 +4381,16 @@ class PolicyManager(private val context: Context) {
             // Si está activado pero no usa default y la lista de cuentas está vacía, no podemos configurar
             if (enabled && !useDefault && finalAccounts.isEmpty()) {
                 return false
+            }
+
+            if (enabled && isLockSuiteSuspended()) {
+                PrefsHelper.getMdmPrefs(context).edit()
+                    .putBoolean("frp_enabled", true)
+                    .putBoolean("frp_use_default", useDefault)
+                    .putStringSet("frp_accounts", accountsList.toSet())
+                    .apply()
+                android.util.Log.i("PolicyManager", "LockSuite suspendido: FRP queda guardado para aplicar al reanudar")
+                return true
             }
 
             var success = false
@@ -4267,7 +4476,15 @@ class PolicyManager(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 dpm.setFactoryResetProtectionPolicy(adminComponent, null)
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        try {
             applyLegacyFrpPolicy(emptyList(), false)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        try {
             setLegacyFrpHardening(false)
         } catch (e: Exception) {
             e.printStackTrace()

@@ -229,13 +229,24 @@ object WhatsAppPolicy {
 
     private val CHANNEL_SUBTITLE_WORDS = setOf(
         "followers", "follower",
-        "seguidores", "seguidor",
-        "abonnes", "abonnenten",
+        "seguidores", "seguidor", "seguidoras",
+        "abonnes", "abonne", "abonnenten",
         "iscritti",
-        "עוקבים", "נאכפאלגער"
+        "עוקבים", "עוקב", "נאכפאלגער"
     )
 
     private val CHANNEL_SUBTITLE_EXACT = setOf(
+        "channel", "canal", "ערוץ", "קאנאל",
+        "following", "siguiendo", "seguindo", "a seguir",
+        "עוקב", "במעקב", "מעקב"
+    )
+
+    private val CHANNEL_SUBTITLE_STATUS_WORDS = setOf(
+        "following", "siguiendo", "seguindo", "a seguir",
+        "במעקב", "עוקב"
+    )
+
+    private val CHANNEL_SUBTITLE_TYPE_WORDS = setOf(
         "channel", "canal", "ערוץ", "קאנאל"
     )
 
@@ -430,7 +441,33 @@ object WhatsAppPolicy {
         if (folded in CHANNEL_SUBTITLE_EXACT) return true
 
         val hasDigit = folded.any { it.isDigit() }
-        if (!hasDigit) return false
+        if (hasDigit && CHANNEL_SUBTITLE_WORDS.any {
+                MercadoPagoOffersPolicy.contienePalabraCompleta(folded, it)
+            }
+        ) {
+            return true
+        }
+
+        // En canales ya seguidos o en idiomas ES/EN/HE/PT el subtítulo puede no incluir dígitos
+        // (p. ej. "Siguiendo", "Following", "Seguindo", "Canal público", "Public channel",
+        // "ערוץ ציבורי", "עוקב", "במעקב", "Canal · Siguiendo"). Evitamos listas de miembros
+        // separadas por múltiples comas ("Juan, María, Tú").
+        val looksLikeMemberList = folded.count { it == ',' } >= 2
+        if (looksLikeMemberList) return false
+
+        if (CHANNEL_SUBTITLE_STATUS_WORDS.any {
+                MercadoPagoOffersPolicy.contienePalabraCompleta(folded, it)
+            }
+        ) {
+            return true
+        }
+        if (CHANNEL_SUBTITLE_TYPE_WORDS.any {
+                MercadoPagoOffersPolicy.contienePalabraCompleta(folded, it)
+            }
+        ) {
+            return true
+        }
+        // Conteo verbal sin dígitos (p. ej. "עוקב אחד", "un seguidor", "one follower")
         return CHANNEL_SUBTITLE_WORDS.any {
             MercadoPagoOffersPolicy.contienePalabraCompleta(folded, it)
         }

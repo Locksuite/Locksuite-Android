@@ -87,7 +87,7 @@ object PinManager {
     fun markPublishedToCloud(context: Context, credentialsKey: String) {
         PrefsHelper.getEncryptedPrefs(context).edit()
             .putString(Constants.KEY_PIN_CLOUD_ACKED, credentialsKey)
-            .apply()
+            .commit()
     }
 
     fun isPinConfigured(context: Context): Boolean {
@@ -95,7 +95,7 @@ object PinManager {
         val mdmPrefs = PrefsHelper.getMdmPrefs(context)
         if (encHasPin) {
             if (!mdmPrefs.getBoolean("pin_configured_mirror", false)) {
-                mdmPrefs.edit().putBoolean("pin_configured_mirror", true).apply()
+                mdmPrefs.edit().putBoolean("pin_configured_mirror", true).commit()
             }
             return true
         }
@@ -145,7 +145,7 @@ object PinManager {
             .putString(Constants.KEY_RECOVERY_HASH, hash)
             .putString(Constants.KEY_RECOVERY_SALT, saltStr)
             .putString(Constants.KEY_RECOVERY_PLAINTEXT_CACHE, code)
-            .apply()
+            .commit()
 
         try {
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncRecoveryCode(context, code)
@@ -214,6 +214,26 @@ object PinManager {
      * actual si el reloj de pared parece haber sido adelantado o si sigue dentro de la
      * ventana, cerrando el bypass por reinicio + cambio de hora.
      */
+    internal fun computeLockoutRemainingMs(
+        wallNow: Long,
+        lockWall: Long,
+        monoNow: Long,
+        lockMono: Long,
+        sameBoot: Boolean,
+        duration: Long
+    ): Long {
+        val monoRemaining = if (sameBoot) {
+            ((lockMono + duration) - monoNow).coerceAtMost(duration)
+        } else {
+            duration
+        }
+        if (lockWall <= 0L || wallNow < lockWall) {
+            return monoRemaining
+        }
+        val wallRemaining = ((lockWall + duration) - wallNow).coerceAtMost(duration)
+        return maxOf(wallRemaining, monoRemaining)
+    }
+
     fun getLockoutState(context: Context): LockoutState {
         val prefs = PrefsHelper.getEncryptedPrefs(context)
         val count = prefs.getInt(Constants.LOCKOUT_COUNT_KEY, 0)
@@ -221,9 +241,8 @@ object PinManager {
 
         val duration = Constants.LOCKOUT_DURATION_MS
 
+        val wallNow = System.currentTimeMillis()
         val lockWall = prefs.getLong(Constants.LOCKOUT_TIME_KEY, 0L)
-        val wallRemaining = ((lockWall + duration) - System.currentTimeMillis())
-            .coerceAtMost(duration)
 
         val lockMono = prefs.getLong(Constants.LOCKOUT_ELAPSED_KEY, -1L)
         val lockBoot = prefs.getInt("lockout_boot_count", -1)
@@ -231,20 +250,28 @@ object PinManager {
         val monoNow = android.os.SystemClock.elapsedRealtime()
         val sameBoot = (lockBoot == -1 || currentBoot == -1 || lockBoot == currentBoot) &&
             lockMono >= 0L && monoNow >= lockMono
-        val monoRemaining = if (sameBoot) {
-            ((lockMono + duration) - monoNow).coerceAtMost(duration)
-        } else {
-            // El equipo se reinició durante un bloqueo activo: re-anclamos el reloj
-            // monotónico al arranque actual para que un reinicio + adelanto de reloj
-            // no regale 5 intentos nuevos sin esperar los 5 minutos.
-            prefs.edit()
-                .putLong(Constants.LOCKOUT_ELAPSED_KEY, monoNow)
-                .putInt("lockout_boot_count", currentBoot)
-                .commit()
-            duration
+
+        if (!sameBoot || (lockWall > 0L && wallNow < lockWall)) {
+            val edit = prefs.edit()
+            if (!sameBoot) {
+                edit.putLong(Constants.LOCKOUT_ELAPSED_KEY, monoNow)
+                    .putInt("lockout_boot_count", currentBoot)
+            }
+            if (lockWall <= 0L || wallNow < lockWall) {
+                val elapsedOnBoot = if (sameBoot) (monoNow - lockMono).coerceAtLeast(0L) else 0L
+                edit.putLong(Constants.LOCKOUT_TIME_KEY, wallNow - elapsedOnBoot)
+            }
+            edit.commit()
         }
 
-        val remaining = maxOf(wallRemaining, monoRemaining)
+        val remaining = computeLockoutRemainingMs(
+            wallNow = wallNow,
+            lockWall = lockWall,
+            monoNow = monoNow,
+            lockMono = lockMono,
+            sameBoot = sameBoot,
+            duration = duration
+        )
         return if (remaining > 0) {
             LockoutState.Locked(remaining)
         } else {

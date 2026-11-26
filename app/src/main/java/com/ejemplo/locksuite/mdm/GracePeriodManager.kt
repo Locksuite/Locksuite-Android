@@ -158,6 +158,9 @@ object GracePeriodManager {
      */
     private const val KEY_LAST_WALL = "grace_last_wall"
     private const val KEY_LAST_BOOT_COUNT = "grace_last_boot_count"
+    private const val MIN_VALID_WALL_MS = 1_700_000_000_000L
+    private const val NTP_JUMP_THRESHOLD_MS = 10L * 60 * 1000L
+    private val lock = Any()
     @Volatile private var lastDiskSaveRealtime = 0L
 
     private fun currentBootCount(context: Context): Int = try {
@@ -170,11 +173,36 @@ object GracePeriodManager {
         -1
     }
 
+    /**
+     * Ajusta el deadline cuando un equipo recién formateado salta desde una fecha de fábrica
+     * (< nov 2023) a la hora real por NTP. Nunca extiende el deadline cuando la muestra previa
+     * ya era válida ni permite superar el tiempo restante real `(durationMs - accumulatedMs)`.
+     */
+    internal fun adjustDeadlineForNtpJump(
+        currentDeadline: Long,
+        durationMs: Long,
+        accumulatedMs: Long,
+        wallPrevio: Long,
+        wallAhora: Long,
+        deltaElapsedMs: Long,
+        rebootDetected: Boolean
+    ): Long {
+        if (rebootDetected || wallPrevio <= 0L || wallPrevio >= MIN_VALID_WALL_MS) {
+            return currentDeadline
+        }
+        val wallDelta = wallAhora - wallPrevio
+        if (wallDelta - deltaElapsedMs <= NTP_JUMP_THRESHOLD_MS) {
+            return currentDeadline
+        }
+        val maxDeadline = wallAhora + (durationMs - accumulatedMs).coerceAtLeast(0L)
+        return minOf(currentDeadline + (wallDelta - deltaElapsedMs), maxDeadline)
+    }
+
     fun start(
         context: Context,
         durationMs: Long,
         targetProfile: String = EnrollmentProfiles.LEVEL_STRICT
-    ) {
+    ) = synchronized(lock) {
         val ahora = System.currentTimeMillis()
         lastDiskSaveRealtime = SystemClock.elapsedRealtime()
         prefs(context).edit()
@@ -192,8 +220,8 @@ object GracePeriodManager {
     }
 
     /** Cancela el período sin aplicar el perfil destino. Lo usa el comando del panel. */
-    fun cancel(context: Context, reason: String) {
-        if (!isActive(context)) return
+    fun cancel(context: Context, reason: String) = synchronized(lock) {
+        if (!isActive(context)) return@synchronized
         clear(context, reason)
         Log.i(TAG, "Período de gracia cancelado: $reason")
     }
@@ -223,11 +251,11 @@ object GracePeriodManager {
      *
      * @return `true` si en esta llamada se cerró el período.
      */
-    fun checkAndHarden(context: Context): Boolean {
+    fun checkAndHarden(context: Context): Boolean = synchronized(lock) {
         val ctx = context.applicationContext
         val p = prefs(ctx)
         var deadline = p.getLong(KEY_DEADLINE_WALL, 0L)
-        if (deadline <= 0L) return false
+        if (deadline <= 0L) return@synchronized false
 
         val realtimeAhora = SystemClock.elapsedRealtime()
         val wallAhora = System.currentTimeMillis()
@@ -243,25 +271,29 @@ object GracePeriodManager {
         val duracion = p.getLong(KEY_DURATION_MS, 0L)
 
         // Si en el mismo arranque el reloj de pared dio un salto enorme hacia adelante
-        // (>10 minutos más que el tiempo real transcurrido, típico de un equipo recién
-        // formateado cuya hora salta de la fecha de fábrica a la hora real por NTP al
-        // conectarse al Wi-Fi), ajustamos el deadline para no cerrar el período de gracia
-        // en el primer minuto.
-        if (!huboReinicio && wallPrevio > 0L) {
-            val wallDelta = wallAhora - wallPrevio
-            if (wallDelta - delta > 10 * 60 * 1000L) {
-                val ajuste = wallDelta - delta
-                deadline += ajuste
-                p.edit()
-                    .putLong(KEY_DEADLINE_WALL, deadline)
-                    .putLong(KEY_ELAPSED_ACCUM, acumulado)
-                    .putLong(KEY_LAST_REALTIME, realtimeAhora)
-                    .putLong(KEY_LAST_WALL, wallAhora)
-                    .putInt(KEY_LAST_BOOT_COUNT, bootActual)
-                    .apply()
-                lastDiskSaveRealtime = realtimeAhora
-                Log.i(TAG, "Salto de reloj NTP detectado (+${ajuste / 60000} min); deadline ajustado.")
-            }
+        // desde una fecha previa a noviembre 2023 (equipo recién formateado cuya hora salta
+        // de fábrica a NTP), ajustamos el deadline acotado al remanente real.
+        val newDeadline = adjustDeadlineForNtpJump(
+            currentDeadline = deadline,
+            durationMs = duracion,
+            accumulatedMs = acumulado,
+            wallPrevio = wallPrevio,
+            wallAhora = wallAhora,
+            deltaElapsedMs = delta,
+            rebootDetected = huboReinicio
+        )
+        if (newDeadline != deadline) {
+            val ajuste = newDeadline - deadline
+            deadline = newDeadline
+            p.edit()
+                .putLong(KEY_DEADLINE_WALL, deadline)
+                .putLong(KEY_ELAPSED_ACCUM, acumulado)
+                .putLong(KEY_LAST_REALTIME, realtimeAhora)
+                .putLong(KEY_LAST_WALL, wallAhora)
+                .putInt(KEY_LAST_BOOT_COUNT, bootActual)
+                .apply()
+            lastDiskSaveRealtime = realtimeAhora
+            Log.i(TAG, "Salto de reloj NTP detectado (+${ajuste / 60000} min); deadline ajustado.")
         }
 
         val vencioPorPared = wallAhora >= deadline
@@ -277,7 +309,7 @@ object GracePeriodManager {
                     .apply()
                 lastDiskSaveRealtime = realtimeAhora
             }
-            return false
+            return@synchronized false
         }
 
         // El motivo se guarda y se publica al panel. No es adorno: si un equipo cierra por
@@ -318,7 +350,7 @@ object GracePeriodManager {
                 .putLong(KEY_STARTED_AT, startedAtPrev)
                 .putString(KEY_TARGET_PROFILE, destino)
                 .apply()
-            return false
+            return@synchronized false
         }
         Log.i(TAG, "Período de gracia cerrado ($motivo). Perfil '$destino' aplicado: $aplicado")
 
@@ -327,6 +359,6 @@ object GracePeriodManager {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        return true
+        true
     }
 }

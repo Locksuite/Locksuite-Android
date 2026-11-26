@@ -15,6 +15,7 @@ object TempInstallWindowClock {
     const val MIN_DURATION_MS: Long = 60_000L
     const val MAX_DURATION_MS: Long = 30L * 24L * 60L * 60L * 1000L
     private const val NTP_JUMP_THRESHOLD_MS: Long = 10L * 60L * 1000L
+    private const val MIN_VALID_WALL_MS: Long = 1_700_000_000_000L
 
     data class WindowState(
         val active: Boolean,
@@ -79,10 +80,11 @@ object TempInstallWindowClock {
         val accumulated = state.accumulatedMs + deltaElapsed
 
         var adjustedDeadline = state.deadlineWall
-        if (!rebootDetected && state.lastWallSample > 0L) {
+        if (!rebootDetected && state.lastWallSample in 1L until MIN_VALID_WALL_MS) {
             val wallDelta = nowWall - state.lastWallSample
             if (wallDelta - deltaElapsed > NTP_JUMP_THRESHOLD_MS) {
-                adjustedDeadline += (wallDelta - deltaElapsed)
+                val maxDeadline = nowWall + (state.durationMs - accumulated).coerceAtLeast(0L)
+                adjustedDeadline = minOf(adjustedDeadline + (wallDelta - deltaElapsed), maxDeadline)
             }
         }
 

@@ -21,6 +21,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import android.os.Looper
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.OnBackPressedCallback
 import androidx.compose.foundation.Image
@@ -93,11 +94,14 @@ class LoginActivity : ComponentActivity() {
             }
         })
 
+        val trustedCaller = isTrustedInternalStoreIntent()
         val openStore = intent?.getBooleanExtra("OPEN_STORE", false) ?: false
         val openOldStore = intent?.getBooleanExtra("OPEN_OLD_STORE", false) ?: false
-        if (openOldStore) {
+        if ((openStore || openOldStore) && !trustedCaller) {
+            android.util.Log.w("LoginActivity", "Ignored untrusted OPEN_STORE/OPEN_OLD_STORE intent extra")
+        } else if (openOldStore) {
             openOldStoreState.value = true
-        } else if (openStore) {
+        } else if (openStore && com.ejemplo.locksuite.mdm.PlayStoreManager.isOpen(this)) {
             startActivity(com.ejemplo.locksuite.ui.playstore.PlayStoreActivity.intent(this))
             finish()
             return
@@ -119,8 +123,22 @@ class LoginActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.getBooleanExtra("OPEN_OLD_STORE", false)) {
-            openOldStoreState.value = true
+            if (isTrustedInternalStoreIntent()) {
+                openOldStoreState.value = true
+            } else {
+                android.util.Log.w("LoginActivity", "Ignored untrusted onNewIntent OPEN_OLD_STORE extra")
+            }
         }
+    }
+
+    private fun isTrustedInternalStoreIntent(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return launchedFromPackage == packageName
+        }
+        val callerPkg = callingActivity?.packageName
+        if (callerPkg != null) return callerPkg == packageName
+        val ref = referrer
+        return ref != null && ref.scheme == "android-app" && ref.host == packageName
     }
 }
 
@@ -252,6 +270,12 @@ fun LoginScreen(
                 e.printStackTrace()
             }
         }
+    }
+
+    BackHandler(enabled = showPinInput) {
+        showPinInput = false
+        inputPin = ""
+        warningText = ""
     }
 
     // Dummy block para forzar la lectura del trigger de idioma y recomponer dinámicamente
@@ -820,7 +844,17 @@ fun LoginScreen(
             
             var globalList = emptyList<String>()
             var deviceList = emptyList<String>()
-            
+            val pendingCount = java.util.concurrent.atomic.AtomicInteger(3)
+            val globalDone = java.util.concurrent.atomic.AtomicBoolean(false)
+            val deviceDone = java.util.concurrent.atomic.AtomicBoolean(false)
+            val storeDone = java.util.concurrent.atomic.AtomicBoolean(false)
+
+            fun markQueryDone(flag: java.util.concurrent.atomic.AtomicBoolean) {
+                if (flag.compareAndSet(false, true) && pendingCount.decrementAndGet() <= 0) {
+                    isStoreLoading = false
+                }
+            }
+
             fun updateSet() {
                 allowedPackagesSet = (globalList + deviceList + context.packageName + "com.ejemplo.locksuite").toSet()
             }
@@ -829,9 +863,11 @@ fun LoginScreen(
                 override fun onDataChange(snapshot: DataSnapshot) {
                     globalList = snapshot.children.mapNotNull { it.getValue(String::class.java) }
                     updateSet()
+                    markQueryDone(globalDone)
                 }
                 override fun onCancelled(error: DatabaseError) {
                     android.util.Log.w("LoginActivity", "globalSettings query cancelled: ${error.message}")
+                    markQueryDone(globalDone)
                 }
             })
             
@@ -839,9 +875,11 @@ fun LoginScreen(
                 override fun onDataChange(devSnap: DataSnapshot) {
                     deviceList = devSnap.children.mapNotNull { it.getValue(String::class.java) }
                     updateSet()
+                    markQueryDone(deviceDone)
                 }
                 override fun onCancelled(error: DatabaseError) {
                     android.util.Log.w("LoginActivity", "device allowedPackages query cancelled: ${error.message}")
+                    markQueryDone(deviceDone)
                 }
             })
             
@@ -872,11 +910,11 @@ fun LoginScreen(
                     }
                     com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.replaceConfig(context, wvSet, netSet)
                     storeAppsList = apps
-                    isStoreLoading = false
+                    markQueryDone(storeDone)
                 }
                 override fun onCancelled(error: DatabaseError) {
                     android.util.Log.e("LoginActivity", "storeApps query failed: ${error.message}")
-                    isStoreLoading = false
+                    markQueryDone(storeDone)
                 }
             })
 
@@ -889,10 +927,20 @@ fun LoginScreen(
             requestMsg = ""
             otherPkgInput = ""
             showOtherPkgInput = false
+
+            // Timeout de seguridad para no dejar el spinner colgado indefinidamente
+            delay(10_000L)
+            if (isStoreLoading) {
+                android.util.Log.w("LoginActivity", "Classic store load timeout (10s)")
+                isStoreLoading = false
+            }
         }
     }
 
     if (showStoreDialog) {
+        val listMaxHeight = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.42f)
+            .dp
+            .coerceIn(120.dp, 300.dp)
         AlertDialog(
             onDismissRequest = { showStoreDialog = false },
             title = {
@@ -905,8 +953,19 @@ fun LoginScreen(
             },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                val visibleStoreApps = remember(storeAppsList, allowedPackagesSet) {
+                val blockedByPolicy = remember(storeAppsList, showStoreDialog) {
+                    val wl = com.ejemplo.locksuite.mdm.WhitelistManager(context)
+                    val pm = com.ejemplo.locksuite.mdm.PolicyManager(context)
+                    val blockPopular = pm.isBlockPopularNonKosherEnabled()
+                    val decisions = wl.allDecisions()
                     storeAppsList.filter { app ->
+                        decisions[app.packageName] == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_BLOCK ||
+                            (blockPopular && com.ejemplo.locksuite.mdm.PopularNonKosherApps.isPopularNonKosher(app.packageName))
+                    }.map { it.packageName }.toSet()
+                }
+                val visibleStoreApps = remember(storeAppsList, allowedPackagesSet, blockedByPolicy) {
+                    storeAppsList.filter { app ->
+                        if (app.packageName in blockedByPolicy) return@filter false
                         val esStubAa = com.ejemplo.locksuite.mdm.AndroidAutoStubs.esEntradaDeStub(app.packageName, app.sha256)
                         allowedPackagesSet.contains(app.packageName) || esStubAa
                     }
@@ -914,7 +973,7 @@ fun LoginScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(300.dp),
+                        .heightIn(min = 120.dp, max = listMaxHeight),
                     contentAlignment = Alignment.Center
                 ) {
                     if (isStoreLoading) {
@@ -1178,10 +1237,13 @@ fun LoginScreen(
                     )
                     Spacer(modifier = Modifier.height(10.dp))
 
+                    val updateListMaxHeight = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.42f)
+                        .dp
+                        .coerceIn(120.dp, 300.dp)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(300.dp),
+                            .heightIn(min = 120.dp, max = updateListMaxHeight),
                         contentAlignment = Alignment.Center
                     ) {
                         if (isUpdatableLoading) {

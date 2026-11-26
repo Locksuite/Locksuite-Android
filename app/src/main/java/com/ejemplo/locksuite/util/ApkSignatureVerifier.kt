@@ -151,19 +151,10 @@ object ApkSignatureVerifier {
             android.content.pm.PackageManager.GET_SIGNATURES
         }
         val info = context.packageManager.getPackageInfo(context.packageName, flags)
-        val firmas: Array<out Signature>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            info.signingInfo?.apkContentsSigners
-                ?: info.signingInfo?.signingCertificateHistory
-                ?: @Suppress("DEPRECATION") info.signatures
-        } else {
-            @Suppress("DEPRECATION")
-            info.signatures
-        }
-        val primera = firmas?.firstOrNull()
-        if (primera == null) {
+        val digest = firmaDigestDe(info)
+        if (digest == null) {
             null
         } else {
-            val digest = MessageDigest.getInstance("SHA-256").digest(primera.toByteArray())
             // URL_SAFE | NO_PADDING | NO_WRAP: los tres hacen falta. El `tr '+/' '-_'`
             // y el `tr -d '='` de la receta oficial son exactamente URL_SAFE y
             // NO_PADDING; NO_WRAP evita el salto de línea que Base64 mete cada 76
@@ -178,7 +169,26 @@ object ApkSignatureVerifier {
         null
     }
 
-    private fun huellaDe(info: PackageInfo): String? {
+    internal fun signerSetDigest(signerCerts: Collection<ByteArray>): ByteArray? {
+        if (signerCerts.isEmpty()) return null
+        val sha256 = MessageDigest.getInstance("SHA-256")
+        val perSignerHex = signerCerts
+            .map { cert ->
+                sha256.reset()
+                sha256.digest(cert).joinToString("") { "%02x".format(it) }
+            }
+            .distinct()
+            .sorted()
+        if (perSignerHex.isEmpty()) return null
+        if (perSignerHex.size == 1) {
+            sha256.reset()
+            return sha256.digest(signerCerts.first())
+        }
+        sha256.reset()
+        return sha256.digest(perSignerHex.joinToString(":").toByteArray(Charsets.UTF_8))
+    }
+
+    private fun firmaDigestDe(info: PackageInfo): ByteArray? {
         val firmas: Array<out Signature>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             info.signingInfo?.apkContentsSigners
                 ?: info.signingInfo?.signingCertificateHistory
@@ -187,8 +197,12 @@ object ApkSignatureVerifier {
             @Suppress("DEPRECATION")
             info.signatures
         }
-        val primera = firmas?.firstOrNull() ?: return null
-        val digest = MessageDigest.getInstance("SHA-256").digest(primera.toByteArray())
+        if (firmas.isNullOrEmpty()) return null
+        return signerSetDigest(firmas.map { it.toByteArray() })
+    }
+
+    private fun huellaDe(info: PackageInfo): String? {
+        val digest = firmaDigestDe(info) ?: return null
         return digest.joinToString("") { "%02x".format(it) }
     }
 }

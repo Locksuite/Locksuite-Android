@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.SystemClock
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.receiver.BootReceiver
+import com.ejemplo.locksuite.receiver.ReviveReceiver
 
 /**
  * ARRANQUE PROTEGIDO — cierra el hueco entre que el equipo enciende y que el filtro
@@ -116,6 +117,12 @@ object BootGate {
 
     private const val TAG = "LockSuite_BootGate"
 
+    /** Serializa las transiciones de estado del BootGate entre BootReceiver, VPN y Watchdog. */
+    private val gateLock = Any()
+
+    /** Margen sobre el techo al programar la alarma de seguridad para garantizar que elapsed > techo. */
+    private const val ALARM_SLACK_MS = 2_000L
+
     /** Interruptor del administrador. Encendido por defecto. */
     const val KEY_ENABLED = "boot_gate_enabled"
 
@@ -186,8 +193,10 @@ object BootGate {
         PrefsHelper.getMdmPrefs(context).getBoolean(KEY_ENABLED, true)
 
     fun setEnabled(context: Context, enabled: Boolean) {
-        PrefsHelper.getMdmPrefs(context).edit().putBoolean(KEY_ENABLED, enabled).apply()
-        if (!enabled) release(context, "interruptor apagado")
+        synchronized(gateLock) {
+            PrefsHelper.getMdmPrefs(context).edit().putBoolean(KEY_ENABLED, enabled).apply()
+            if (!enabled) release(context, "interruptor apagado")
+        }
     }
 
     fun isActive(context: Context): Boolean =
@@ -289,13 +298,30 @@ object BootGate {
      *
      * @return true si efectivamente hubo que limpiar un proxy huérfano.
      */
-    fun healStuckProxy(context: Context, reason: String): Boolean {
-        return try {
-            if (!isGateProxyPresent(context)) return false
+    fun healStuckProxy(context: Context, reason: String): Boolean = synchronized(gateLock) {
+        try {
+            if (!isGateProxyPresent(context)) return@synchronized false
 
             val policy = PolicyManager(context)
-            if (policy.isInternetBlocked()) return false
-            if (isWindowLegitimatelyOpen(context)) return false
+            if (policy.isInternetBlocked()) return@synchronized false
+            if (isWindowLegitimatelyOpen(context)) {
+                // Si la alarma de seguridad disparó temprano o mientras seguimos legítimamente
+                // esperando Accesibilidad (ventana ampliada de 30 min), evaluar si ya se puede
+                // liberar o re-armar la alarma para que no se pierda la red de seguridad.
+                if (reason == "alarma de seguridad") {
+                    val waitingAccessibility = stillWaitingForAccessibility(context)
+                    if (!waitingAccessibility) {
+                        val filterReady = PrefsHelper.getMdmPrefs(context).getBoolean(KEY_FILTER_READY, false) ||
+                            com.ejemplo.locksuite.service.KosherVpnService.isTunnelRunning
+                        if (!BootReceiver.shouldVpnBeRunning(context) || filterReady) {
+                            release(context, "filtro listo (alarma de seguridad)")
+                            return@synchronized true
+                        }
+                    }
+                    armSafetyAlarm(context)
+                }
+                return@synchronized false
+            }
 
             android.util.Log.w(
                 TAG,
@@ -329,7 +355,7 @@ object BootGate {
      * Cierra la red preventivamente. La llama `BootReceiver` lo más temprano posible.
      * Es idempotente y barata: si no corresponde, sale enseguida.
      */
-    fun engage(context: Context) {
+    fun engage(context: Context) = synchronized(gateLock) {
         try {
             // En Arranque Directo (LOCKED_BOOT_COMPLETED, antes de que el usuario
             // desbloquee por primera vez) el almacenamiento cifrado por credencial
@@ -339,7 +365,7 @@ object BootGate {
             // los dos broadcasts, así que el bloqueo se aplica en BOOT_COMPLETED.
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
                 val um = context.getSystemService(android.os.UserManager::class.java)
-                if (um != null && !um.isUserUnlocked) return
+                if (um != null && !um.isUserUnlocked) return@synchronized
             }
 
             // ARREGLO 21/8/2026 — antes que nada, limpiar un proxy huérfano de un
@@ -353,31 +379,33 @@ object BootGate {
             val policy = PolicyManager(context)
 
             // Con LockSuite suspendido el administrador levantó todo a propósito.
-            if (policy.isLockSuiteSuspended()) return
-            if (!isEnabled(context)) return
+            if (policy.isLockSuiteSuspended()) return@synchronized
+            if (!isEnabled(context)) return@synchronized
 
             // El administrador ya tenía "bloquear internet" puesto a mano: no hay nada
             // que agregar y, sobre todo, no hay que tocarlo al liberar.
-            if (policy.isInternetBlocked()) return
+            if (policy.isInternetBlocked()) return@synchronized
 
-            // Si ninguna política necesita la VPN, no hay filtro que esperar.
-            val waitAccessibility = PrefsHelper.getMdmPrefs(context)
-                .getBoolean(KEY_WAIT_ACCESSIBILITY, false)
-            if (!BootReceiver.shouldVpnBeRunning(context) && !waitAccessibility) return
-
-            // Si el túnel VPN ya está corriendo y leyendo paquetes en este proceso
-            // (ej. reinicio rápido o reemplazo de paquete con VPN ya arriba) y no esperamos
-            // accesibilidad, no tiene sentido clavar un proxy a puerto muerto.
-            if (com.ejemplo.locksuite.service.KosherVpnService.isTunnelRunning && !waitAccessibility) {
-                android.util.Log.i(TAG, "Túnel VPN ya activo y filtrando: omitiendo bloqueo preventivo de red.")
-                return
+            // Comprobar estado VIVO de ambos requisitos (VPN y Accesibilidad):
+            // si el túnel ya está corriendo Y no falta la Accesibilidad (ya está activa o no
+            // se espera), no se clava el proxy a puerto muerto — evita cortes de 20–120 s al
+            // arrancar cuando Always-On VPN y Accesibilidad levantaron antes que BOOT_COMPLETED.
+            val waitingFilter = BootReceiver.shouldVpnBeRunning(context) &&
+                !com.ejemplo.locksuite.service.KosherVpnService.isTunnelRunning
+            val waitingAccessibility = stillWaitingForAccessibility(context)
+            if (!waitingFilter && !waitingAccessibility) {
+                android.util.Log.i(
+                    TAG,
+                    "Filtro VPN y Accesibilidad ya listos (o no requeridos): omitiendo bloqueo preventivo de red."
+                )
+                return@synchronized
             }
 
             val prefs = PrefsHelper.getMdmPrefs(context)
             prefs.edit()
                 .putBoolean(KEY_ACTIVE, true)
                 .putLong(KEY_SINCE, SystemClock.elapsedRealtime())
-                .putBoolean(KEY_FILTER_READY, false)   // ventana nueva, marca en cero
+                .putBoolean(KEY_FILTER_READY, !waitingFilter)
                 .putString(KEY_LAST_RESULT, "en curso")
                 .apply()
 
@@ -400,7 +428,7 @@ object BootGate {
             //
             // Para la espera del filtro de red, en cambio, se mantiene solo el proxy:
             // dura segundos y el dueño eligió explícitamente el 17/8 que alcanzaba.
-            val suspendApps = prefs.getBoolean(KEY_SUSPEND_APPS, false) || waitAccessibility
+            val suspendApps = prefs.getBoolean(KEY_SUSPEND_APPS, false) || waitingAccessibility
             if (suspendApps) {
                 try {
                     // Se delega en el reconciliador en vez de llamar a setBrowsersSuspended(true)
@@ -413,8 +441,8 @@ object BootGate {
 
             android.util.Log.i(
                 TAG,
-                "Arranque protegido ACTIVO (esperaFiltro=${BootReceiver.shouldVpnBeRunning(context)} " +
-                    "esperaAccesibilidad=$waitAccessibility)."
+                "Arranque protegido ACTIVO (esperaFiltro=$waitingFilter " +
+                    "esperaAccesibilidad=$waitingAccessibility)."
             )
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Fallo activando el arranque protegido: ${e.message}")
@@ -428,7 +456,7 @@ object BootGate {
      * Es el único momento en que se puede afirmar que el filtro está funcionando: que
      * el servicio esté "arrancado" no alcanza, `establish()` puede haber devuelto null.
      */
-    fun onFilterReady(context: Context) {
+    fun onFilterReady(context: Context) = synchronized(gateLock) {
         try {
             if (!isActive(context)) {
                 // ARREGLO 21/8/2026 — el túnel está leyendo y no hay ninguna ventana
@@ -441,7 +469,7 @@ object BootGate {
                 // servía. Ahora el camino manual funciona siempre — y encima el mismo
                 // camino se dispara solo cada vez que la VPN se reestablece.
                 healStuckProxy(context, "tunel leyendo, sin ventana abierta")
-                return
+                return@synchronized
             }
             // Se ANOTA que el filtro ya levantó, no solo se libera.
             //
@@ -456,7 +484,7 @@ object BootGate {
 
             if (stillWaitingForAccessibility(context)) {
                 android.util.Log.i(TAG, "Filtro de red listo, pero falta la Accesibilidad: se mantiene cerrado.")
-                return
+                return@synchronized
             }
             release(context, "filtro listo")
         } catch (e: Exception) {
@@ -469,7 +497,7 @@ object BootGate {
      * `onFilterReady()` no puede cubrir solo: que la Accesibilidad se active DESPUÉS
      * del filtro, y que el filtro no levante nunca (vence la ventana).
      */
-    fun tick(context: Context) {
+    fun tick(context: Context) = synchronized(gateLock) {
         try {
             if (!isActive(context)) {
                 // ARREGLO 21/8/2026 — antes se salía acá y listo, y ese era el agujero:
@@ -483,7 +511,7 @@ object BootGate {
                 // Cuesta una lectura de Settings.Global cada 20 s, y en el caso normal
                 // (sin proxy puesto) sale ahí mismo.
                 healStuckProxy(context, "ciclo del Watchdog")
-                return
+                return@synchronized
             }
 
             val since = PrefsHelper.getMdmPrefs(context).getLong(KEY_SINCE, 0L)
@@ -506,10 +534,10 @@ object BootGate {
                 }
                 android.util.Log.w(TAG, "Venció la ventana del arranque protegido ($motivo); liberando.")
                 release(context, motivo)
-                return
+                return@synchronized
             }
 
-            if (waitingAccessibility) return
+            if (waitingAccessibility) return@synchronized
 
             // Llegados acá, la accesibilidad ya no es un impedimento. Se libera si el
             // filtro de red no hace falta, o si ya confirmó que está funcionando.
@@ -548,9 +576,9 @@ object BootGate {
      * salida rápida sigue siendo barata (una lectura de `Settings.Global`), y el caso
      * normal —que es "no hay nada puesto"— sale igual de rápido que antes.
      */
-    fun release(context: Context, reason: String) {
+    fun release(context: Context, reason: String) = synchronized(gateLock) {
         val prefs = PrefsHelper.getMdmPrefs(context)
-        if (!prefs.getBoolean(KEY_ACTIVE, false) && !isGateProxyPresent(context)) return
+        if (!prefs.getBoolean(KEY_ACTIVE, false) && !isGateProxyPresent(context)) return@synchronized
 
         prefs.edit()
             .putBoolean(KEY_ACTIVE, false)
@@ -580,18 +608,27 @@ object BootGate {
      * Programa una alarma exacta (o de alta prioridad en Doze) en el AlarmManager del sistema.
      * Esta es la red de seguridad de hardware/sistema: si el proceso de LockSuite muere, es
      * cerrado por el usuario o sufre un ANR durante el arranque antes de liberar el proxy,
-     * el AlarmManager despertará a BootReceiver para que healStuckProxy() libere la red.
+     * el AlarmManager despertará a ReviveReceiver para que healStuckProxy() libere la red.
      */
     fun armSafetyAlarm(context: Context) {
         try {
             val am = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+            val prefs = PrefsHelper.getMdmPrefs(context)
+            val since = prefs.getLong(KEY_SINCE, 0L)
             val timeoutMs = if (stillWaitingForAccessibility(context)) {
                 MAX_ACCESSIBILITY_WINDOW_MS
             } else {
                 MAX_WINDOW_MS
             }
-            val triggerAt = SystemClock.elapsedRealtime() + timeoutMs
-            val intent = Intent(context, BootReceiver::class.java).apply {
+            val now = SystemClock.elapsedRealtime()
+            // Se suma ALARM_SLACK_MS (+2 s) al vencimiento real para garantizar que cuando
+            // suene la alarma `elapsed > techo` sea verdadero y healStuckProxy() libere en el acto.
+            val triggerAt = if (since > 0L && now >= since) {
+                (since + timeoutMs + ALARM_SLACK_MS).coerceAtLeast(now + ALARM_SLACK_MS)
+            } else {
+                now + timeoutMs + ALARM_SLACK_MS
+            }
+            val intent = Intent(context, ReviveReceiver::class.java).apply {
                 action = BootReceiver.ACTION_BOOT_GATE_TIMEOUT
             }
             val pi = PendingIntent.getBroadcast(
@@ -610,7 +647,8 @@ object BootGate {
             } else {
                 am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
             }
-            android.util.Log.i(TAG, "Alarma de seguridad de arranque programada a ${timeoutMs / 1000}s.")
+            val delaySec = ((triggerAt - now).coerceAtLeast(0L)) / 1000L
+            android.util.Log.i(TAG, "Alarma de seguridad de arranque programada a ${delaySec}s.")
         } catch (e: Exception) {
             android.util.Log.w(TAG, "No se pudo armar alarma de seguridad de arranque: ${e.message}")
         }
@@ -622,7 +660,7 @@ object BootGate {
     fun cancelSafetyAlarm(context: Context) {
         try {
             val am = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
-            val intent = Intent(context, BootReceiver::class.java).apply {
+            val intent = Intent(context, ReviveReceiver::class.java).apply {
                 action = BootReceiver.ACTION_BOOT_GATE_TIMEOUT
             }
             val pi = PendingIntent.getBroadcast(

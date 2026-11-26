@@ -7,12 +7,15 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
+import com.ejemplo.locksuite.util.Safe
 
 /**
  * Tapado visual de regiones de pantalla y overlay opaco de actualizaciones.
@@ -83,13 +86,21 @@ class BlockOverlayManager(private val service: AccessibilityService) {
     private var sweepScheduled = false
 
     private val sweepRunnable = Runnable {
-        sweepScheduled = false
-        sweepExpired()
+        Safe.guard("overlay.sweep") {
+            sweepScheduled = false
+            sweepExpired()
+        }
     }
 
     /** Ejecuta ya mismo si estamos en el hilo principal; si no, lo encola. */
     private inline fun onMain(crossinline block: () -> Unit) {
-        if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post { block() }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            Safe.guard("overlay.main") { block() }
+        } else {
+            mainHandler.post {
+                Safe.guard("overlay.mainPost") { block() }
+            }
+        }
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -363,7 +374,7 @@ class BlockOverlayManager(private val service: AccessibilityService) {
 
     private var blockingCancelable = false
     private var blockingCancelAction: (() -> Unit)? = null
-    private var blockingView: android.widget.LinearLayout? = null
+    @Volatile private var blockingView: android.widget.LinearLayout? = null
     /**
      * Últimos pasos del registro de la actualización (26/10/2026, B.97). Se guardan acá
      * para que, si la vista se rearma (cambia si es cancelable), no se pierdan.
@@ -405,12 +416,32 @@ class BlockOverlayManager(private val service: AccessibilityService) {
             val density = service.resources.displayMetrics.density
             fun dp(value: Int): Int = (value * density).toInt()
 
-            val view = android.widget.LinearLayout(service).apply {
+            val view = object : android.widget.LinearLayout(service) {
+                override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                    // Consumir teclas físicas (Atrás, D-Pad, Buscar, Menú, Enter) para que nunca
+                    // lleguen a Google Play debajo de la pantalla negra. Los toques táctiles sobre
+                    // el botón Cancelar van por dispatchTouchEvent y siguen respondiendo igual.
+                    return when (event.keyCode) {
+                        KeyEvent.KEYCODE_BACK,
+                        KeyEvent.KEYCODE_DPAD_UP,
+                        KeyEvent.KEYCODE_DPAD_DOWN,
+                        KeyEvent.KEYCODE_DPAD_LEFT,
+                        KeyEvent.KEYCODE_DPAD_RIGHT,
+                        KeyEvent.KEYCODE_DPAD_CENTER,
+                        KeyEvent.KEYCODE_SEARCH,
+                        KeyEvent.KEYCODE_MENU,
+                        KeyEvent.KEYCODE_ENTER,
+                        KeyEvent.KEYCODE_NUMPAD_ENTER -> true
+                        else -> super.dispatchKeyEvent(event)
+                    }
+                }
+            }.apply {
                 orientation = android.widget.LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 setBackgroundColor(Color.parseColor("#090A0F")) // opaco 100%
                 isClickable = true
                 isFocusable = true
+                isFocusableInTouchMode = true
                 setPadding(dp(24), dp(48), dp(24), dp(48))
                 // Consume cualquier toque que no haya agarrado un hijo (el boton).
                 setOnTouchListener { _, _ -> true }
@@ -508,16 +539,22 @@ class BlockOverlayManager(private val service: AccessibilityService) {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                // Sin FLAG_NOT_FOCUSABLE: la ventana absorbe teclas físicas (Atrás, D-Pad, Buscar,
+                // Menú, Enter) en dispatchKeyEvent para impedir escapar hacia Play Store.
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.OPAQUE
             ).apply {
                 gravity = Gravity.CENTER
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
             }
 
             try {
                 windowManager.addView(view, params)
+                view.requestFocus()
                 blockingView = view
                 android.util.Log.i("LockSuite_Overlay", "Overlay de actualizacion mostrado (cancelable=$cancelable)")
             } catch (e: Exception) {

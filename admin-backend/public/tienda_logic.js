@@ -85,6 +85,12 @@
     return NEVER_OFFERED.indexOf(pkg) >= 0;
   }
 
+  function isAaStub(pkg, sha256) {
+    if (typeof pkg !== "string" || typeof sha256 !== "string") return false;
+    const expected = AA_STUB_SHA256[pkg];
+    return !!expected && sha256.trim().toLowerCase() === expected;
+  }
+
   function parseStatus(raw) {
     const v = typeof raw === "string" ? raw.trim().toLowerCase() : "";
     return STATUSES.indexOf(v) >= 0 ? v : null;
@@ -155,17 +161,23 @@
     return cleaned || fallbackLabel(pkg);
   }
 
-  /** Solo https hacia el CDN de Google; cualquier otra cosa → null. */
+  /** Solo https hacia el CDN de Google (puerto estándar, sin fragmentos ni userinfo); cualquier otra cosa → null. */
   function cleanIconUrl(raw) {
     if (typeof raw !== "string") return null;
     const url = raw.trim();
     if (!url || url.length > 600 || !url.startsWith("https://")) return null;
-    if (/[\s"'<>]/.test(url)) return null;
-    const authority = url.slice("https://".length).split("/")[0].split("?")[0];
-    if (authority.indexOf("@") >= 0) return null;
-    const host = authority.split(":")[0].toLowerCase();
-    if (!host) return null;
-    return ICON_HOST_SUFFIXES.some((s) => host.endsWith(s)) ? url : null;
+    if (/[\s"'<>\\#]/.test(url)) return null;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:") return null;
+      if (parsed.username || parsed.password || parsed.hash) return null;
+      if (parsed.port && parsed.port !== "443") return null;
+      const host = (parsed.hostname || "").toLowerCase();
+      if (!host) return null;
+      return ICON_HOST_SUFFIXES.some((s) => host.endsWith(s)) ? url : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /* ── Filas ──────────────────────────────────────────────────────────────── */
@@ -503,7 +515,7 @@
     NEVER_OFFERED: NEVER_OFFERED, AA_STUB_SHA256: AA_STUB_SHA256,
     MAX_APPS: MAX_APPS, MAX_EXTRAS: MAX_EXTRAS, MAX_DOMAINS_PER_LIST: MAX_DOMAINS_PER_LIST,
     pkgKey: pkgKey, keyPkg: keyPkg,
-    isValidPackage: isValidPackage, isNeverOffered: isNeverOffered,
+    isValidPackage: isValidPackage, isNeverOffered: isNeverOffered, isAaStub: isAaStub,
     parseStatus: parseStatus, parseAccess: parseAccess,
     cleanDomain: cleanDomain, cleanDomains: cleanDomains, splitDomainText: splitDomainText,
     fallbackLabel: fallbackLabel, cleanLabel: cleanLabel, cleanIconUrl: cleanIconUrl,

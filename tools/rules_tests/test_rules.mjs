@@ -174,6 +174,17 @@ await check("trustedAdmins: el administrador SÍ puede revocar la confianza (bor
 await check("trustedAdmins: ... y la copia de info/", remove(ref(adm, "devices/D4/info/trustedAdmins/admin1")), true);
 await check("trustedAdmins: el celular sigue escribiendo el resto de su info", update(ref(dev7, "devices/D7"), { "info/model": "SM-A065M", ownerUid: "devD7", lastSeen: serverTimestamp() }), true);
 
+// ── B.131: integridad de appPolicy, playStoreExtras, allowedPackages y pendingCommands ──
+await check("B.131: cel NO puede escribir su appPolicy", set(ref(dev, "devices/D1/appPolicy/com_waze"), "allow"), false);
+await check("B.131: cel NO puede escribir su playStoreExtras", set(ref(dev, "devices/D1/playStoreExtras/com_waze"), { status: "allow" }), false);
+await check("B.131: cel NO puede escribir su allowedPackages", set(ref(dev, "devices/D1/allowedPackages"), ["com.evil"]), false);
+await check("B.131: cel NO puede escribir info/allowedPackages", set(ref(dev, "devices/D1/info/allowedPackages"), ["com.evil"]), false);
+await check("B.131: cel NO puede crear pendingCommands", set(ref(dev, "devices/D1/pendingCommands/c2"), { command: "UNBLOCK_WIFI" }), false);
+await check("B.131: admin NO puede inyectar pendingCommands directo", set(ref(adm, "devices/D1/pendingCommands/c2"), { command: "UNBLOCK_WIFI" }), false);
+await check("B.131: admin SÍ escribe playStoreExtras", set(ref(adm, "devices/D1/playStoreExtras/com_waze"), { status: "allow" }), true);
+await check("B.131: admin SÍ escribe allowedPackages", set(ref(adm, "devices/D1/allowedPackages"), ["com.waze"]), true);
+await check("B.131: restaurar archivado CON pendingCommands se rechaza (.validate=false)", set(ref(adm, "devices/D9b"), { ownerUid: "devD9b", pendingCommands: { c9: { command: "X" } } }), false);
+
 console.table(results);
 console.log(rojos === 0 ? "TODAS VERDES (" + results.length + ")" : "ROJAS: " + rojos);
 await env.cleanup();

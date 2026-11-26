@@ -117,14 +117,15 @@ class DomainRuleManager(
                     context.startService(vpnIntent)
                 }
             } else {
-                val stopServiceIntent = android.content.Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
-                    action = "STOP_VPN"
-                }
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    context.startForegroundService(stopServiceIntent)
-                } else {
-                    context.startService(stopServiceIntent)
-                }
+                // Usar stopService() en lugar de startForegroundService("STOP_VPN") evita
+                // ForegroundServiceDidNotStartInTimeException en Android 8+ cuando el servicio
+                // no estaba activo o termina antes de promoverse a primer plano.
+                context.stopService(
+                    android.content.Intent(
+                        context,
+                        com.ejemplo.locksuite.service.KosherVpnService::class.java
+                    )
+                )
             }
         } catch (e: Exception) {
             e.printStackTrace()

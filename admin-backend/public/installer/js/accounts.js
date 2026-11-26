@@ -654,6 +654,9 @@ export async function checkAccounts() {
                 }
             }
 
+            const escHtml = (v) => String(v == null ? '' : v)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
             let html = '';
             accounts.forEach(acc => {
                 const vis = getAccountVisuals(acc.type);
@@ -667,12 +670,12 @@ export async function checkAccounts() {
                         <div class="account-icon-wrapper">${vis.html}</div>
                         <div class="account-info">
                             <div class="account-header-line">
-                                <span class="account-name" title="${acc.name}">${acc.name}</span>
+                                <span class="account-name" title="${escHtml(acc.name)}">${escHtml(acc.name)}</span>
                                 ${statusTag}
                             </div>
                             <div class="account-type">
-                                <span>${vis.brandName}</span>
-                                <span class="type-pill">${acc.type}</span>
+                                <span>${escHtml(vis.brandName)}</span>
+                                <span class="type-pill">${escHtml(acc.type)}</span>
                             </div>
                         </div>
                     </div>
@@ -699,7 +702,7 @@ export async function checkAccounts() {
                         <span class="material-symbols-rounded" style="vertical-align: middle;">warning</span> נכשלה קריאת רשימת החשבונות
                     </div>
                     <div style="font-size: 0.9rem; color: var(--md-sys-color-on-surface-variant); margin-bottom: 16px;">
-                        ${e.message || 'חלה שגיאה בתקשורת ADB עם שירות החשבונות של המכשיר.'}
+                        ${String(e.message || 'חלה שגיאה בתקשורת ADB עם שירות החשבונות של המכשיר.').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}
                     </div>
                     <button class="btn btn-tonal" onclick="checkAccounts()">
                         <span class="material-symbols-rounded">refresh</span> נסה לסרוק שוב
@@ -798,7 +801,10 @@ export async function runAccountBypass() {
             }
         }
 
-        const pkgList = Array.from(packagesToDisable).filter(pkg => !PROTECTED_PACKAGES.some(p => pkg.startsWith(p)));
+        const VALID_PKG_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)+$/;
+        const pkgList = Array.from(packagesToDisable).filter(pkg =>
+            VALID_PKG_RE.test(pkg) && !PROTECTED_PACKAGES.some(p => pkg.startsWith(p))
+        );
 
         if (pkgList.length === 0) {
             showToast("לא נמצאו רכיבים שניתן להשבית אוטומטית. נדרשת הסרה ידנית.");
@@ -902,7 +908,8 @@ export async function restoreAccounts(silent = false) {
 
     if (!silent) log("משחזר חשבונות ורכיבים שהושבתו...", 'info');
 
-    const pkgs = [...appState.disabledPackages];
+    const VALID_PKG_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)+$/;
+    const pkgs = [...appState.disabledPackages].filter(pkg => typeof pkg === 'string' && VALID_PKG_RE.test(pkg));
     for (const pkg of pkgs) {
         try {
             await executeAdbCommand(`pm enable ${pkg}`, `Restore ${pkg}`, silent);

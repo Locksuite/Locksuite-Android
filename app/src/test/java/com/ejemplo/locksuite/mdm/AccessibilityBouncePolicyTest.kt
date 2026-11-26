@@ -197,4 +197,155 @@ class AccessibilityBouncePolicyTest {
         assertTrue(AccessibilityBouncePolicy.shouldScanOnContentChanged(true, false))
         assertTrue(AccessibilityBouncePolicy.shouldScanOnContentChanged(false, true))
     }
+
+    @Test
+    fun isImePackageBySegmentEvitaFalsosPositivosDeSubstring() {
+        assertTrue(AccessibilityBouncePolicy.isImePackageBySegment("com.google.android.inputmethod.latin"))
+        assertTrue(AccessibilityBouncePolicy.isImePackageBySegment("com.sec.android.inputmethod"))
+        assertTrue(AccessibilityBouncePolicy.isImePackageBySegment("com.samsung.android.honeyboard"))
+        assertTrue(AccessibilityBouncePolicy.isImePackageBySegment("com.touchtype.swiftkey"))
+        assertTrue(AccessibilityBouncePolicy.isImePackageBySegment("com.vendor.ime"))
+        assertTrue(AccessibilityBouncePolicy.isImePackageBySegment("com.example.custom_keyboard"))
+
+        assertFalse(AccessibilityBouncePolicy.isImePackageBySegment(null))
+        assertFalse(AccessibilityBouncePolicy.isImePackageBySegment(""))
+        assertFalse(AccessibilityBouncePolicy.isImePackageBySegment("com.whatsapp.time"))
+        assertFalse(AccessibilityBouncePolicy.isImePackageBySegment("com.example.prime"))
+        assertFalse(AccessibilityBouncePolicy.isImePackageBySegment("com.example.anime"))
+        assertFalse(AccessibilityBouncePolicy.isImePackageBySegment("com.chime.app"))
+        assertFalse(AccessibilityBouncePolicy.isImePackageBySegment("com.android.settings"))
+    }
+
+    @Test
+    fun isTransientWindowPackageConservaContextoParaSystemUiImeYBuscador() {
+        assertTrue(AccessibilityBouncePolicy.isTransientWindowPackage("com.android.systemui"))
+        assertTrue(AccessibilityBouncePolicy.isTransientWindowPackage("com.android.settings.intelligence"))
+        assertTrue(AccessibilityBouncePolicy.isTransientWindowPackage("com.google.android.settings.intelligence"))
+        assertTrue(AccessibilityBouncePolicy.isTransientWindowPackage("com.oem.settings.intelligence"))
+        assertTrue(AccessibilityBouncePolicy.isTransientWindowPackage("com.samsung.android.honeyboard"))
+
+        assertFalse(AccessibilityBouncePolicy.isTransientWindowPackage(null))
+        assertFalse(AccessibilityBouncePolicy.isTransientWindowPackage(""))
+        assertFalse(AccessibilityBouncePolicy.isTransientWindowPackage("com.android.settings"))
+        assertFalse(AccessibilityBouncePolicy.isTransientWindowPackage("com.whatsapp"))
+    }
+
+    @Test
+    fun dialogoDetectadoPorEstructuraDeVistasRebotaDentroDeAccesibilidad() {
+        assertTrue("button1" in AccessibilityBouncePolicy.DIALOG_VIEW_ID_HINTS)
+        assertTrue("alerttitle" in AccessibilityBouncePolicy.DIALOG_VIEW_ID_HINTS)
+        assertTrue("parentpanel" in AccessibilityBouncePolicy.DIALOG_VIEW_ID_HINTS)
+
+        val inside = AccessibilityBouncePolicy.classify(
+            ScreenSnapshot(
+                className = "android.widget.FrameLayout",
+                windowTitleFolded = "",
+                inAccessibilityContext = true,
+                knownAccMenuClasses = accClasses,
+                knownAccMenuTitles = accTitles,
+                hasOwnDescription = false,
+                hasOwnLabelInHeader = false,
+                hasOwnLabelInBody = true,
+                hasSwitch = false,
+                hasAccessibilityViewHints = false,
+                hasExcludedSettingsHints = false,
+                isDialog = false,
+                hasDialogStructure = true
+            )
+        )
+        assertEquals(Action.BOUNCE, inside)
+
+        val outside = AccessibilityBouncePolicy.classify(
+            ScreenSnapshot(
+                className = "android.widget.FrameLayout",
+                windowTitleFolded = "",
+                inAccessibilityContext = false,
+                knownAccMenuClasses = accClasses,
+                knownAccMenuTitles = accTitles,
+                hasOwnDescription = false,
+                hasOwnLabelInHeader = false,
+                hasOwnLabelInBody = true,
+                hasSwitch = false,
+                hasAccessibilityViewHints = false,
+                hasExcludedSettingsHints = false,
+                isDialog = false,
+                hasDialogStructure = true
+            )
+        )
+        assertEquals(Action.IGNORE, outside)
+    }
+
+    @Test
+    fun filaInlineConSwitchDeLockSuiteRebotaEnListaDeAccesibilidadPeroNoFuera() {
+        val inAccList = AccessibilityBouncePolicy.classify(
+            ScreenSnapshot(
+                className = "com.android.settings.SubSettings",
+                windowTitleFolded = "apps descargadas",
+                inAccessibilityContext = true,
+                knownAccMenuClasses = accClasses,
+                knownAccMenuTitles = accTitles,
+                hasOwnDescription = false,
+                hasOwnLabelInHeader = false,
+                hasOwnLabelInBody = true,
+                hasSwitch = true,
+                hasAccessibilityViewHints = false,
+                hasExcludedSettingsHints = false,
+                isDialog = false,
+                hasInlineOwnSwitchRow = true
+            )
+        )
+        assertEquals(Action.BOUNCE, inAccList)
+
+        val excludedWins = AccessibilityBouncePolicy.classify(
+            ScreenSnapshot(
+                className = "com.android.settings.notification.AppNotificationSettings",
+                windowTitleFolded = "locksuite",
+                inAccessibilityContext = true,
+                knownAccMenuClasses = accClasses,
+                knownAccMenuTitles = accTitles,
+                hasOwnDescription = false,
+                hasOwnLabelInHeader = true,
+                hasOwnLabelInBody = true,
+                hasSwitch = true,
+                hasAccessibilityViewHints = false,
+                hasExcludedSettingsHints = true,
+                isDialog = false,
+                hasInlineOwnSwitchRow = true
+            )
+        )
+        assertEquals(Action.LEAVE_ACCESSIBILITY_CONTEXT, excludedWins)
+
+        val outsideAcc = AccessibilityBouncePolicy.classify(
+            ScreenSnapshot(
+                className = "com.android.settings.SubSettings",
+                windowTitleFolded = "uso de bateria",
+                inAccessibilityContext = false,
+                knownAccMenuClasses = accClasses,
+                knownAccMenuTitles = accTitles,
+                hasOwnDescription = false,
+                hasOwnLabelInHeader = false,
+                hasOwnLabelInBody = true,
+                hasSwitch = true,
+                hasAccessibilityViewHints = false,
+                hasExcludedSettingsHints = false,
+                isDialog = false,
+                hasInlineOwnSwitchRow = true
+            )
+        )
+        assertEquals(Action.IGNORE, outsideAcc)
+    }
+
+    @Test
+    fun hasOwnDescriptionTienePrioridadSobreHasExcludedSettingsHints() {
+        val res = AccessibilityBouncePolicy.classify(
+            snap(
+                className = "com.android.settings.applications.InstalledAppDetails",
+                windowTitleFolded = "locksuite",
+                inAccessibilityContext = false,
+                hasOwnDescription = true,
+                hasExcludedSettingsHints = true
+            )
+        )
+        assertEquals(Action.BOUNCE, res)
+    }
 }

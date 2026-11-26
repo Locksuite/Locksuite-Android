@@ -17,6 +17,8 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
@@ -187,6 +189,11 @@ class GoogleVerificationActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+
+        if (savedInstanceState == null) {
+            clearWebSessionData()
+        }
 
         // Programar timeout inicial de 10 min
         resetSafetyTimeout()
@@ -201,13 +208,13 @@ class GoogleVerificationActivity : ComponentActivity() {
         val savedWebState = savedInstanceState?.getBundle(STATE_WEBVIEW)
 
         when {
+            fromIntent != null -> {
+                webUrl.value = fromIntent
+                mode.value = Mode.WEB
+            }
             savedMode == Mode.WEB && savedUrl != null -> {
                 pendingWebViewState = savedWebState
                 webUrl.value = savedUrl
-                mode.value = Mode.WEB
-            }
-            fromIntent != null -> {
-                webUrl.value = fromIntent
                 mode.value = Mode.WEB
             }
             savedMode == Mode.SCAN || intent?.getBooleanExtra(EXTRA_START_SCAN, false) == true -> {
@@ -317,18 +324,22 @@ class GoogleVerificationActivity : ComponentActivity() {
         }
     }
 
+    private fun clearWebSessionData() {
+        try {
+            val cookies = CookieManager.getInstance()
+            cookies.removeAllCookies { cookies.flush() }
+            WebStorage.getInstance().deleteAllData()
+        } catch (_: Exception) {
+        }
+    }
+
     override fun onDestroy() {
-        mainHandler.removeCallbacks(safetyTimeoutRunnable)
+        mainHandler.removeCallbacksAndMessages(null)
         activeWebView?.let { destroyWebView(it, removeFromParent = true) }
         activeWebView = null
         if (isFinishing && webViewEverCreated) {
             // La sesión de Google no queda guardada dentro de LockSuite.
-            try {
-                val cookies = CookieManager.getInstance()
-                cookies.removeAllCookies { cookies.flush() }
-                WebStorage.getInstance().deleteAllData()
-            } catch (_: Exception) {
-            }
+            clearWebSessionData()
         }
         super.onDestroy()
     }
@@ -372,6 +383,9 @@ class GoogleVerificationActivity : ComponentActivity() {
         override fun onWebViewReleased(webView: WebView) {
             if (activeWebView === webView) activeWebView = null
             destroyWebView(webView)
+            if (!isChangingConfigurations) {
+                clearWebSessionData()
+            }
         }
 
         override fun onVerificationComplete() {
@@ -1124,6 +1138,32 @@ fun GoogleVerificationWebView(
                         filePathCallback?.onReceiveValue(null)
                         return true
                     }
+
+                    override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+                        result?.cancel()
+                        return true
+                    }
+
+                    override fun onJsConfirm(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+                        result?.cancel()
+                        return true
+                    }
+
+                    override fun onJsPrompt(
+                        view: WebView?,
+                        url: String?,
+                        message: String?,
+                        defaultValue: String?,
+                        result: JsPromptResult?
+                    ): Boolean {
+                        result?.cancel()
+                        return true
+                    }
+                }
+
+                setDownloadListener { downloadUrl, _, _, _, _ ->
+                    host.onNavigationBlocked(downloadUrl, "descarga")
+                    Toast.makeText(context, "🚫 Descarga bloqueada por seguridad", Toast.LENGTH_SHORT).show()
                 }
 
                 host.onWebViewCreated(this)

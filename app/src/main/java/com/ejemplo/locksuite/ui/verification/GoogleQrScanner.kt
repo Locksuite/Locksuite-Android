@@ -25,6 +25,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -351,51 +352,61 @@ private fun rejectionMessage(text: String): String {
 
 @Composable
 private fun ScannerOverlay(notice: String?, onCancel: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize()
     ) {
-        Text(
-            text = "Apuntá al código QR que muestra Google en la computadora",
-            color = Color.White,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xAA000000), RoundedCornerShape(8.dp))
-                .padding(10.dp)
-        )
+        val outerPad = if (maxHeight < 280.dp) 8.dp else 16.dp
+        val reticleSize = minOf(
+            (maxWidth - outerPad * 2) * 0.65f,
+            (maxHeight - outerPad * 2 - 136.dp).coerceAtLeast(88.dp)
+        ).coerceIn(88.dp, 220.dp)
 
-        Box(
+        Column(
             modifier = Modifier
-                .size(220.dp)
-                .border(3.dp, Color(0xFFFF9100), RoundedCornerShape(16.dp))
-        )
+                .fillMaxSize()
+                .padding(outerPad),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "Apuntá al código QR que muestra Google en la computadora",
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xAA000000), RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            )
 
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            if (notice != null) {
-                Text(
-                    text = notice,
-                    color = Color(0xFFFFD180),
-                    fontSize = 13.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xCC000000), RoundedCornerShape(8.dp))
-                        .padding(10.dp)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-            Button(
-                onClick = onCancel,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF424242)),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Cancelar", color = Color.White)
+            Box(
+                modifier = Modifier
+                    .size(reticleSize)
+                    .border(3.dp, Color(0xFFFF9100), RoundedCornerShape(16.dp))
+            )
+
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (notice != null) {
+                    Text(
+                        text = notice,
+                        color = Color(0xFFFFD180),
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xCC000000), RoundedCornerShape(8.dp))
+                            .padding(10.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                Button(
+                    onClick = onCancel,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF424242)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Cancelar", color = Color.White)
+                }
             }
         }
     }

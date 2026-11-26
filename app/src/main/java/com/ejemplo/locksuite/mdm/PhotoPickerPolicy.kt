@@ -194,6 +194,25 @@ object PhotoPickerPolicy {
     }
 
     /**
+     * ¿La app inmediatamente anterior al selector de fotos fue una app de contactos?
+     *
+     * Revisa ÚNICAMENTE el predecesor inmediato (y no entradas más viejas del historial de apps):
+     * si el usuario pasó antes por Teléfono/Contactos y luego abrió WhatsApp para adjuntar una
+     * foto, el predecesor inmediato del selector es WhatsApp, no Contactos.
+     */
+    fun cameFromContactsImmediate(recentAppStack: List<String>, currentPkg: String?): Boolean {
+        if (isContactsPackage(currentPkg)) return true
+        if (recentAppStack.isEmpty()) return false
+        val top = recentAppStack[0]
+        val predecessor = if (currentPkg != null && top == currentPkg) {
+            recentAppStack.getOrNull(1)
+        } else {
+            top
+        }
+        return isContactsPackage(predecessor)
+    }
+
+    /**
      * Decisión completa.
      *
      * @param packageName paquete de la ventana que se acaba de abrir.

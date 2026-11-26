@@ -48,14 +48,48 @@ class WatermarkService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        isRunning = true
-
         ensureForeground()
+
+        val unlocked = com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(this)
+        val purged = if (unlocked) {
+            try {
+                com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+                    .getBoolean("locksuite_purged", false)
+            } catch (_: Throwable) {
+                false
+            }
+        } else {
+            false
+        }
+        if (!unlocked || purged) {
+            isRunning = false
+            stopSelf()
+            return
+        }
+
+        isRunning = true
         addWatermarkView()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         ensureForeground()
+        val unlocked = com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(this)
+        val purged = if (unlocked) {
+            try {
+                com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+                    .getBoolean("locksuite_purged", false)
+            } catch (_: Throwable) {
+                false
+            }
+        } else {
+            false
+        }
+        if (!unlocked || purged) {
+            isRunning = false
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        isRunning = true
         if (watermarkView == null) {
             addWatermarkView()
         }
@@ -64,7 +98,9 @@ class WatermarkService : Service() {
 
     private fun addWatermarkView() {
         try {
-            windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            if (watermarkView != null) return
+            val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
+            windowManager = wm
 
             val sizePx = (56 * resources.displayMetrics.density).toInt()
             val params = WindowManager.LayoutParams(
@@ -85,10 +121,12 @@ class WatermarkService : Service() {
                 gravity = Gravity.BOTTOM or Gravity.END
                 x = 16
                 y = 16
+                alpha = 0.7f
             }
 
-            watermarkView = CircularNetFreeWatermarkView(this)
-            windowManager?.addView(watermarkView, params)
+            val view = CircularNetFreeWatermarkView(this)
+            wm.addView(view, params)
+            watermarkView = view
         } catch (e: Exception) {
             android.util.Log.e("WatermarkService", "Error agregando marca de agua circular", e)
         }

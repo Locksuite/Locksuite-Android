@@ -40,19 +40,21 @@ object PrefsHelper {
 
     fun getEncryptedPrefs(context: Context): SharedPreferences {
         cifradas?.let { return it }
+        val appCtx = context.applicationContext ?: context
         synchronized(candadoCifradas) {
             cifradas?.let { return it }
             return try {
-                val masterKey = MasterKey.Builder(context)
+                val masterKey = MasterKey.Builder(appCtx)
                     .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                     .build()
                 val prefs = EncryptedSharedPreferences.create(
-                    context,
+                    appCtx,
                     Constants.PREFS_NAME,
                     masterKey,
                     EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
                 )
+                migrateFallbackIfNeeded(appCtx, prefs)
                 cifradas = prefs
                 prefs
             } catch (e: Exception) {
@@ -60,8 +62,47 @@ object PrefsHelper {
                 // Se usa un archivo separado para NUNCA mezclar claves en texto plano dentro
                 // del XML cifrado de Tink (`Constants.PREFS_NAME`), lo cual corrompería el Keyset.
                 // No se guarda en `cifradas`: el próximo llamado reintenta.
-                context.getSharedPreferences("${Constants.PREFS_NAME}_fallback", Context.MODE_PRIVATE)
+                appCtx.getSharedPreferences("${Constants.PREFS_NAME}_fallback", Context.MODE_PRIVATE)
             }
+        }
+    }
+
+    private fun migrateFallbackIfNeeded(context: Context, encryptedPrefs: SharedPreferences) {
+        try {
+            val fallbackName = "${Constants.PREFS_NAME}_fallback"
+            val sharedPrefsDir = java.io.File(context.applicationInfo.dataDir, "shared_prefs")
+            val fallbackFile = java.io.File(sharedPrefsDir, "$fallbackName.xml")
+            if (!fallbackFile.exists()) return
+
+            val fallback = context.getSharedPreferences(fallbackName, Context.MODE_PRIVATE)
+            val entries = fallback.all
+            if (entries.isNotEmpty()) {
+                val editor = encryptedPrefs.edit()
+                var changed = false
+                for ((key, value) in entries) {
+                    if (encryptedPrefs.contains(key)) continue
+                    when (value) {
+                        is String -> { editor.putString(key, value); changed = true }
+                        is Boolean -> { editor.putBoolean(key, value); changed = true }
+                        is Int -> { editor.putInt(key, value); changed = true }
+                        is Long -> { editor.putLong(key, value); changed = true }
+                        is Float -> { editor.putFloat(key, value); changed = true }
+                        is Set<*> -> {
+                            editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+                            changed = true
+                        }
+                    }
+                }
+                if (changed) editor.commit()
+            }
+            fallback.edit().clear().commit()
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                context.deleteSharedPreferences(fallbackName)
+            }
+            if (fallbackFile.exists()) {
+                fallbackFile.delete()
+            }
+        } catch (_: Exception) {
         }
     }
 

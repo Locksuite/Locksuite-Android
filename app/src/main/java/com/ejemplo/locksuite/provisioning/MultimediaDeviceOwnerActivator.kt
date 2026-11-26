@@ -9,7 +9,9 @@ import com.ejemplo.locksuite.provisioning.adb.AccountAuthenticatorGateScript
 import com.ejemplo.locksuite.provisioning.adb.ClassicAdbChannelOpener
 import com.ejemplo.locksuite.provisioning.adb.LocalAdbClient
 import com.ejemplo.locksuite.receiver.DeviceAdminReceiver
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
@@ -64,111 +66,143 @@ object MultimediaDeviceOwnerActivator {
             )
         }
 
-        val probe = LocalProvisioningProbe.run(context)
+        val appCtx = context.applicationContext
+        val probe = LocalProvisioningProbe.run(appCtx)
         val script = AccountAuthenticatorGateScript.buildActivation(pkg, adminComponent)
 
         var rawOutput = ""
         var channelUsed = ""
+        var portForCleanup: Int? = preferredAdbPort
+            ?: probe.adbOpenPort
+            ?: probe.adbConfiguredPort
+        var scriptStarted = false
+        var restorationDone = false
 
-        // 1. Intentar por Root (su) si está disponible
-        if (probe.rootAvailable) {
-            val rootOut = runRootShell(script)
-            if (rootOut != null) {
-                rawOutput = rootOut
-                channelUsed = "Root (su)"
-            }
-        }
-
-        // 2. Si no hubo Root o falló, intentar por ADB Local (127.0.0.1:puerto)
-        if (channelUsed.isEmpty()) {
-            val port = preferredAdbPort
-                ?: probe.adbOpenPort
-                ?: probe.adbConfiguredPort
-                ?: ClassicAdbChannelOpener.DEFAULT_PORT
-
-            if (!ClassicAdbChannelOpener.isLocalPortOpen(port, 500)) {
-                return@withContext Outcome.Failed(
-                    reason = "El puerto ADB local ($port) todavía no está abierto en el dispositivo.",
-                    technicalDetail = "Active la Depuración por USB / ADB inalámbrico o use el botón de espera automática."
-                )
-            }
-
-            try {
-                val client = LocalAdbClient(context, "127.0.0.1", port)
-                rawOutput = client.executeShell(script) {
-                    onAdbAuthPrompt?.invoke()
+        try {
+            // 1. Intentar por Root (su) si está disponible
+            if (probe.rootAvailable) {
+                scriptStarted = true
+                val rootOut = runRootShell(script)
+                if (rootOut != null) {
+                    rawOutput = rootOut
+                    channelUsed = "Root (su)"
                 }
-                channelUsed = "ADB Local (127.0.0.1:$port)"
-            } catch (e: Exception) {
-                return@withContext Outcome.Failed(
-                    reason = "No se pudo conectar al canal ADB local en el puerto $port.",
-                    technicalDetail = e.message ?: e.javaClass.simpleName
+            }
+
+            // 2. Si no hubo Root o falló, intentar por ADB Local (127.0.0.1:puerto)
+            if (channelUsed.isEmpty()) {
+                val port = preferredAdbPort
+                    ?: probe.adbOpenPort
+                    ?: probe.adbConfiguredPort
+                    ?: ClassicAdbChannelOpener.DEFAULT_PORT
+                portForCleanup = port
+
+                if (!ClassicAdbChannelOpener.isLocalPortOpen(port, 500)) {
+                    return@withContext Outcome.Failed(
+                        reason = "El puerto ADB local ($port) todavía no está abierto en el dispositivo.",
+                        technicalDetail = "Active la Depuración por USB / ADB inalámbrico o use el botón de espera automática."
+                    )
+                }
+
+                try {
+                    scriptStarted = true
+                    val client = LocalAdbClient(appCtx, "127.0.0.1", port)
+                    rawOutput = client.executeShell(script) {
+                        onAdbAuthPrompt?.invoke()
+                    }
+                    channelUsed = "ADB Local (127.0.0.1:$port)"
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val pendingAfterFail = try {
+                        restoreAccounts(appCtx, port)
+                    } catch (_: Exception) {
+                        getPendingRestorePackages(appCtx).toList()
+                    }
+                    restorationDone = true
+                    return@withContext Outcome.Failed(
+                        reason = "No se pudo conectar al canal ADB local en el puerto $port.",
+                        technicalDetail = e.message ?: e.javaClass.simpleName,
+                        failedToReenablePackages = pendingAfterFail
+                    )
+                }
+            }
+
+            val parsed = AccountAuthenticatorGateScript.parse(rawOutput)
+
+            // Si algún paquete de cuentas quedó pendiente de reactivar, reintentar de inmediato
+            val stillDisabled = parsed.failedToReenablePackages.toMutableSet()
+            for (p in parsed.disabledPackages) {
+                if (!parsed.reenabledPackages.contains(p)) {
+                    stillDisabled.add(p)
+                }
+            }
+            if (stillDisabled.isNotEmpty()) {
+                savePendingRestorePackages(appCtx, stillDisabled)
+                val retryResult = restoreAccounts(appCtx, portForCleanup)
+                stillDisabled.clear()
+                stillDisabled.addAll(retryResult)
+            } else {
+                savePendingRestorePackages(appCtx, emptyList())
+            }
+            restorationDone = true
+
+            // Esperar hasta 2 segundos (10 x 200ms) a que DevicePolicyManager refleje el cambio
+            var becameDo = false
+            for (i in 0 until 10) {
+                if (dpm.isDeviceOwnerApp(pkg)) {
+                    becameDo = true
+                    break
+                }
+                delay(200)
+            }
+
+            if (becameDo) {
+                closeWirelessAdbSafely(appCtx, portForCleanup, probe.rootAvailable)
+                applyDefaultPostActivationProtection(appCtx)
+                return@withContext Outcome.Activated(
+                    channel = channelUsed,
+                    temporarilyDisabledPackages = parsed.disabledPackages,
+                    failedToReenablePackages = stillDisabled.toList()
                 )
             }
-        }
 
-        val parsed = AccountAuthenticatorGateScript.parse(rawOutput)
-
-        // Si algún paquete de cuentas quedó pendiente de reactivar, reintentar de inmediato
-        val stillDisabled = parsed.failedToReenablePackages.toMutableSet()
-        for (p in parsed.disabledPackages) {
-            if (!parsed.reenabledPackages.contains(p)) {
-                stillDisabled.add(p)
+            val reason = when {
+                parsed.multiUserCount != null && parsed.multiUserCount > 1 ->
+                    "Hay múltiples usuarios o perfiles en el equipo (${parsed.multiUserCount}). Elimine los usuarios secundarios o invitados desde Ajustes → Sistema → Usuarios e intente de nuevo."
+                parsed.disableAbortedBeforeDpm ->
+                    "El sistema impidió pausar temporalmente uno de los servicios de cuentas antes de activar Device Owner."
+                parsed.dpmOutput.contains("Not allowed to set the device owner", ignoreCase = true) ->
+                    "Android rechazó el cambio porque aún detecta cuentas o usuarios activos."
+                else ->
+                    "El comando dpm set-device-owner no otorgó permisos de Device Owner."
             }
-        }
-        if (stillDisabled.isNotEmpty()) {
-            savePendingRestorePackages(context, stillDisabled)
-            val retryResult = restoreAccounts(context, preferredAdbPort)
-            stillDisabled.clear()
-            stillDisabled.addAll(retryResult)
-        } else {
-            savePendingRestorePackages(context, emptyList())
-        }
 
-        // Esperar hasta 2 segundos (10 x 200ms) a que DevicePolicyManager refleje el cambio
-        var becameDo = false
-        for (i in 0 until 10) {
-            if (dpm.isDeviceOwnerApp(pkg)) {
-                becameDo = true
-                break
-            }
-            delay(200)
-        }
-
-        if (becameDo) {
-            applyDefaultPostActivationProtection(context)
-            return@withContext Outcome.Activated(
-                channel = channelUsed,
-                temporarilyDisabledPackages = parsed.disabledPackages,
+            return@withContext Outcome.Failed(
+                reason = reason,
+                technicalDetail = parsed.dpmOutput.ifEmpty { rawOutput.take(400) },
                 failedToReenablePackages = stillDisabled.toList()
             )
+        } finally {
+            if (scriptStarted && !restorationDone) {
+                withContext(NonCancellable) {
+                    try {
+                        restoreAccounts(appCtx, portForCleanup)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
         }
-
-        val reason = when {
-            parsed.multiUserCount != null && parsed.multiUserCount > 1 ->
-                "Hay múltiples usuarios o perfiles en el equipo (${parsed.multiUserCount}). Elimine los usuarios secundarios o invitados desde Ajustes → Sistema → Usuarios e intente de nuevo."
-            parsed.disableAbortedBeforeDpm ->
-                "El sistema impidió pausar temporalmente uno de los servicios de cuentas antes de activar Device Owner."
-            parsed.dpmOutput.contains("Not allowed to set the device owner", ignoreCase = true) ->
-                "Android rechazó el cambio porque aún detecta cuentas o usuarios activos."
-            else ->
-                "El comando dpm set-device-owner no otorgó permisos de Device Owner."
-        }
-
-        Outcome.Failed(
-            reason = reason,
-            technicalDetail = parsed.dpmOutput.ifEmpty { rawOutput.take(400) },
-            failedToReenablePackages = stillDisabled.toList()
-        )
     }
 
     suspend fun restoreAccounts(
         context: Context,
         preferredAdbPort: Int? = null
     ): List<String> = withContext(Dispatchers.IO) {
-        val pending = getPendingRestorePackages(context)
+        val appCtx = context.applicationContext
+        val pending = getPendingRestorePackages(appCtx)
         val script = AccountAuthenticatorGateScript.buildRestoration(pending)
-        val probe = LocalProvisioningProbe.run(context)
+        val probe = LocalProvisioningProbe.run(appCtx)
 
         var raw = ""
         if (probe.rootAvailable) {
@@ -177,19 +211,77 @@ object MultimediaDeviceOwnerActivator {
         if (raw.isEmpty()) {
             val port = preferredAdbPort
                 ?: probe.adbOpenPort
+                ?: probe.adbConfiguredPort
                 ?: ClassicAdbChannelOpener.DEFAULT_PORT
             if (ClassicAdbChannelOpener.isLocalPortOpen(port, 500)) {
                 try {
-                    raw = LocalAdbClient(context, "127.0.0.1", port).executeShell(script)
+                    raw = LocalAdbClient(appCtx, "127.0.0.1", port).executeShell(script)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Exception) {
                 }
             }
         }
 
+        if (raw.isBlank()) {
+            return@withContext pending.toList()
+        }
+
         val parsed = AccountAuthenticatorGateScript.parse(raw)
-        val remaining = parsed.failedToReenablePackages
-        savePendingRestorePackages(context, remaining)
-        remaining
+        val remaining = LinkedHashSet<String>(parsed.failedToReenablePackages)
+        for (p in pending) {
+            if (!parsed.reenabledPackages.contains(p)) {
+                remaining.add(p)
+            }
+        }
+        val remainingList = remaining.toList()
+        savePendingRestorePackages(appCtx, remainingList)
+        remainingList
+    }
+
+    private suspend fun closeWirelessAdbSafely(
+        context: Context,
+        adbPort: Int?,
+        preferRoot: Boolean
+    ) {
+        val resetScript =
+            "setprop service.adb.tcp.port -1 >/dev/null 2>&1 || true; " +
+                "setprop persist.adb.tcp.port -1 >/dev/null 2>&1 || true; " +
+                "settings put global adb_wifi_enabled 0 >/dev/null 2>&1 || true; " +
+                "settings put global adb_enabled 0 >/dev/null 2>&1 || true; " +
+                "stop adbd >/dev/null 2>&1 || true"
+        var clearedViaShell = false
+        if (preferRoot) {
+            if (runRootShell(resetScript) != null) {
+                clearedViaShell = true
+            }
+        }
+        if (!clearedViaShell) {
+            val port = adbPort ?: ClassicAdbChannelOpener.DEFAULT_PORT
+            if (ClassicAdbChannelOpener.isLocalPortOpen(port, 250)) {
+                try {
+                    LocalAdbClient(context, "127.0.0.1", port).executeShell(
+                        command = resetScript,
+                        connectTimeoutMs = 1_500,
+                        authTimeoutMs = 5_000,
+                        commandTimeoutMs = 3_000
+                    )
+                } catch (_: Exception) {
+                }
+            }
+        }
+        try {
+            android.provider.Settings.Global.putInt(context.contentResolver, "adb_wifi_enabled", 0)
+        } catch (_: Exception) {
+        }
+        try {
+            android.provider.Settings.Global.putInt(
+                context.contentResolver,
+                android.provider.Settings.Global.ADB_ENABLED,
+                0
+            )
+        } catch (_: Exception) {
+        }
     }
 
     private fun applyDefaultPostActivationProtection(context: Context) {

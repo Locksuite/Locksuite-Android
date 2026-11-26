@@ -81,17 +81,23 @@ function cleanTitle(raw) {
   return title;
 }
 
-/** Solo https hacia el CDN de Google. Devuelve la URL o null. */
+/** Solo https hacia el CDN de Google (puerto estándar, sin fragmentos ni userinfo). Devuelve la URL o null. */
 function cleanIconUrl(raw) {
   if (typeof raw !== "string") return null;
   const url = raw.trim();
   if (url.length === 0 || url.length > 600 || !url.startsWith("https://")) return null;
-  if (/[\s"'<>]/.test(url)) return null;
-  const authority = url.slice("https://".length).split("/")[0].split("?")[0];
-  if (authority.includes("@")) return null;
-  const host = authority.split(":")[0].toLowerCase();
-  if (!host) return null;
-  return ICON_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix)) ? url : null;
+  if (/[\s"'<>\\#]/.test(url)) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") return null;
+    if (parsed.username || parsed.password || parsed.hash) return null;
+    if (parsed.port && parsed.port !== "443") return null;
+    const host = (parsed.hostname || "").toLowerCase();
+    if (!host) return null;
+    return ICON_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix)) ? url : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 /** Pide un tamaño de ícono razonable al CDN (`=s128-rw`) si la URL trae opciones de tamaño. */
@@ -127,6 +133,37 @@ function parsePlayPage(html) {
   return { title, iconUrl };
 }
 
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_REDIRECTS = 3;
+
+async function readTextBounded(res, maxBytes = MAX_RESPONSE_BYTES) {
+  if (res.body && typeof res.body.getReader === "function") {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8", { fatal: false });
+    let total = 0;
+    let out = "";
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > maxBytes) {
+          out += decoder.decode(value.subarray(0, value.byteLength - (total - maxBytes)), { stream: false });
+          try { await reader.cancel(); } catch (_) {}
+          return out;
+        }
+        out += decoder.decode(value, { stream: true });
+      }
+      out += decoder.decode();
+      return out;
+    } finally {
+      try { reader.releaseLock(); } catch (_) {}
+    }
+  }
+  const text = await res.text();
+  return text.length > maxBytes ? text.slice(0, maxBytes) : text;
+}
+
 /**
  * Consulta UN paquete. `fetchImpl` se inyecta para poder probar sin red.
  * Nunca lanza: cualquier fallo es `unknown`.
@@ -134,26 +171,40 @@ function parsePlayPage(html) {
 async function lookupOne(pkg, fetchImpl, timeoutMs = FETCH_TIMEOUT_MS) {
   const result = { packageName: pkg, status: "unknown" };
   if (!isValidPackage(pkg)) return result;
-  const url = "https://play.google.com/store/apps/details?id=" + encodeURIComponent(pkg) + "&hl=en&gl=US";
+  let currentUrl = "https://play.google.com/store/apps/details?id=" + encodeURIComponent(pkg) + "&hl=en&gl=US";
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
-    const res = await fetchImpl(url, {
-      method: "GET",
-      redirect: "follow",
-      signal: controller ? controller.signal : undefined,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
+    let res = null;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      res = await fetchImpl(currentUrl, {
+        method: "GET",
+        redirect: "manual",
+        signal: controller ? controller.signal : undefined,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers && typeof res.headers.get === "function" ? res.headers.get("location") : null;
+        if (!loc || hop === MAX_REDIRECTS) return result;
+        let next;
+        try { next = new URL(loc, currentUrl); } catch (_) { return result; }
+        if (next.protocol !== "https:" || next.hostname.toLowerCase() !== "play.google.com") return result;
+        currentUrl = next.toString();
+        continue;
+      }
+      break;
+    }
+    if (!res) return result;
     result.httpStatus = res.status;
     if (res.status === 404) {
       result.status = "missing";
       return result;
     }
     if (res.status !== 200) return result; // 429, 5xx...: no se sabe
-    const html = await res.text();
+    const html = await readTextBounded(res);
     const info = parsePlayPage(html);
     if (info.title) {
       result.status = "found";

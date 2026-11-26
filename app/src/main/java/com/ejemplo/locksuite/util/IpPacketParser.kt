@@ -34,6 +34,10 @@ object IpPacketParser {
             val protocol = buffer[9].toInt() and 0xFF
             if (protocol != PROTO_UDP) return null // Solo UDP
 
+            // Rechazar fragmentos IPv4 no iniciales (offset != 0): no contienen cabecera UDP válida
+            val flagsAndFragOffset = ((buffer[6].toInt() and 0xFF) shl 8) or (buffer[7].toInt() and 0xFF)
+            if ((flagsAndFragOffset and 0x1FFF) != 0) return null
+
             val sourceIp = InetAddress.getByAddress(buffer.copyOfRange(12, 16))
             val destIp = InetAddress.getByAddress(buffer.copyOfRange(16, 20))
 
@@ -46,14 +50,11 @@ object IpPacketParser {
                             (buffer[ipHeaderLength + 3].toInt() and 0xFF)
             val udpLength = ((buffer[ipHeaderLength + 4].toInt() and 0xFF) shl 8) or
                              (buffer[ipHeaderLength + 5].toInt() and 0xFF)
+            if (udpLength < udpHeaderLength) return null
 
             val payloadStart = ipHeaderLength + udpHeaderLength
             if (payloadStart > safeLen) return null
-            val payloadEnd = if (udpLength >= udpHeaderLength) {
-                (ipHeaderLength + udpLength).coerceAtMost(safeLen)
-            } else {
-                safeLen
-            }
+            val payloadEnd = (ipHeaderLength + udpLength).coerceAtMost(safeLen)
             if (payloadEnd < payloadStart) return null
             val payload = buffer.copyOfRange(payloadStart, payloadEnd)
 
@@ -77,14 +78,11 @@ object IpPacketParser {
                             (buffer[ipHeaderLength + 3].toInt() and 0xFF)
             val udpLength = ((buffer[ipHeaderLength + 4].toInt() and 0xFF) shl 8) or
                              (buffer[ipHeaderLength + 5].toInt() and 0xFF)
+            if (udpLength < udpHeaderLength) return null
 
             val payloadStart = ipHeaderLength + udpHeaderLength
             if (payloadStart > safeLen) return null
-            val payloadEnd = if (udpLength >= udpHeaderLength) {
-                (ipHeaderLength + udpLength).coerceAtMost(safeLen)
-            } else {
-                safeLen
-            }
+            val payloadEnd = (ipHeaderLength + udpLength).coerceAtMost(safeLen)
             if (payloadEnd < payloadStart) return null
             val payload = buffer.copyOfRange(payloadStart, payloadEnd)
 

@@ -9,6 +9,14 @@ class LockSuiteTileService : TileService() {
     
     override fun onClick() {
         super.onClick()
+        if (isLocked) {
+            unlockAndRun { launchLoginActivity() }
+        } else {
+            launchLoginActivity()
+        }
+    }
+
+    private fun launchLoginActivity() {
         val intent = Intent(this, LoginActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         }

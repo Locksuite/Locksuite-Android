@@ -11,7 +11,16 @@ object DnsPacketParser {
      */
     fun extractQueriedDomain(payload: ByteArray): String? {
         if (payload.size < 12) return null
-        
+
+        // Rechazar respuestas DNS (QR == 1) para impedir bucles de amplificación/spoofing
+        val qrBit = payload[2].toInt() and 0x80
+        if (qrBit != 0) return null
+
+        // Exigir exactamente una pregunta (QDCOUNT == 1): evita contrabando de dominios
+        // en preguntas adicionales mientras la primera parece inocua.
+        val qdCount = ((payload[4].toInt() and 0xFF) shl 8) or (payload[5].toInt() and 0xFF)
+        if (qdCount != 1) return null
+
         val domain = StringBuilder()
         var pos = 12 // Saltar cabecera DNS de 12 bytes
         

@@ -1,10 +1,5 @@
 package com.ejemplo.locksuite.ui.emergency
 
-import android.app.admin.DevicePolicyManager
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -26,16 +21,18 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ejemplo.locksuite.mdm.PolicyManager
+import com.ejemplo.locksuite.mdm.DeviceRelease
 import com.ejemplo.locksuite.security.PinManager
-import com.ejemplo.locksuite.security.SessionManager
 import com.ejemplo.locksuite.util.LocaleManager
 import kotlinx.coroutines.delay
 import com.ejemplo.locksuite.security.LockoutState
 import com.ejemplo.locksuite.security.LockoutStatus
 import androidx.lifecycle.repeatOnLifecycle
+import java.util.concurrent.atomic.AtomicBoolean
 
 class EmergencyActivity : ComponentActivity() {
+
+    private val purging = AtomicBoolean(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,98 +50,31 @@ class EmergencyActivity : ComponentActivity() {
     }
 
     private fun executeFullPurge() {
-        val policyManager = PolicyManager(this)
-        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val adminComponent = ComponentName(this, com.ejemplo.locksuite.receiver.DeviceAdminReceiver::class.java)
+        if (!purging.compareAndSet(false, true)) return
         val appCtx = applicationContext
 
-        Toast.makeText(this, "Iniciando purga total de políticas...", Toast.LENGTH_LONG).show()
+        Toast.makeText(appCtx, "Iniciando purga total de políticas...", Toast.LENGTH_LONG).show()
 
         Thread({
-            // 1. Mostrar y des-suspender todas las apps antes de perder privilegios de Device Owner
-            try {
-                val appController = com.ejemplo.locksuite.mdm.AppController(appCtx)
-                val apps = appController.getUserApps(loadIcon = false)
-                for (app in apps) {
-                    if (app.isHidden) {
-                        appController.hideApp(app.packageName, false)
-                    }
-                    if (app.isSuspended) {
-                        appController.suspendApp(app.packageName, false)
-                    }
-                }
+            val released = try {
+                DeviceRelease.releaseAndPrepareUninstall(appCtx, promptUninstall = false)
             } catch (e: Exception) {
                 e.printStackTrace()
+                false
             }
 
-            // 2. Limpiar todas las restricciones de usuario de PolicyManager
-            try {
-                policyManager.clearAllRestrictions()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
-            // 3. Reactivar launcher alias
-            setStealthMode(false)
-
-            // 4. Reactivar la barra de estado
-            try {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                    dpm.setStatusBarDisabled(adminComponent, false)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
-            // 5. Revocar privilegios de Device Owner (irreversible)
-            try {
-                dpm.clearDeviceOwnerApp(packageName)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                runOnUiThread {
-                    Toast.makeText(this, "Error al quitar Device Owner: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            }
-
-            // 5b. Detener servicios (incluyendo KosherVpnService), cancelar WorkManager y marcar purga persistente
-            try {
-                stopService(Intent(appCtx, com.ejemplo.locksuite.service.KosherVpnService::class.java))
-                stopService(Intent(appCtx, com.ejemplo.locksuite.service.WatchdogForegroundService::class.java))
-                stopService(Intent(appCtx, com.ejemplo.locksuite.service.WatermarkService::class.java))
-                androidx.work.WorkManager.getInstance(appCtx).cancelUniqueWork("LockSuiteWatchdog")
-                androidx.core.app.NotificationManagerCompat.from(appCtx).cancelAll()
-                com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(appCtx).edit()
-                    .putBoolean("locksuite_purged", true)
-                    .commit()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
-            // 6. Cerrar sesión y salir en el hilo principal
-            SessionManager.closeSession()
             runOnUiThread {
-                Toast.makeText(this, "Purga de emergencia completa. Dispositivo liberado.", Toast.LENGTH_LONG).show()
-                finishAffinity()
+                val msg = if (released) {
+                    "Purga de emergencia completa. Dispositivo liberado."
+                } else {
+                    "Purga ejecutada (revise estado de Device Owner)."
+                }
+                Toast.makeText(appCtx, msg, Toast.LENGTH_LONG).show()
+                if (!isFinishing && !isDestroyed) {
+                    finishAffinity()
+                }
             }
         }, "EmergencyPurge").start()
-    }
-
-    private fun setStealthMode(enabled: Boolean) {
-        val aliasComponent = ComponentName(this, "com.ejemplo.locksuite.LauncherAlias")
-        val state = if (enabled) {
-            PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-        } else {
-            PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-        }
-        try {
-            packageManager.setComponentEnabledSetting(
-                aliasComponent,
-                state,
-                PackageManager.DONT_KILL_APP
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
     }
 }
 

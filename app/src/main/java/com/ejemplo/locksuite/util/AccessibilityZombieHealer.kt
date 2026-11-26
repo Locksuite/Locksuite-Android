@@ -266,6 +266,7 @@ object AccessibilityZombieHealer {
                 }
                 val intent = Intent(ctx, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
                     .putExtra(com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver.EXTRA_LS_PACKAGE, ctx.packageName)
+                    .putExtra(com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver.EXTRA_SILENT, true)
                 val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
                 } else {

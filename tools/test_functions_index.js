@@ -417,11 +417,55 @@ test("UPDATE_LOCKSUITE, CANCEL_UPDATE_APP y COLLECT_DIAGNOSTICS siguen sin pedir
   assert.strictEqual(sinPin.statusCode, 412);
   assert.strictEqual(sinPin.body.error, "PIN_REQUIRED");
 });
-test("los comandos firmados llevan HMAC con el secreto del equipo", async () => {
+test("los comandos firmados llevan HMAC con el secreto del equipo (incluyendo expiresAt)", async () => {
   seedWorld();
   await send({ deviceId: DEV, command: "LOCK_DEVICE", devicePin: PIN });
   const d = state.fcm[0].data;
+  assert.ok(/^\d+$/.test(d.expiresAt) && Number(d.expiresAt) > Number(d.timestamp), "expiresAt firmado presente");
   assert.strictEqual(d.signature, crypto.createHmac("sha256", SECRET).update(canonical(d), "utf8").digest("base64"));
+  const tampered = { ...d, expiresAt: String(Number(d.expiresAt) + 60_000) };
+  assert.notStrictEqual(d.signature, crypto.createHmac("sha256", SECRET).update(canonical(tampered), "utf8").digest("base64"));
+});
+
+test("CORS permite orígenes de admin autorizados y omite ACAO para orígenes externos; 500 no filtra detalle interno", async () => {
+  seedWorld();
+  const okCors = await send({ deviceId: DEV, command: "VERIFY_PIN", devicePin: PIN }, "tok-admin", { origin: "https://locksuite-nueva.web.app" });
+  assert.strictEqual(okCors.headers["access-control-allow-origin"], "https://locksuite-nueva.web.app");
+  assert.strictEqual(okCors.headers["vary"], "Origin");
+
+  const badCors = await send({ deviceId: DEV, command: "VERIFY_PIN", devicePin: PIN }, "tok-admin", { origin: "https://evil.example" });
+  assert.strictEqual(badCors.headers["access-control-allow-origin"], undefined);
+  assert.strictEqual(badCors.headers["vary"], "Origin");
+
+  state.dbReadError = { match: "devices/", error: new Error("INTERNAL_DB_SECRET_DETAIL_XYZ") };
+  const err500 = await send({ deviceId: DEV, command: "VERIFY_PIN", devicePin: PIN });
+  assert.strictEqual(err500.statusCode, 500);
+  assert.strictEqual(err500.body.error, "Error interno del servidor.");
+  assert.ok(!JSON.stringify(err500.body).includes("INTERNAL_DB_SECRET_DETAIL_XYZ"));
+});
+
+test("UPDATE_ALLOWLIST permite vaciar paquetes con array vacío []", async () => {
+  seedWorld();
+  state.db.devices[DEV].allowedPackages = ["com.waze"];
+  state.db.devices[DEV].info = { allowedPackages: ["com.waze"] };
+  const r = await send({ deviceId: DEV, command: "UPDATE_ALLOWLIST", devicePin: PIN, packages: [] });
+  assert.strictEqual(r.statusCode, 200, JSON.stringify(r.body));
+  assert.strictEqual(state.fcm[0].data.packages, "");
+  assert.strictEqual(state.db.devices[DEV].allowedPackages, undefined);
+  assert.strictEqual(state.db.devices[DEV].info, undefined);
+});
+
+test("CHANGE_PIN no pisa deviceSecrets/trustedAdmins/pinThrottle si falla la entrega (ni buzón ni FCM)", async () => {
+  seedWorld({ fcmToken: null, trusted: { adm2: true } });
+  state.db.pinThrottle = { [DEV]: { adm2: { fails: 2, last: state.now, lockUntil: 0 } } };
+  // Fuerza error al leer pendingCommands para simular fallo del buzón sin FCM.
+  state.dbReadError = { match: "pendingCommands", error: new Error("db down") };
+  const r = await send({ deviceId: DEV, command: "CHANGE_PIN", devicePin: PIN, newPin: "824613" });
+  assert.strictEqual(r.statusCode, 404);
+  assert.strictEqual(state.db.deviceSecrets[DEV].pinHash, LEGACY);
+  assert.strictEqual(state.db.deviceSecrets[DEV].pinSalt, SALT);
+  assert.strictEqual(state.db.devices[DEV].trustedAdmins.adm2, true);
+  assert.strictEqual(state.db.pinThrottle[DEV].adm2.fails, 2);
 });
 
 // ── classicStoreApk ──────────────────────────────────────────

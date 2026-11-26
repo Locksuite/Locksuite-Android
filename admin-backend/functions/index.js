@@ -8,7 +8,7 @@ const wakePolicy = require("./wake_policy");
 
 const FUNCTION_OPTIONS = {
   region: "us-central1",
-  cors: true,
+  cors: false,
   invoker: "public",
 };
 
@@ -16,13 +16,27 @@ admin.initializeApp({
   databaseURL: "https://locksuite-nueva-default-rtdb.firebaseio.com"
 });
 
-// Force deploy timestamp: 2026-07-15T00:15:00Z
-// CORS headers para todas las respuestas
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-};
+// Orígenes permitidos para los endpoints de administración (panel web y pruebas locales).
+const ALLOWED_ADMIN_ORIGINS = new Set([
+  "https://locksuite-nueva.web.app",
+  "https://locksuite-nueva.firebaseapp.com",
+  "http://localhost:5000",
+  "http://127.0.0.1:5000",
+  "http://localhost:8080",
+  "http://127.0.0.1:8080",
+]);
+
+function applyAdminCors(req, res) {
+  const origin = req && req.headers && typeof req.headers.origin === "string"
+    ? req.headers.origin.trim()
+    : "";
+  res.set("Vary", "Origin");
+  if (ALLOWED_ADMIN_ORIGINS.has(origin)) {
+    res.set("Access-Control-Allow-Origin", origin);
+  }
+  res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+}
 
 // El id de un equipo se usa para armar rutas de la base (`devices/<id>`, `deviceSecrets/<id>`). Una
 // barra en un id armado a mano apuntaría a OTRO nodo (p. ej. "abc/info"), y como un administrador
@@ -47,8 +61,12 @@ function sendError(res, e, tag) {
     });
     return;
   }
-  const status = (e && e.status) || 500;
-  res.status(status).json({ error: (e && e.message) || "Error interno del servidor.", ...((e && e.extra) || {}) });
+  const status = (e && Number.isInteger(e.status) && e.status >= 400 && e.status < 600) ? e.status : 500;
+  if (status >= 500) {
+    res.status(status).json({ error: "Error interno del servidor." });
+    return;
+  }
+  res.status(status).json({ error: (e && e.message) || "Solicitud inválida.", ...((e && e.extra) || {}) });
 }
 
 // Verifica el ID token Y que no haya sido revocado (checkRevoked = true). Sin eso, un administrador
@@ -424,8 +442,7 @@ async function verifyDevicePin(deviceId, deviceRef, deviceData, adminUid, device
 }
 
 exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
-  // CORS headers siempre
-  Object.entries(CORS_HEADERS).forEach(([k, v]) => res.set(k, v));
+  applyAdminCors(req, res);
 
   // Responder preflight inmediatamente
   if (req.method === "OPTIONS") {
@@ -507,6 +524,23 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     }
     const payload = { command, commandId };
     const pkgRegex = DOMAIN_RULE_COMMANDS.has(command) ? /^[a-zA-Z0-9_.-]+$/ : /^[a-zA-Z0-9_.]+$/;
+    let pendingPinChange = null;
+    async function commitPendingPinChange() {
+      if (!pendingPinChange) return;
+      const { pinHash, pinSalt } = pendingPinChange;
+      pendingPinChange = null;
+      // No reemplazar el nodo completo: contiene la credencial de firma de
+      // comandos del dispositivo, que debe sobrevivir a un cambio de PIN.
+      await admin.database().ref(`deviceSecrets/${deviceId}`).update({ pinHash, pinSalt });
+      // Un PIN nuevo invalida los intentos fallidos del anterior.
+      await admin.database().ref(`pinThrottle/${deviceId}`).remove().catch(() => {});
+      await deviceRef.child("hasPinConfigured").set(true);
+      await deviceRef.child("info/hasPinConfigured").set(true).catch(() => {});
+      await deviceRef.child("pinHash").remove().catch(() => {});
+      await deviceRef.child("pinSalt").remove().catch(() => {});
+      await deviceRef.child("trustedAdmins").remove().catch(() => {});
+      await deviceRef.child("info/trustedAdmins").remove().catch(() => {});
+    }
 
     if (command === "CHANGE_PIN") {
       if (!newPin || !/^\d{4,16}$/.test(newPin)) {
@@ -522,30 +556,22 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       const { pinHash, pinSalt } = pinSecurity.newPinRecord(newPin);
       payload.pinHash = pinHash;
       payload.pinSalt = pinSalt;
-
-      // No reemplazar el nodo completo: contiene la credencial de firma de
-      // comandos del dispositivo, que debe sobrevivir a un cambio de PIN.
-      await admin.database().ref(`deviceSecrets/${deviceId}`).update({ pinHash, pinSalt });
-      // Un PIN nuevo invalida los intentos fallidos del anterior.
-      await admin.database().ref(`pinThrottle/${deviceId}`).remove().catch(() => {});
-      await deviceRef.child("hasPinConfigured").set(true);
-      await deviceRef.child("info/hasPinConfigured").set(true).catch(() => {});
-      await deviceRef.child("pinHash").remove().catch(() => {});
-      await deviceRef.child("pinSalt").remove().catch(() => {});
-      await deviceRef.child("trustedAdmins").remove().catch(() => {});
-      await deviceRef.child("info/trustedAdmins").remove().catch(() => {});
+      // Se difiere la escritura en deviceSecrets hasta confirmar que el comando quedó
+      // encolado en el buzón o fue aceptado por FCM; así un fallo de entrega no deja
+      // el PIN de la nube desincronizado del celular.
+      pendingPinChange = { pinHash, pinSalt };
     } else if (command === "UPDATE_ALLOWLIST") {
-      const pkgList = Array.isArray(packages)
-        ? packages
-        : (typeof packages === "string" && packages.trim().length > 0 ? packages.split(",") : []);
-      if (pkgList.length === 0) {
+      if (!Array.isArray(packages) && typeof packages !== "string") {
         res.status(400).json({ error: "Falta la lista de paquetes." });
         return;
       }
+      const pkgList = Array.isArray(packages)
+        ? packages
+        : (packages.trim().length > 0 ? packages.split(",") : []);
       const clean = pkgList.map(p => String(p).trim()).filter(p => /^[a-zA-Z0-9_.]+$/.test(p));
       payload.packages = clean.join(",");
-      await deviceRef.child("allowedPackages").set(clean);
-      await deviceRef.child("info/allowedPackages").set(clean).catch(() => {});
+      await deviceRef.child("allowedPackages").set(clean.length > 0 ? clean : null);
+      await deviceRef.child("info/allowedPackages").set(clean.length > 0 ? clean : null).catch(() => {});
     } else if (command === "SET_HIDE_SUSPENDED_APPS" || command === "SET_DIAGNOSTICS_UPLOAD") {
       if (typeof enabled !== "boolean") {
         res.status(400).json({ error: "Falta el valor enabled para la política." });
@@ -670,8 +696,11 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       if (route !== "auto") payload.route = route;
     }
 
+    const ahoraFirma = Date.now();
+    const expiresAtMs = ahoraFirma + (ACTION_COMMANDS.has(command) ? MAILBOX_TTL_ACTION_MS : MAILBOX_TTL_STATE_MS);
     if (hasCommandSecret) {
-      payload.timestamp = String(Date.now());
+      payload.timestamp = String(ahoraFirma);
+      payload.expiresAt = String(expiresAtMs);
       payload.signature = crypto
         .createHmac("sha256", commandSecret)
         .update(canonicalCommandPayload(payload), "utf8")
@@ -710,12 +739,11 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
           else if (desuspendeTodas && typeof v.family === "string" &&
                    v.family.startsWith("SUSPEND_APP|")) updates[c.key] = null;
         });
-        const ahora = Date.now();
         updates[commandId] = {
           data: payload,
           family,
-          queuedAt: ahora,
-          expiresAt: ahora + (ACTION_COMMANDS.has(command) ? MAILBOX_TTL_ACTION_MS : MAILBOX_TTL_STATE_MS),
+          queuedAt: ahoraFirma,
+          expiresAt: expiresAtMs,
         };
         await pendRef.update(updates);
         queued = true;
@@ -735,6 +763,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     // FCM? Si sí, hay que esperar el ack; si no, el comando va solo por el buzón.
     if (!token) {
       if (queued) {
+        await commitPendingPinChange();
         await deviceRef.child(`commandAcks/${commandId}`).update({ status: "queued", reason: "El equipo aún no registró token FCM; quedó en el buzón del equipo" }).catch(() => {});
         await admin.database().ref(`commandLog/${deviceId}`).push({
           command, commandId, packages: payload.packages || null,
@@ -758,6 +787,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       // informa al panel en vez de tirar un 500 que parece que no pasó nada.
       const code = (e && (e.code || e.errorInfo && e.errorInfo.code)) || "";
       if (queued) {
+        await commitPendingPinChange();
         await deviceRef.child(`commandAcks/${commandId}`).update({ status: "queued", reason: "FCM falló (" + code + "): quedó en el buzón del equipo" }).catch(() => {});
         await admin.database().ref(`commandLog/${deviceId}`).push({
           command, commandId, packages: payload.packages || null,
@@ -769,6 +799,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       throw e;
     }
 
+    await commitPendingPinChange();
     await admin.database().ref(`commandLog/${deviceId}`).push({
       command, commandId,
       packages: payload.packages || null,
@@ -794,7 +825,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
 // es una prueba de que la app no exista, y por eso el panel no la borra sola.
 // ─────────────────────────────────────────────────────────────────────────────
 exports.checkPlayApps = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 }, async (req, res) => {
-  Object.entries(CORS_HEADERS).forEach(([k, v]) => res.set(k, v));
+  applyAdminCors(req, res);
   if (req.method === "OPTIONS") {
     res.status(204).send("");
     return;
@@ -850,7 +881,7 @@ const CLASSIC_UPLOAD_ORIGINS = new Set([
 ]);
 
 exports.classicStoreApk = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 }, async (req, res) => {
-  Object.entries(CORS_HEADERS).forEach(([k, v]) => res.set(k, v));
+  applyAdminCors(req, res);
   if (req.method === "OPTIONS") {
     res.status(204).send("");
     return;
@@ -928,6 +959,26 @@ exports.classicStoreApk = onRequest({ ...FUNCTION_OPTIONS, timeoutSeconds: 60 },
   }
 });
 
+async function fetchWithTimeout(url, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function readShortParam(req, name) {
+  const q = req && req.query ? req.query[name] : undefined;
+  const b = req && req.body ? req.body[name] : undefined;
+  const val = q !== undefined ? q : b;
+  if (typeof val !== "string") return null;
+  const trimmed = val.trim();
+  if (!trimmed || trimmed.length > 64) return null;
+  return trimmed;
+}
+
 // API de Colectivos CABA (Cuando SUBO Proxy)
 exports.colectivosApi = onRequest({ region: "us-central1", cors: true, invoker: "public" }, async (req, res) => {
   res.set("Access-Control-Allow-Origin", "*");
@@ -939,23 +990,23 @@ exports.colectivosApi = onRequest({ region: "us-central1", cors: true, invoker: 
   }
 
   try {
-    const action = req.query.action || req.body.action;
+    const action = readShortParam(req, "action");
     if (!action) {
       res.status(400).json({ error: "Falta el parámetro action (buscarLinea, obtenerParadas, obtenerArribos)." });
       return;
     }
 
     if (action === "buscarLinea") {
-      const query = req.query.query || req.body.query;
+      const query = readShortParam(req, "query");
       if (!query) {
-        res.status(400).json({ error: "Falta el parámetro query." });
+        res.status(400).json({ error: "Falta o es inválido el parámetro query." });
         return;
       }
       const url = `https://cuandosubo.sube.gob.ar/onebusaway-webapp/where/iphone/routes.action?query=${encodeURIComponent(query)}`;
-      const response = await fetch(url);
+      const response = await fetchWithTimeout(url, 10000);
       if (!response.ok) throw new Error("Error consultando el servidor de lineas.");
       const html = await response.text();
-      
+
       const routes = [];
       const liRegex = /<li><a href="[^"]*stops-for-route\.action[^"]*id=([^"&;\s]+)[^"]*"><span[^>]*>([^<]+)<\/span><span[^>]*>([^<]+)<\/span><\/a><\/li>/gi;
       let match;
@@ -969,16 +1020,16 @@ exports.colectivosApi = onRequest({ region: "us-central1", cors: true, invoker: 
       res.status(200).json({ routes });
 
     } else if (action === "obtenerParadas") {
-      const routeId = req.query.routeId || req.body.routeId;
+      const routeId = readShortParam(req, "routeId");
       if (!routeId) {
-        res.status(400).json({ error: "Falta el parámetro routeId." });
+        res.status(400).json({ error: "Falta o es inválido el parámetro routeId." });
         return;
       }
       const url = `https://cuandosubo.sube.gob.ar/onebusaway-webapp/where/iphone/stops-for-route.action?id=${encodeURIComponent(routeId)}`;
-      const response = await fetch(url);
+      const response = await fetchWithTimeout(url, 10000);
       if (!response.ok) throw new Error("Error consultando el servidor de paradas.");
       const html = await response.text();
-      
+
       const stops = [];
       const liRegex = /<li><a href="[^"]*stop\.action[^"]*id=([^"&;\s]+)[^"]*">([^<]+)<\/a><\/li>/gi;
       let match;
@@ -993,36 +1044,36 @@ exports.colectivosApi = onRequest({ region: "us-central1", cors: true, invoker: 
       res.status(200).json({ stops });
 
     } else if (action === "obtenerArribos") {
-      const stopId = req.query.stopId || req.body.stopId;
+      const stopId = readShortParam(req, "stopId");
       if (!stopId) {
-        res.status(400).json({ error: "Falta el parámetro stopId." });
+        res.status(400).json({ error: "Falta o es inválido el parámetro stopId." });
         return;
       }
       const url = `https://cuandosubo.sube.gob.ar/onebusaway-webapp/where/iphone/stop.action?id=${encodeURIComponent(stopId)}`;
-      const response = await fetch(url);
+      const response = await fetchWithTimeout(url, 10000);
       if (!response.ok) throw new Error("Error consultando el servidor de arribos.");
       const html = await response.text();
-      
+
       const arrivals = [];
       const rowRegex = /<tr class="arrivalsRow">([\s\S]*?)<\/tr>/g;
       let match;
       while ((match = rowRegex.exec(html)) !== null) {
         const rowContent = match[1];
-        
+
         const routeMatch = rowContent.match(/class="arrivalsRouteEntry"[^>]*><a[^>]*>([^<]+)<\/a>/i);
         const route = routeMatch ? routeMatch[1].trim() : "";
-        
+
         const destMatch = rowContent.match(/class="arrivalsDestinationEntry"[^>]*><a[^>]*>([^<]+)<\/a>/i);
         const destination = destMatch ? destMatch[1].trim() : "";
-        
+
         const timeEntryMatch = rowContent.match(/class="arrivalsTimeEntry"[^>]*>([^<]+)<\/span>/i);
         const arrivalTime = timeEntryMatch ? timeEntryMatch[1].trim() : "";
-        
+
         const minutesMatch = rowContent.match(/class="arrivalsStatusEntry[\s\S]*?">([\s\S]*?)<\/td>/i);
         const minutes = minutesMatch ? minutesMatch[1].trim() : "";
-        
+
         const isLive = !rowContent.includes("arrivalStatusNoInfo");
-        
+
         arrivals.push({
           route,
           destination,
@@ -1037,7 +1088,7 @@ exports.colectivosApi = onRequest({ region: "us-central1", cors: true, invoker: 
     }
   } catch (err) {
     console.error("colectivosApi error:", err);
-    res.status(500).json({ error: err.message || "Error interno." });
+    res.status(500).json({ error: "Error interno del servidor." });
   }
 });
 

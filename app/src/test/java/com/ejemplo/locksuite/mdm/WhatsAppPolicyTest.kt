@@ -253,4 +253,67 @@ class WhatsAppPolicyTest {
         assertTrue(WhatsAppPolicy.isChatsTabLabel("צ׳אטים 12"))
         assertFalse(WhatsAppPolicy.isChatsTabLabel("עדכונים 4"))
     }
+
+    @Test
+    fun `detecta subtitulos de Canal sin digitos en ES EN HE y PT`() {
+        val unnumberedChannelSubtitles = listOf(
+            "Siguiendo",
+            "Following",
+            "Seguindo",
+            "A seguir",
+            "Canal público",
+            "Public channel",
+            "ערוץ ציבורי",
+            "עוקב",
+            "במעקב",
+            "Canal · Siguiendo",
+            "un seguidor",
+            "one follower",
+            "עוקב אחד"
+        )
+        for (subtitle in unnumberedChannelSubtitles) {
+            assertTrue("Esperaba match de canal para '$subtitle'", WhatsAppPolicy.isChannelHeaderSubtitle(subtitle))
+            val snap = ScreenSnapshot(
+                activityClass = "com.whatsapp.Conversation",
+                viewIds = setOf("com.whatsapp:id/conversation_contact_name", "com.whatsapp:id/conversation_contact_status"),
+                conversationSubtitle = subtitle
+            )
+            assertEquals(
+                "Debe bloquear Canal con subtitulo '$subtitle'",
+                Action.BLOCK_CHANNEL,
+                WhatsAppPolicy.evaluate(snap, blockStatus = false, blockChannels = true).action
+            )
+            assertEquals(
+                "No debe bloquear si blockChannels=false para '$subtitle'",
+                Action.ALLOW,
+                WhatsAppPolicy.evaluate(snap, blockStatus = true, blockChannels = false).action
+            )
+        }
+    }
+
+    @Test
+    fun `no confunde lista de miembros ni chat normal con subtitulo de Canal`() {
+        val memberLists = listOf(
+            "Juan, María, Tú",
+            "Ana, Pedro, Sofía, Tú",
+            "Siguiendo, Juan, Pedro"
+        )
+        for (subtitle in memberLists) {
+            assertFalse("No debe tratar lista '$subtitle' como Canal", WhatsAppPolicy.isChannelHeaderSubtitle(subtitle))
+            val snap = ScreenSnapshot(
+                activityClass = "com.whatsapp.Conversation",
+                viewIds = setOf("com.whatsapp:id/conversation_contact_name", "com.whatsapp:id/conversation_contact_status"),
+                conversationSubtitle = subtitle
+            )
+            assertEquals(Action.ALLOW, WhatsAppPolicy.evaluate(snap, blockStatus = true, blockChannels = true).action)
+        }
+
+        // Chat normal con compositor o llamada nunca bloquea aunque el contacto se llame/tenga estado parecido
+        val chatWithComposer = ScreenSnapshot(
+            activityClass = "com.whatsapp.Conversation",
+            viewIds = setOf("com.whatsapp:id/entry", "com.whatsapp:id/conversation_contact_status"),
+            conversationSubtitle = "Siguiendo"
+        )
+        assertEquals(Action.ALLOW, WhatsAppPolicy.evaluate(chatWithComposer, blockStatus = true, blockChannels = true).action)
+    }
 }

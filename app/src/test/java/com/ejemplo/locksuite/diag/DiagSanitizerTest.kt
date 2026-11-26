@@ -155,6 +155,29 @@ class DiagSanitizerTest {
     }
 
     @Test
+    fun oculta_secretos_bearer_base64_y_credenciales_sin_romper_identificadores() {
+        val msg = "Auth failed Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abc " +
+            "pinHash=AbCdEfGhIjKlMnOpQrStUvWxYz0123456789== " +
+            "pinSalt=\"saltValue123456\" " +
+            "commandSecret: secret_key_999 " +
+            "recoveryCode=9876543210 " +
+            "rawSecret=YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo="
+        val out = s(msg)
+        assertFalse(out, out.contains("eyJhbGciOiJIUzI1NiI"))
+        assertFalse(out, out.contains("AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"))
+        assertFalse(out, out.contains("saltValue123456"))
+        assertFalse(out, out.contains("secret_key_999"))
+        assertFalse(out, out.contains("9876543210"))
+        assertFalse(out, out.contains("YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo="))
+        assertTrue(out, out.contains("Bearer <token>"))
+
+        // No debe censurar constantes ni nombres de métodos Java/Kotlin largos sin dígitos/símbolos Base64
+        val tech = "Policy DISALLOW_INSTALL_UNKNOWN_SOURCES isAccessibilityProtectionEnabled " +
+            "at com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(FirebaseDeviceSync.kt:168)"
+        assertEquals(tech, s(tech))
+    }
+
+    @Test
     fun nunca_lanza_con_entradas_raras() {
         val rnd = java.util.Random(7)
         repeat(300) {
