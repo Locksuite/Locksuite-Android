@@ -1,8 +1,8 @@
 {
-    "versionCode":  159,
-    "versionName":  "0.6.96",
+    "versionCode":  160,
+    "versionName":  "0.6.97",
     "url":  "https://locksuite-nueva.web.app/locksuite-latest.apk",
-    "updatedAt":  "2026-11-26T01:03:18Z",
+    "updatedAt":  "2026-11-26T02:26:53Z",
     "installerBat":  "https://locksuite-nueva.web.app/instalar_locksuite.bat",
-    "sha256":  "63482251705263c35a105123c28a34f4102fd3fefae95f5c1239c3a800c4c17a"
+    "sha256":  "7ceb6d2e63924e56371adfdbc5f4c87cd707be607168a19881ead98fe471e5b2"
 }

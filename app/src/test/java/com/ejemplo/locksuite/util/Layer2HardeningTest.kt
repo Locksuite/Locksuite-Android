@@ -137,4 +137,23 @@ class Layer2HardeningTest {
         assertEquals(PerAppInternetBlockPolicy.SUBWAY_SURFERS, PerAppInternetBlockPolicy.matchedPackageForDomain("subway.prod.sybo.net", blocked))
         assertNull(PerAppInternetBlockPolicy.matchedPackageForDomain("googleapis.com", blocked))
     }
+
+    @Test
+    fun kosherVpn_networkChangeRejectsVpnAndSameHandle() {
+        assertFalse(KosherVpnService.isEligiblePhysicalNetworkChange(hasCaps = false, isVpnTransport = false, handle = 200L, lastHandle = 100L))
+        assertFalse(KosherVpnService.isEligiblePhysicalNetworkChange(hasCaps = true, isVpnTransport = true, handle = 200L, lastHandle = 100L))
+        assertFalse(KosherVpnService.isEligiblePhysicalNetworkChange(hasCaps = true, isVpnTransport = false, handle = 0L, lastHandle = 100L))
+        assertFalse(KosherVpnService.isEligiblePhysicalNetworkChange(hasCaps = true, isVpnTransport = false, handle = 100L, lastHandle = 100L))
+        assertTrue(KosherVpnService.isEligiblePhysicalNetworkChange(hasCaps = true, isVpnTransport = false, handle = 200L, lastHandle = 100L))
+    }
+
+    @Test
+    fun kosherVpn_trailingRestartPreventsFeedbackLoop() {
+        assertFalse(KosherVpnService.shouldTriggerTrailingRestart(targetHandle = 0L, lastHandle = 100L, livePhysicalHandle = 200L))
+        assertFalse(KosherVpnService.shouldTriggerTrailingRestart(targetHandle = 100L, lastHandle = 100L, livePhysicalHandle = 100L))
+        assertFalse(KosherVpnService.shouldTriggerTrailingRestart(targetHandle = 200L, lastHandle = 100L, livePhysicalHandle = 100L))
+        assertFalse(KosherVpnService.shouldTriggerTrailingRestart(targetHandle = 200L, lastHandle = 100L, livePhysicalHandle = 300L))
+        assertTrue(KosherVpnService.shouldTriggerTrailingRestart(targetHandle = 200L, lastHandle = 100L, livePhysicalHandle = 200L))
+        assertTrue(KosherVpnService.shouldTriggerTrailingRestart(targetHandle = 200L, lastHandle = 100L, livePhysicalHandle = 0L))
+    }
 }

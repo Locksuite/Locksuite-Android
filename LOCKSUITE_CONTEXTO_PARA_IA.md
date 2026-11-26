@@ -3164,6 +3164,8 @@ Resumen técnico completo del diagnóstico y correcciones en [`AUDITORIA_INTEGRA
 5. **UI, Auth, Tienda/OTA, Provisión, Microvisor QR, `CommandProcessor` y `:admin-app` (`KosherSettingsActivity`, `KosherLauncherActivity`, `AccountAuthenticatorGateScript`, `MultimediaDeviceOwnerActivator`, `MultimediaProvisioningDialog`, `admin-app/MainActivity.kt`, `PlayStoreCatalog`, `PlayStoreManager`, `LoginActivity`, `SelfUpdater`, `ApkChecksum`, `SplitApkBundle`, `ApkInstaller`, `ApkSignatureVerifier`, `StoreInstallManager`, `DashboardActivity`, `PinManager`, `PrefsHelper`, `CommandProcessor`, `FirebaseDeviceSync`, `DiagSanitizer`, `GoogleVerificationActivity`, `GoogleVerificationPolicy`, `GoogleQrScanner`, `BlockAccessibilityActivity`):**
    - Compuerta viva `SessionManager.isActive()` en `KosherSettingsActivity`; fix de comillas simples en `AccountAuthenticatorGateScript` + `restoreAccounts()` garantizado + cierre de ADB inalámbrico al activar DO + scope superviviente a rotación; hardening de `:admin-app` (`1.2.0` código 3); validación estricta en `LoginActivity`/tienda, `SelfUpdater` (HTTPS por salto + 250 MB), `ApkChecksum` fail-closed en `Unusable`, `SplitApkBundle` anti-ZIP-bomb, `ApkSignatureVerifier` multi-firmante, migración/borrado `_fallback` en `PrefsHelper`, lockout seguro en `PinManager`, `expiresAt` firmado y `KEY_PIN_CHANGED_AT` en `CommandProcessor`, `DiagSanitizer` ampliado y `FLAG_SECURE` + limpieza cookies/WebStorage en Microvisor.
 
+   - **Cura `0.6.97` (`160`) tras diagnóstico real en `7073099b55af5fd6` (`alps QEMAY-QM01`, Android 13):** corregido bucle de reconexión VPN cada ~10 s donde `registerNetworkWatcher()` + `trailingNetworkRestart` reaccionaban a eventos con `TRANSPORT_VPN` o mismo `networkHandle` tras `establish()` (ahora filtrados explícitamente, sin borrar `lastNetworkHandle` en `onLost()` y anclando `lastNetworkHandle` al establecer el túnel).
+
 - **Qué falta confirmar en equipo real antes de tachar B.131:**
   1. Verificar en Android 11+ bloqueo de **Forzar detención** / **Borrar datos** en LockSuite y bloqueo de usuario secundario / perfil de trabajo / App Clone / Espacio Privado.
   2. Verificar ausencia de ANRs en Watchdog, Direct Boot, purga limpia desde `EmergencyActivity` y estabilidad de navegación/portal cautivo/split-screen/overlay de Play Store (incluyendo teclas Back/D-Pad).
@@ -3175,15 +3177,13 @@ Resumen técnico completo del diagnóstico y correcciones en [`AUDITORIA_INTEGRA
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**25/11 — Antigravity: auditoría integral multi-agente de estabilidad, antievasión y seguridad (B.131) + versión `0.6.96` (`159`) y `:admin-app` `1.2.0` (`3`).**
+**25/11 — Antigravity: auditoría integral B.131 + hotfix `0.6.97` (`160`) de reconexión VPN y `:admin-app` `1.2.0` (`3`).**
 
-- **Ejecución:** Revisión completa en 5 dominios paralelos (Backend/Panel/Reglas, Capa 1 MDM/OS/Ciclo de vida, Capa 2 VPN/DNS/Red, Capa 3 Accesibilidad/Overlays, y UI/Auth/Tienda/OTA/Provisión/`CommandProcessor`/`:admin-app`) y corrección integral documentada en [`AUDITORIA_INTEGRAL_2026-11-25.md`](AUDITORIA_INTEGRAL_2026-11-25.md).
+- **Ejecución:** Revisión completa en 5 dominios paralelos + corrección documentada en [`AUDITORIA_INTEGRAL_2026-11-25.md`](AUDITORIA_INTEGRAL_2026-11-25.md) y hotfix en `KosherVpnService.kt` tras detectar en `deviceDiag/7073099b55af5fd6` un bucle de reconexión cada ~10 s al entrar a `0.6.96`.
 - **Verificado en PC (tras la última edición):**
-  - `.\gradlew.bat :app:testDebugUnitTest :app:compileDebugKotlin :admin-app:assembleRelease --console=plain --no-daemon`: `BUILD SUCCESSFUL` (**45 suites, 504 pruebas unitarias, 0 fallas/errores/omitidas**), más Release APK de `:admin-app` (`1.2.0` código `3`) copiado a `admin-backend/public/LockSuite_Admin.apk`.
-  - Todos los chequeos de simetría y generación Python pasaron (`gen_catalog_js.py --check`, `gen_policies_js.py --check`, `check_whitelist_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_store_sync.py`, `check_diag_sync.py`).
-  - `node --check` pasó en todos los archivos JS modificados, todas las 7 suites `tools/test_*.js` pasaron (incluida `test_functions_index.js` con 33 pruebas), y `tools/rules_tests/test_rules.mjs` offline pasó **99/99 comprobaciones** en ambos modos (`default` y `VALIDATE_ANCESTORS=1`).
-  - Compilado y desplegado a Firebase Hosting, Realtime Database y Cloud Functions + push a `origin/main` vía `deploy_all.ps1` (v`0.6.96`, código `159`).
-  - Sin dispositivo físico ADB conectado en esta sesión (nada tachado en Sección B).
+  - `.\gradlew.bat :app:testDebugUnitTest --console=plain --no-daemon`: todas las suites JUnit en verde (`506` pruebas, 0 fallas/errores/omitidas), incluyendo pruebas unitarias de rechazo `TRANSPORT_VPN` / mismo handle / `shouldTriggerTrailingRestart` en `Layer2HardeningTest`.
+  - Release compilado (`:app` `0.6.97` código `160`; `:admin-app` `1.2.0` código `3`) y publicado en Firebase Hosting (`version.json` con SHA-256 verificado) + Reglas RTDB + Cloud Functions + push a `origin/main`.
+  - Falta confirmar en `7073099b55af5fd6` (al actualizar a `0.6.97`) que desapareció el ciclo de `"Túnel DNS establecido"` cada 10 s y las pruebas físicas de B.131 (nada tachado en Sección B).
 
 
 

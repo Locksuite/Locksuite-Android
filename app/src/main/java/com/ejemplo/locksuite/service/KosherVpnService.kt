@@ -507,6 +507,31 @@ class KosherVpnService : VpnService() {
         } catch (e: Exception) {
             false
         }
+
+        internal fun isEligiblePhysicalNetworkChange(
+            hasCaps: Boolean,
+            isVpnTransport: Boolean,
+            handle: Long,
+            lastHandle: Long
+        ): Boolean {
+            if (!hasCaps || isVpnTransport) return false
+            if (handle == 0L || handle == lastHandle) return false
+            return true
+        }
+
+        internal fun shouldTriggerTrailingRestart(
+            targetHandle: Long,
+            lastHandle: Long,
+            livePhysicalHandle: Long
+        ): Boolean {
+            if (targetHandle == 0L || targetHandle == lastHandle) return false
+            if (livePhysicalHandle != 0L &&
+                (livePhysicalHandle == lastHandle || livePhysicalHandle != targetHandle)
+            ) {
+                return false
+            }
+            return true
+        }
     }
 
     @Volatile private var vpnInterface: ParcelFileDescriptor? = null
@@ -549,16 +574,56 @@ class KosherVpnService : VpnService() {
         val targetHandle = pendingNetworkHandle
         pendingNetworkHandle = 0L
         if (destroyed) return@Runnable
-        if (targetHandle != 0L && targetHandle == lastNetworkHandle) return@Runnable
+        val livePhysHandle = currentPhysicalNetworkHandle()
+        if (!shouldTriggerTrailingRestart(targetHandle, lastNetworkHandle, livePhysHandle)) {
+            return@Runnable
+        }
         val isCurrentlyRunning = synchronized(lifecycleLock) { running && !destroyed }
         if (!isCurrentlyRunning) return@Runnable
         if (!com.ejemplo.locksuite.receiver.BootReceiver.shouldVpnBeRunning(this)) return@Runnable
         android.util.Log.i("KosherVPN", "Aplicando reestablecimiento diferido tras ráfaga de cambios de red.")
         lastNetworkRestartAtMs = android.os.SystemClock.elapsedRealtime()
-        if (targetHandle != 0L) {
-            lastNetworkHandle = targetHandle
-        }
+        lastNetworkHandle = targetHandle
         scheduleRestart(RESTART_SETTLE_MS, "cambio de conectividad (diferido)")
+    }
+
+    private fun isVpnOrUnknownNetwork(network: Network): Boolean {
+        val caps = try {
+            connectivityManager.getNetworkCapabilities(network)
+        } catch (_: Exception) {
+            null
+        }
+        return caps == null || caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
+    }
+
+    private fun currentPhysicalNetworkHandle(): Long {
+        try {
+            connectivityManager.activeNetwork?.let { active ->
+                val caps = connectivityManager.getNetworkCapabilities(active)
+                if (caps != null && !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) {
+                    val h = active.networkHandle
+                    if (h != 0L) return h
+                }
+            }
+            var fallbackInternetHandle = 0L
+            @Suppress("DEPRECATION")
+            for (net in connectivityManager.allNetworks) {
+                val caps = connectivityManager.getNetworkCapabilities(net) ?: continue
+                if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) continue
+                if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
+                val h = net.networkHandle
+                if (h == 0L) continue
+                if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    return h
+                }
+                if (fallbackInternetHandle == 0L) {
+                    fallbackInternetHandle = h
+                }
+            }
+            return fallbackInternetHandle
+        } catch (_: Exception) {
+            return 0L
+        }
     }
 
     /**
@@ -865,6 +930,13 @@ class KosherVpnService : VpnService() {
                 return
             }
 
+            val establishedPhysHandle = currentPhysicalNetworkHandle()
+            if (establishedPhysHandle != 0L) {
+                lastNetworkHandle = establishedPhysHandle
+                firstDefaultNetworkSeen = true
+            }
+            restartHandler.removeCallbacks(trailingNetworkRestart)
+            pendingNetworkHandle = 0L
             lastNetworkRestartAtMs = android.os.SystemClock.elapsedRealtime()
             Thread({ runFilterLoop(establishedInterface, newExecutor, establishedMtu) }, "LockSuiteDnsFilter").start()
             android.util.Log.i("KosherVPN", "Servicio VPN iniciado exitosamente (MTU=$establishedMtu).")
@@ -1481,6 +1553,7 @@ class KosherVpnService : VpnService() {
             "Reestableciendo tunel ($reason). Espera de $settleMs ms para que el sistema " +
                 "libere la interfaz anterior antes de crear la nueva."
         )
+        com.ejemplo.locksuite.diag.DiagLog.i("vpn", "Reestableciendo túnel ($reason)")
         restartHandler.removeCallbacks(trailingNetworkRestart)
         pendingNetworkHandle = 0L
         restartPendingUntilMs = android.os.SystemClock.elapsedRealtime() + settleMs
@@ -1540,6 +1613,15 @@ class KosherVpnService : VpnService() {
         try {
             val callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
+                    val caps = try {
+                        connectivityManager.getNetworkCapabilities(network)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (caps == null || caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) {
+                        return
+                    }
+
                     // El resolutor de salida SIEMPRE se recalcula: es barato y es lo que
                     // evita quedarse hablando con el DNS de una red que ya no existe.
                     NetworkForwarder.invalidateUpstreamCache()
@@ -1556,7 +1638,8 @@ class KosherVpnService : VpnService() {
                     } catch (e: Exception) {
                         0L
                     }
-                    if (handle != 0L && handle == lastNetworkHandle) {
+                    if (handle == 0L) return
+                    if (handle == lastNetworkHandle) {
                         if (pendingNetworkHandle != 0L) {
                             restartHandler.removeCallbacks(trailingNetworkRestart)
                             pendingNetworkHandle = 0L
@@ -1576,6 +1659,15 @@ class KosherVpnService : VpnService() {
                         lastNetworkHandle = handle
                         return
                     }
+                    if (!isEligiblePhysicalNetworkChange(
+                            hasCaps = true,
+                            isVpnTransport = false,
+                            handle = handle,
+                            lastHandle = lastNetworkHandle
+                        )
+                    ) {
+                        return
+                    }
                     android.util.Log.i("KosherVPN", "Cambio la red fisica por defecto; reestableciendo tunel VPN.")
                     // ARREGLO 1/9/2026 (V-3): el handle se anota SOLO si el
                     // reestablecimiento efectivamente ocurrió o quedó agendado.
@@ -1593,12 +1685,14 @@ class KosherVpnService : VpnService() {
                 }
 
                 override fun onCapabilitiesChanged(network: Network, networkCapabilities: android.net.NetworkCapabilities) {
+                    if (networkCapabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) return
                     if (networkCapabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
                         NetworkForwarder.invalidateUpstreamCache()
                     }
                 }
 
                 override fun onLinkPropertiesChanged(network: Network, lp: android.net.LinkProperties) {
+                    if (isVpnOrUnknownNetwork(network)) return
                     // Los servidores DNS de una red cambian sin que la red cambie. No hace
                     // falta rehacer el túnel: alcanza con volver a elegir el resolutor.
                     NetworkForwarder.invalidateUpstreamCache()
@@ -1606,10 +1700,11 @@ class KosherVpnService : VpnService() {
 
                 override fun onLost(network: Network) {
                     // Al perder la red, el resolutor cacheado deja de servir.
-                    NetworkForwarder.invalidateUpstreamCache()
+                    // No borramos lastNetworkHandle para que un onLost/onAvailable espúreo de la misma
+                    // red (mismo handle) durante establish() no simule un cambio de red en bucle.
                     val lostHandle = try { network.networkHandle } catch (e: Exception) { 0L }
                     if (lostHandle == 0L || lostHandle == lastNetworkHandle) {
-                        lastNetworkHandle = 0L
+                        NetworkForwarder.invalidateUpstreamCache()
                     }
                     if (lostHandle != 0L && lostHandle == pendingNetworkHandle) {
                         restartHandler.removeCallbacks(trailingNetworkRestart)
@@ -1639,6 +1734,7 @@ class KosherVpnService : VpnService() {
      * cambio de red en una ráfaga rápida (Wi-Fi <-> datos móviles).
      */
     private fun restartVpn(newNetworkHandle: Long): Boolean {
+        if (newNetworkHandle == 0L || newNetworkHandle == lastNetworkHandle) return false
         val isCurrentlyRunning = synchronized(lifecycleLock) { running && !destroyed }
         if (!isCurrentlyRunning) {
             if (restartPendingUntilMs > android.os.SystemClock.elapsedRealtime() && newNetworkHandle != 0L) {
