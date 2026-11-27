@@ -239,6 +239,7 @@ class CommandProcessor(private val context: Context) {
             "HIDE_APP", "UNHIDE_APP", "SUSPEND_APP", "UNSUSPEND_APP", 
             "BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW",
             "BLOCK_APP_INTERNET", "UNBLOCK_APP_INTERNET",
+            "INSTALL_APP",
             // Las reglas DNS mandan el DOMINIO por este mismo parámetro. Van acá para
             // que un comando sin dominio se rechace con un motivo en vez de aplicarse
             // sobre una lista vacía y contestar "listo" sin haber hecho nada.
@@ -618,6 +619,24 @@ class CommandProcessor(private val context: Context) {
                     // error a la vista.
                     policyManager.applyKioskLockTask(policyManager.isKioskLockTaskEnabled())
                     true
+                }
+                "INSTALL_APP" -> {
+                    val pkg = packagesList.singleOrNull()?.trim()
+                    val critical = pkg != null && com.ejemplo.locksuite.mdm.AppController(context).isCritical(pkg)
+                    val invalidReason = com.ejemplo.locksuite.mdm.RemoteInstallPolicy.validatePackageName(pkg, critical)
+                    if (pkg == null || invalidReason != null) {
+                        commandErrorReason = invalidReason ?: "Indicá exactamente un paquete válido."
+                        false
+                    } else {
+                        val idToAck = commandId
+                        commandId = null
+                        CoroutineScope(Dispatchers.IO).launch {
+                            com.ejemplo.locksuite.util.RemoteAppInstaller.executeRemoteInstall(
+                                applicationContext, pkg, idToAck
+                            )
+                        }
+                        true
+                    }
                 }
                 "UPDATE_APP" -> {
                     // Todo el flujo (destapar Play Store, levantar restricciones,

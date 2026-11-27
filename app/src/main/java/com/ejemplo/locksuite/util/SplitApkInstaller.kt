@@ -291,7 +291,8 @@ object SplitApkInstaller {
         packageName: String,
         splits: List<SplitEntryInfo>,
         totalBytes: Long,
-        isCancelled: (() -> Boolean)? = null
+        isCancelled: (() -> Boolean)? = null,
+        silent: Boolean = false
     ) {
         val packageInstaller = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
@@ -339,6 +340,7 @@ object SplitApkInstaller {
 
             val intent = Intent(context, PackageInstallStatusReceiver::class.java)
                 .putExtra(PackageInstallStatusReceiver.EXTRA_LS_PACKAGE, packageName)
+                .putExtra(PackageInstallStatusReceiver.EXTRA_SILENT, silent)
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             } else {

@@ -90,6 +90,7 @@
    * ⚠️ Si al desplegar B.97 la versión no es 0.6.68 (131), ajustar este número.
    */
   const VERSION_CON_B97 = 131;
+  const VERSION_CON_INSTALL_APP = 167;
 
   /* ═════════════════════════════════════════════════════════════════════════
    * ESTADO
@@ -99,6 +100,7 @@
     appPolicy: {},         // devices/<id>/appPolicy      (override de ESTE equipo)
     allowedPackages: [],   // globalSettings/allowedPackages (tienda)
     storeApps: {},         // storeApps
+    auroraPackages: {},    // auroraStore/packages
     presets: {},           // presets guardados
     tpGlobal: [],          // globalSettings/playStore/apps como filas (TiendaLogic.rowsFromSaved)
     tp: { trabajo: null }, // apps extra de este celular que se están editando (null = nada sin guardar)
@@ -113,6 +115,8 @@
       instFiltro: "usuario",
       rutaUpd: "auto",
       esperando: {},            // "pkg|accion" -> { quiere, hasta, buzon }
+      remoteInstallMsg: "",
+      remoteInstallBusy: false,
       cerrado: false            // el equipo se archivó o eliminó desde esta ficha
     }
   };
@@ -1383,6 +1387,153 @@
       } else {
         LS.toast("El modo lista blanca está apagado en este celular.", "info");
       }
+    }
+  });
+
+  /* ── Instalación remota silenciosa (B.137) ── */
+  const RI_TRUSTED_PREFIXES = [
+    "https://storage.googleapis.com/locksuite-nueva-store-apks/",
+    "https://locksuite-nueva.web.app/"
+  ];
+  const RI_SHA256_RE = /^[0-9a-fA-F]{64}$/;
+  const RI_PKG_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
+
+  function riTrustedUrl(url) {
+    const t = String(url || "").trim();
+    if (!t || t.includes("..") || /[\s\u0000-\u001f\u007f]/.test(t)) return false;
+    return RI_TRUSTED_PREFIXES.some((p) => t.startsWith(p));
+  }
+
+  function riTieneFuenteLista(pkg) {
+    const key = LS.pkgKey(pkg);
+    const aur = (S.auroraPackages || {})[key];
+    if (aur && String(aur.status || "").toLowerCase() === "ready" && aur.variants) {
+      const vars = Object.values(aur.variants);
+      if (vars.some((v) => v && riTrustedUrl(v.apkUrl) && RI_SHA256_RE.test(String(v.sha256 || "").trim()))) {
+        return true;
+      }
+    }
+    const cls = (S.storeApps || {})[key];
+    if (cls && riTrustedUrl(cls.apkUrl || cls.url) && RI_SHA256_RE.test(String(cls.sha256 || "").trim())) {
+      return true;
+    }
+    return false;
+  }
+
+  function pintarInstalacionRemota(forzar) {
+    const sel = $("c-ri-select");
+    const st = $("c-ri-status");
+    const btn = $("c-ri-btn");
+    if (!sel || !st || !btn) return;
+    const ri = campo("remoteInstall", null);
+    const vc = campo("versionCode", 0);
+    if (!cambio("remote-install", [S.auroraPackages, S.storeApps, S.instaladas, ri, vc,
+      S.ui.remoteInstallMsg, S.ui.remoteInstallBusy]) && !forzar) return;
+
+    const prevVal = sel.value;
+    const mapa = {};
+    Object.keys(S.auroraPackages || {}).forEach((k) => {
+      const a = S.auroraPackages[k];
+      if (!a) return;
+      const pkg = a.packageName || LS.keyPkg(k);
+      if (riTieneFuenteLista(pkg)) {
+        mapa[pkg] = { pkg, label: a.title || pkg };
+      }
+    });
+    Object.keys(S.storeApps || {}).forEach((k) => {
+      const a = S.storeApps[k];
+      if (!a) return;
+      const pkg = a.packageName || LS.keyPkg(k);
+      if (!mapa[pkg] && riTieneFuenteLista(pkg)) {
+        mapa[pkg] = { pkg, label: a.label || a.name || pkg };
+      }
+    });
+    const lista = Object.values(mapa).sort((a, b) => a.label.localeCompare(b.label, "es"));
+    sel.innerHTML = '<option value="">Elegir del catálogo listo (' + lista.length + ')…</option>' +
+      lista.map((x) => {
+        const inst = S.instaladas[x.pkg] ? " (ya instalada)" : "";
+        return '<option value="' + esc(x.pkg) + '">' + esc(x.label + " · " + x.pkg + inst) + "</option>";
+      }).join("");
+    if (prevVal && mapa[prevVal]) sel.value = prevVal;
+
+    btn.disabled = !!S.ui.remoteInstallBusy;
+
+    const partes = [];
+    if (vc > 0 && vc < VERSION_CON_INSTALL_APP) {
+      partes.push('<p class="ls-hint" style="color:var(--warning-yellow);margin:0 0 6px">' +
+        "⚠️ Este celular tiene LockSuite v" + esc(campo("versionName", "?")) + " (" + esc(vc) +
+        "). Actualizalo a <b>v0.7.4+ (167)</b> antes de usar la instalación remota.</p>");
+    }
+    if (S.ui.remoteInstallMsg) {
+      partes.push('<p class="ls-hint" style="margin:0 0 6px">' + esc(S.ui.remoteInstallMsg) + "</p>");
+    }
+    if (ri && ri.packageName) {
+      const lbl = ri.label || ri.packageName;
+      if (ri.status === "running") {
+        const txt = ri.stage === "installing"
+          ? "Instalando " + lbl + " en el celular…"
+          : "Descargando " + lbl + " (" + (ri.progress || 0) + "%)…";
+        partes.push('<span class="ls-chip warn">⏳ ' + esc(txt) + "</span>");
+      } else if (ri.status === "installed") {
+        partes.push('<span class="ls-chip ok">✅ ' + esc(lbl) + " instalada (" + esc(LS.fecha(ri.updatedAt)) + ")</span>");
+      } else if (ri.status === "failed") {
+        partes.push('<span class="ls-chip bad">❌ ' + esc(lbl) + ": " + esc(ri.error || "falló") + "</span>");
+      }
+    }
+    st.innerHTML = partes.join("");
+  }
+
+  $("c-ri-select").addEventListener("change", function () {
+    if (this.value) $("c-ri-pkg").value = this.value;
+  });
+
+  $("c-ri-btn").addEventListener("click", async function () {
+    const pkg = ($("c-ri-pkg").value || "").trim();
+    if (!pkg || pkg.length > 200 || !RI_PKG_RE.test(pkg)) {
+      LS.toast("Ingresá un nombre de paquete válido (ej: com.kiloo.subwaysurf).", "error");
+      return;
+    }
+    if (!confirm("¿Instalar «" + pkg + "» en silencio en " + nombreDispositivo() + "?\n\n" +
+      "Se descargará verificada por SHA-256 en el servidor y se instalará sin intervención del usuario.")) return;
+
+    S.ui.remoteInstallBusy = true;
+    S.ui.remoteInstallMsg = "";
+    pintarInstalacionRemota(true);
+
+    try {
+      if (!riTieneFuenteLista(pkg)) {
+        S.ui.remoteInstallMsg = "Descargando y verificando " + pkg + " en el servidor (puede demorar unos segundos)…";
+        pintarInstalacionRemota(true);
+        const syncRes = await LS.auroraSyncPackage(pkg, false);
+        if (!syncRes || !syncRes.result || !syncRes.result.ok) {
+          const errMsg = (syncRes && syncRes.result && syncRes.result.error) || "No se pudo descargar el paquete en el servidor.";
+          S.ui.remoteInstallMsg = "❌ " + errMsg;
+          LS.toast(errMsg, "error");
+          return;
+        }
+        if (syncRes.packageData) {
+          S.auroraPackages[LS.pkgKey(pkg)] = syncRes.packageData;
+        }
+      }
+
+      S.ui.remoteInstallMsg = "Enviando orden de instalación segura al celular…";
+      pintarInstalacionRemota(true);
+      const r = await LS.sendCommand(deviceId, "INSTALL_APP", [pkg], null, opc({ timeoutMs: 30000 }));
+      if (r.ok && !r.pendiente) {
+        S.ui.remoteInstallMsg = "Orden aceptada. Seguí el progreso abajo.";
+      } else if (r.ok && r.pendiente) {
+        S.ui.remoteInstallMsg = "⏳ " + (r.reason || "Encolada en el buzón del equipo.");
+      } else {
+        S.ui.remoteInstallMsg = "❌ " + (r.reason || r.status || "No se pudo enviar.");
+      }
+      LS.toast(...LS.resultado(r, "Instalación remota iniciada en el celular."));
+    } catch (err) {
+      const m = (err && err.message) || "Error preparando instalación remota.";
+      S.ui.remoteInstallMsg = "❌ " + m;
+      LS.toast(m, "error");
+    } finally {
+      S.ui.remoteInstallBusy = false;
+      pintarInstalacionRemota(true);
     }
   });
 
@@ -2718,6 +2869,7 @@
     pintarTempInstall();
     pintarPresets();
     pintarPlayStore();
+    pintarInstalacionRemota();
     pintarInstaladas();
     pintarAllowlist();
     pintarActualizaciones();
@@ -2757,7 +2909,11 @@
 
     LS.db.ref("storeApps").on("value", (snap) => {
       S.storeApps = snap.val() || {};
-      pintarTienda(); pintarListaActualizar();
+      pintarTienda(); pintarListaActualizar(); pintarInstalacionRemota();
+    });
+    LS.db.ref("auroraStore/packages").on("value", (snap) => {
+      S.auroraPackages = snap.val() || {};
+      pintarInstalacionRemota();
     });
     LS.db.ref("presets").on("value", (snap) => {
       S.presets = snap.val() || {};

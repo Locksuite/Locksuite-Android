@@ -1707,46 +1707,136 @@ object FirebaseDeviceSync {
         return pullPlayStoreConfig(context)
     }
 
+    data class RemoteInstallMeta(
+        val auroraPkg: com.ejemplo.locksuite.mdm.AuroraStoreCatalog.AuroraPackage?,
+        val classicLabel: String?,
+        val classicUrl: String?,
+        val classicSha256: String?,
+        val classicVersionCode: Long,
+        val fetchError: String?
+    )
+
+    fun fetchRemoteInstallMeta(context: Context, packageName: String): RemoteInstallMeta {
+        val pkgKey = packageName.replace('.', '_')
+        var auroraPkg: com.ejemplo.locksuite.mdm.AuroraStoreCatalog.AuroraPackage? = null
+        var classicLabel: String? = null
+        var classicUrl: String? = null
+        var classicSha256: String? = null
+        var classicVersionCode = 0L
+        var errorMsg: String? = null
+        val latch = java.util.concurrent.CountDownLatch(2)
+
+        runAuthenticated {
+            val db = FirebaseDatabase.getInstance()
+            db.getReference("auroraStore/packages/$pkgKey").get()
+                .addOnSuccessListener { snap ->
+                    try {
+                        if (snap.exists()) {
+                            auroraPackageToJsonObject(snap, packageName)?.let { obj ->
+                                val arr = org.json.JSONArray().put(obj)
+                                auroraPkg = com.ejemplo.locksuite.mdm.AuroraStoreCatalog
+                                    .parsePackages(arr.toString())
+                                    ?.get(packageName)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        errorMsg = e.message ?: e.toString()
+                    } finally {
+                        latch.countDown()
+                    }
+                }
+                .addOnFailureListener { e ->
+                    errorMsg = e.message ?: e.toString()
+                    latch.countDown()
+                }
+
+            db.getReference("storeApps/$pkgKey").get()
+                .addOnSuccessListener { snap ->
+                    try {
+                        if (snap.exists()) {
+                            classicLabel = snap.child("label").getValue(String::class.java)
+                                ?: snap.child("name").getValue(String::class.java)
+                            classicUrl = snap.child("apkUrl").getValue(String::class.java)
+                                ?: snap.child("url").getValue(String::class.java)
+                            classicSha256 = snap.child("sha256").getValue(String::class.java)
+                            classicVersionCode = snap.child("versionCode").getValue(Long::class.java) ?: 0L
+                        }
+                    } catch (e: Exception) {
+                        if (errorMsg == null) errorMsg = e.message ?: e.toString()
+                    } finally {
+                        latch.countDown()
+                    }
+                }
+                .addOnFailureListener { e ->
+                    if (errorMsg == null) errorMsg = e.message ?: e.toString()
+                    latch.countDown()
+                }
+        }
+
+        try {
+            latch.await(12, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (_: InterruptedException) {
+            if (errorMsg == null) errorMsg = "Tiempo de espera agotado consultando el servidor"
+        }
+        return RemoteInstallMeta(
+            auroraPkg = auroraPkg,
+            classicLabel = classicLabel,
+            classicUrl = classicUrl,
+            classicSha256 = classicSha256,
+            classicVersionCode = classicVersionCode,
+            fetchError = errorMsg
+        )
+    }
+
+    private fun auroraPackageToJsonObject(
+        child: com.google.firebase.database.DataSnapshot,
+        fallbackPkg: String? = null
+    ): org.json.JSONObject? {
+        val pkg = child.child("packageName").getValue(String::class.java)
+            ?: fallbackPkg
+            ?: child.key?.replace("_", ".")
+            ?: return null
+        val o = org.json.JSONObject()
+        o.put("packageName", pkg)
+        child.child("title").getValue(String::class.java)?.let { o.put("title", it) }
+        child.child("versionCode").getValue(Long::class.java)?.let { o.put("versionCode", it) }
+        child.child("versionName").getValue(String::class.java)?.let { o.put("versionName", it) }
+        child.child("latestVersionCode").getValue(Long::class.java)?.let { o.put("latestVersionCode", it) }
+        child.child("latestVersionName").getValue(String::class.java)?.let { o.put("latestVersionName", it) }
+        child.child("primarySource").getValue(String::class.java)?.let { o.put("primarySource", it) }
+        child.child("status").getValue(String::class.java)?.let { o.put("status", it) }
+        child.child("error").getValue(String::class.java)?.let { o.put("error", it) }
+        child.child("updatedAt").getValue(Long::class.java)?.let { o.put("updatedAt", it) }
+        o.put("hasObb", child.child("hasObb").getValue(Boolean::class.java) == true)
+        val variantsObj = org.json.JSONObject()
+        child.child("variants").children.forEach { vSnap ->
+            val vKey = vSnap.key ?: return@forEach
+            val vo = org.json.JSONObject()
+            vSnap.child("apkUrl").getValue(String::class.java)?.let { vo.put("apkUrl", it) }
+            vSnap.child("sha256").getValue(String::class.java)?.let { vo.put("sha256", it) }
+            vSnap.child("sizeBytes").getValue(Long::class.java)?.let { vo.put("sizeBytes", it) }
+            vSnap.child("versionCode").getValue(Long::class.java)?.let { vo.put("versionCode", it) }
+            vSnap.child("versionName").getValue(String::class.java)?.let { vo.put("versionName", it) }
+            vSnap.child("splitCount").getValue(Long::class.java)?.let { vo.put("splitCount", it.toInt()) }
+            vSnap.child("bundleFormat").getValue(String::class.java)?.let { vo.put("bundleFormat", it) }
+            vSnap.child("source").getValue(String::class.java)?.let { vo.put("source", it) }
+            vSnap.child("signerSha256").getValue(String::class.java)?.let { vo.put("signerSha256", it) }
+            val abisArr = org.json.JSONArray()
+            vSnap.child("abis").children.forEach { a ->
+                a.getValue(String::class.java)?.let { abisArr.put(it) }
+            }
+            vo.put("abis", abisArr)
+            variantsObj.put(vKey, vo)
+        }
+        o.put("variants", variantsObj)
+        return o
+    }
+
     /** Serializa `auroraStore/packages` en JSON limpio para [AuroraStoreManager.replacePackages]. */
     private fun auroraPackagesJson(node: com.google.firebase.database.DataSnapshot): String {
         val arr = org.json.JSONArray()
         node.children.forEach { child ->
-            val pkg = child.child("packageName").getValue(String::class.java)
-                ?: child.key?.replace("_", ".") ?: return@forEach
-            val o = org.json.JSONObject()
-            o.put("packageName", pkg)
-            child.child("title").getValue(String::class.java)?.let { o.put("title", it) }
-            child.child("versionCode").getValue(Long::class.java)?.let { o.put("versionCode", it) }
-            child.child("versionName").getValue(String::class.java)?.let { o.put("versionName", it) }
-            child.child("latestVersionCode").getValue(Long::class.java)?.let { o.put("latestVersionCode", it) }
-            child.child("latestVersionName").getValue(String::class.java)?.let { o.put("latestVersionName", it) }
-            child.child("primarySource").getValue(String::class.java)?.let { o.put("primarySource", it) }
-            child.child("status").getValue(String::class.java)?.let { o.put("status", it) }
-            child.child("error").getValue(String::class.java)?.let { o.put("error", it) }
-            child.child("updatedAt").getValue(Long::class.java)?.let { o.put("updatedAt", it) }
-            o.put("hasObb", child.child("hasObb").getValue(Boolean::class.java) == true)
-            val variantsObj = org.json.JSONObject()
-            child.child("variants").children.forEach { vSnap ->
-                val vKey = vSnap.key ?: return@forEach
-                val vo = org.json.JSONObject()
-                vSnap.child("apkUrl").getValue(String::class.java)?.let { vo.put("apkUrl", it) }
-                vSnap.child("sha256").getValue(String::class.java)?.let { vo.put("sha256", it) }
-                vSnap.child("sizeBytes").getValue(Long::class.java)?.let { vo.put("sizeBytes", it) }
-                vSnap.child("versionCode").getValue(Long::class.java)?.let { vo.put("versionCode", it) }
-                vSnap.child("versionName").getValue(String::class.java)?.let { vo.put("versionName", it) }
-                vSnap.child("splitCount").getValue(Long::class.java)?.let { vo.put("splitCount", it.toInt()) }
-                vSnap.child("bundleFormat").getValue(String::class.java)?.let { vo.put("bundleFormat", it) }
-                vSnap.child("source").getValue(String::class.java)?.let { vo.put("source", it) }
-                vSnap.child("signerSha256").getValue(String::class.java)?.let { vo.put("signerSha256", it) }
-                val abisArr = org.json.JSONArray()
-                vSnap.child("abis").children.forEach { a ->
-                    a.getValue(String::class.java)?.let { abisArr.put(it) }
-                }
-                vo.put("abis", abisArr)
-                variantsObj.put(vKey, vo)
-            }
-            o.put("variants", variantsObj)
-            arr.put(o)
+            auroraPackageToJsonObject(child)?.let { arr.put(it) }
         }
         return arr.toString()
     }

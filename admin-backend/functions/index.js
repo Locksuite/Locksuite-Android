@@ -105,7 +105,7 @@ const ALLOWED_COMMANDS = new Set([
   "UPDATE_ALLOWLIST",
   "BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS", "BLOCK_WHATSAPP_CHANNELS",
   "UNBLOCK_WHATSAPP_CHANNELS", "CHANGE_PIN", "ENABLE_STEALTH", "DISABLE_STEALTH",
-  "BLOCK_GIFS", "UNBLOCK_GIFS", "UPDATE_APP", "UPDATE_LOCKSUITE", "VERIFY_PIN",
+  "BLOCK_GIFS", "UNBLOCK_GIFS", "INSTALL_APP", "UPDATE_APP", "UPDATE_LOCKSUITE", "VERIFY_PIN",
   "BLOCK_APP_INTERNET", "UNBLOCK_APP_INTERNET", "UNSUSPEND_ALL_APPS",
   "SET_HIDE_SUSPENDED_APPS", "APPLY_PRESET_PROFILE",
   // ── PERFILES MAESTROS DE ALTA (9/9/2026) — ver app/mdm/EnrollmentProfiles.kt ──
@@ -330,7 +330,7 @@ function commandFamily(command, packages) {
 // Comandos de ACCIÓN (no de estado): tarde no sirven, vencen en un día. El resto son
 // estado deseado y se aplican aunque el equipo vuelva a las semanas.
 const ACTION_COMMANDS = new Set([
-  "LOCK_DEVICE", "UPDATE_APP", "CANCEL_UPDATE_APP", "UPDATE_LOCKSUITE",
+  "LOCK_DEVICE", "INSTALL_APP", "UPDATE_APP", "CANCEL_UPDATE_APP", "UPDATE_LOCKSUITE",
   // Liberar/desinstalar es una ACCIÓN puntual: si llega tarde (equipo que estuvo una
   // semana apagado) ya no tiene sentido ejecutarla sola. Vence en un día como el resto.
   "UNINSTALL_LOCKSUITE",
@@ -360,6 +360,33 @@ const DOMAIN_RULE_COMMANDS = new Set([
   "SET_DOMAIN_RULE_BLOCK", "SET_DOMAIN_RULE_ALLOW",
   "SET_DOMAIN_RULE_FORCE_BLOCK", "SET_DOMAIN_RULE_FORCE_ALLOW", "REMOVE_DOMAIN_RULE",
 ]);
+
+const REMOTE_INSTALL_SHA256_RE = /^[0-9a-fA-F]{64}$/;
+function isTrustedRemoteInstallUrl(url) {
+  if (typeof url !== "string") return false;
+  const trimmed = url.trim();
+  if (!trimmed || trimmed.includes("..") || /[\s\u0000-\u001f\u007f]/.test(trimmed)) return false;
+  return trimmed.startsWith(`https://storage.googleapis.com/${STORE_APKS_BUCKET}/`) ||
+    trimmed.startsWith("https://locksuite-nueva.web.app/");
+}
+function isValidRemoteInstallSource(auroraPkg, classicPkg) {
+  if (auroraPkg && typeof auroraPkg === "object" && String(auroraPkg.status || "").toLowerCase() === "ready") {
+    const variants = auroraPkg.variants && typeof auroraPkg.variants === "object"
+      ? Object.values(auroraPkg.variants)
+      : [];
+    if (variants.some((v) => v && isTrustedRemoteInstallUrl(v.apkUrl) && REMOTE_INSTALL_SHA256_RE.test(String(v.sha256 || "").trim()))) {
+      return true;
+    }
+  }
+  if (classicPkg && typeof classicPkg === "object") {
+    const url = classicPkg.apkUrl || classicPkg.url;
+    const sha = String(classicPkg.sha256 || "").trim();
+    if (isTrustedRemoteInstallUrl(url) && REMOTE_INSTALL_SHA256_RE.test(sha)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // Helper para leer campo con fallback a info.X
 function getDeviceField(device, field, fallback = null) {
@@ -676,6 +703,48 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
         return;
       }
       payload.profileId = profileId;
+    } else if (command === "INSTALL_APP") {
+      // Restricción opcional de super-admin: si serverSecrets/remoteInstallAllowedUids
+      // tiene al menos un UID en true, solo esos UIDs pueden instalar remotamente.
+      const allowedUidsSnap = await admin.database().ref("serverSecrets/remoteInstallAllowedUids").once("value");
+      const allowedUids = allowedUidsSnap.val();
+      if (allowedUids && typeof allowedUids === "object") {
+        const hasExplicitAllowlist = Object.values(allowedUids).some((v) => v === true);
+        if (hasExplicitAllowlist && allowedUids[adminUid] !== true) {
+          res.status(403).json({ error: "Solo el administrador principal autorizado puede instalar apps remotamente." });
+          return;
+        }
+      }
+
+      const pkgList = Array.isArray(packages)
+        ? packages.map((p) => String(p).trim()).filter(Boolean)
+        : (typeof packages === "string" ? packages.split(",").map((p) => p.trim()).filter(Boolean) : []);
+      if (pkgList.length !== 1) {
+        res.status(400).json({ error: "INSTALL_APP requiere exactamente un paquete válido." });
+        return;
+      }
+      const pkg = pkgList[0];
+      if (pkg.length > 200 || !CLASSIC_PKG_RE.test(pkg)) {
+        res.status(400).json({ error: `Nombre de paquete inválido: ${pkg}` });
+        return;
+      }
+      if (CLASSIC_NEVER_OFFERED.has(pkg) || pkg === "com.google.android.apps.maps" || pkg === "com.google.android.googlequicksearchbox") {
+        res.status(400).json({ error: "No se puede instalar remotamente un paquete crítico del sistema, stub o de LockSuite." });
+        return;
+      }
+
+      const pkgKey = pkg.replace(/\./g, "_");
+      const [auroraSnap, classicSnap] = await Promise.all([
+        admin.database().ref(`auroraStore/packages/${pkgKey}`).once("value"),
+        admin.database().ref(`storeApps/${pkgKey}`).once("value"),
+      ]);
+      if (!isValidRemoteInstallSource(auroraSnap.val(), classicSnap.val())) {
+        res.status(412).json({
+          error: `La app '${pkg}' todavía no está descargada y verificada en el servidor. Sincronizala primero en Tienda Aurora o subila con huella SHA-256.`,
+        });
+        return;
+      }
+      payload.packages = pkg;
     } else if (typeof packages === "string" && packages.trim().length > 0) {
       const clean = packages.split(",").map(p => p.trim()).filter(p => pkgRegex.test(p));
       if (clean.length > 0) payload.packages = clean.join(",");

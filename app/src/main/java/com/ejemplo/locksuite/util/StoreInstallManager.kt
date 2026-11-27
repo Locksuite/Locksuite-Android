@@ -245,6 +245,61 @@ object StoreInstallManager {
         return true
     }
 
+    /**
+     * Instala o actualiza silenciosamente una app ordenada por el administrador (`INSTALL_APP`),
+     * verificando SHA-256 (y firma digital si ya está instalada) y limpiando `hide_`/`suspend_`
+     * residuales justo antes del commit para que `PackageReceiver` no la re-bloquee.
+     *
+     * No muestra Toasts ni la reclama en `PlayStoreManager`.
+     */
+    fun installRemoteAdminApp(
+        context: Context,
+        packageName: String,
+        label: String,
+        apkUrl: String,
+        sha256: String,
+        isUpdate: Boolean,
+        onProgress: (Int) -> Unit,
+        onFinished: (String?) -> Unit
+    ): Boolean {
+        val app = context.applicationContext ?: context
+        return core.start(
+            key = packageName,
+            work = { report ->
+                SelfUpdater.downloadAndInstallApk(
+                    context = app,
+                    apkUrl = apkUrl,
+                    packageName = packageName,
+                    label = label,
+                    sha256 = sha256,
+                    quiet = true,
+                    preInstallCheck = { file ->
+                        if (isUpdate) {
+                            verifyAuroraUpdateSignature(app, file, packageName)?.let { return@downloadAndInstallApk it }
+                        }
+                        try {
+                            PrefsHelper.getMdmPrefs(app).edit()
+                                .putBoolean("hide_$packageName", false)
+                                .putBoolean("suspend_$packageName", false)
+                                .commit()
+                            com.ejemplo.locksuite.mdm.AppUnhideGuard.clear(app, packageName)
+                        } catch (_: Exception) {
+                        }
+                        null
+                    }
+                ) { progress ->
+                    report(progress)
+                    reportProgress(app, progress)
+                    onProgress(progress)
+                }
+            },
+            onFinished = { err ->
+                clearProgress(app)
+                onFinished(err)
+            }
+        )
+    }
+
     /** Busca e instala la versión nueva de LockSuite. false si ya hay una instalación en curso. */
     fun selfUpdate(context: Context, showToasts: Boolean = true): Boolean {
         val app = context.applicationContext ?: context

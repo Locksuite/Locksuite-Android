@@ -3263,21 +3263,35 @@ Resumen técnico completo del diagnóstico y correcciones en [`AUDITORIA_INTEGRA
   1. Con `installAppsBlocked = true` y `hideSuspendedApps = true`, ocultar y volver a des-ocultar una app de usuario (desde panel web `UNHIDE_APP` y desde `DashboardActivity`), verificando que no desaparece ni se re-oculta.
   2. Con `BLOCK_APP_INTERNET` aplicado sobre una app oculta, des-ocultarla o reinstalarla y verificar que recupera inmediatamente el bloqueo DNS y de datos móviles medidos.
 
+### B.137 — Comando remoto seguro `INSTALL_APP` para instalación silenciosa por administrador (`0.7.4` / `167`, 27/11/2026) — implementado y probado en PC, pendiente de confirmación en equipo real
+
+- **Propósito:** permitir que el administrador empuje e instale silenciosamente cualquier app desde la ficha web (`celular.html`) sin intervención del usuario y sin abrir Play Store ni relajar las políticas del equipo.
+- **Capas de seguridad (`admin-backend/functions/index.js`, `RemoteInstallPolicy.kt`, `RemoteAppInstaller.kt`, `StoreInstallManager.kt`):**
+  1. **Autorización + PIN + super-admin opcional:** `sendCommandV8` exige token Firebase no revocado (`checkRevoked = true`) + `authorizedAdminsUids` + **PIN obligatorio** del celular (`INSTALL_APP` NO está en la excepción de `UPDATE_*`) + firma **HMAC-SHA256** (`expiresAt` 24 h en `ACTION_COMMANDS`) + registro inmutable en `commandLog/<deviceId>`. Si existe `serverSecrets/remoteInstallAllowedUids` con algún UID en `true`, solo esos UIDs pueden mandar `INSTALL_APP` (403 al resto de admins).
+  2. **Cero URLs arbitrarias / SHA-256 obligatorio:** el payload viaja únicamente con un `packageName` válido (`CLASSIC_PKG_RE`, máx. 200 chars), rechazando `NEVER_OFFERED`, stubs de Android Auto y apps críticas. Tanto el servidor (`isValidRemoteInstallSource`) como el celular (`RemoteInstallPolicy`) exigen que el paquete exista listo en `auroraStore/packages` (`status == "ready"`) o `storeApps` con URL oficial (`https://storage.googleapis.com/locksuite-nueva-store-apks/` o `https://locksuite-nueva.web.app/`) y huella `sha256` de 64 hex, validando el archivo descargado **antes** de abrir temporalmente `DISALLOW_INSTALL_APPS`/`DISALLOW_INSTALL_UNKNOWN_SOURCES` y cerrando por `PackageInstallStatusReceiver` + timeout de 120 s.
+  3. **Convivencia limpia con políticas:** limpia `hide_<pkg>`/`suspend_<pkg>` residuales recién después de pasar SHA-256/firma en `preInstallCheck` (con `.commit()`), **no** reclama en `PlayStoreManager` (evita pausa automática) y conserva `per_app_internet_blocked` (so `PackageReceiver` reactiva el bloqueo DNS/datos móviles al instante).
+- **Archivos agregados/modificados:** `RemoteInstallPolicy.kt`, `RemoteAppInstaller.kt`, `RemoteInstallPolicyTest.kt`, `SplitApkInstaller.kt`, `SelfUpdater.kt`, `FirebaseDeviceSync.kt`, `StoreInstallManager.kt`, `PackageInstallStatusReceiver.kt`, `CommandProcessor.kt`, `admin-backend/functions/index.js`, `admin-backend/public/{celular.html,celular.js}`, `tools/test_functions_index.js`.
+- **Qué falta confirmar en equipo real antes de tachar B.137:**
+  1. En un celular en `0.7.4` (`167`), probar desde `celular.html` → **Apps del celular** → **Instalar app en este celular (remoto)** la instalación silenciosa de `com.kiloo.subwaysurf` (verificando progreso en vivo en `devices/<id>/remoteInstall`, limpieza de `hide_`/`suspend_` previos y conservación del bloqueo de internet).
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**27/11 — Antigravity: diagnóstico en equipo real `19325a1143f44ba4` y fix universal de des-ocultamiento de apps (`B.136`).**
+**27/11 — Antigravity: fix universal de des-ocultamiento (`B.136`) y comando remoto seguro `INSTALL_APP` (`B.137`).**
 
 - **Qué se hizo:**
-  - **Diagnóstico forense en RTDB (`devices/19325a1143f44ba4` + `deviceDiag/19325a1143f44ba4`):** confirmado por `commandAcks` y `logcat` que al desocultar `com.kiloo.subwaysurf` (`UNHIDE_APP`) con `installAppsBlocked = true`, Android emitió `ACTION_PACKAGE_ADDED` y `PackageReceiver` la desinstaló por interpretarla como instalación no autorizada.
-  - **Fix universal (`B.136`):** creado `AppUnhideGuard.kt` (ventana de `60 s` por `elapsedRealtime` + `BOOT_COUNT`) y `AppUnhideGuardTest.kt`; actualizados `AppController.kt` (orden síncrono con rollback, idempotencia y sync de datos medidos), `PackageReceiver.kt` (saltea auto-desinstalación, reclamo de tienda y re-bloqueo cuando `isIntentionalUnhide` es `true`, limpia marca en `ACTION_PACKAGE_REMOVED` y sincroniza red/datos medidos), y los 9 llamadores directos de `dpm.setApplicationHidden(..., false)` en `PolicyManager.kt`, `AndroidAutoStubs.kt`, `AndroidAutoStubInstaller.kt` y `UpdateFlowManager.kt`.
+  - **`B.136` (`0.7.3` / `166`):** diagnóstico en `19325a1143f44ba4` (`DuoQin F21 Pro`) y protección universal contra auto-desinstalación/re-bloqueo al des-ocultar apps (`AppUnhideGuard.kt`, `AppController.kt`, `PackageReceiver.kt`, 9 sitios en `PolicyManager`/`AndroidAutoStubs`/`AndroidAutoStubInstaller`/`UpdateFlowManager`, `AppUnhideGuardTest.kt`).
+  - **`B.137` (`0.7.4` / `167`):** agregado comando remoto `INSTALL_APP` con PIN obligatorio, HMAC 24 h, super-admin allowlist opcional (`serverSecrets/remoteInstallAllowedUids`), validación fail-closed de origen oficial + SHA-256 (`RemoteInstallPolicy.kt`, `RemoteAppInstaller.kt`, `StoreInstallManager.installRemoteAdminApp`, `FirebaseDeviceSync.fetchRemoteInstallMeta`, `SelfUpdater`/`SplitApkInstaller` con `silent = quiet`, `PackageInstallStatusReceiver`, `CommandProcessor.kt`, `functions/index.js`) y tarjeta en `celular.html` / `celular.js?v=20` con auto-sincronización previa vía `auroraStore` y progreso en vivo (`devices/<id>/remoteInstall`).
 - **Verificado en PC antes de desplegar:**
-  - `.\gradlew.bat testDebugUnitTest --no-daemon`: `BUILD SUCCESSFUL` (incluyendo `AppUnhideGuardTest`).
+  - `.\gradlew.bat testDebugUnitTest --no-daemon`: `BUILD SUCCESSFUL` (incluyendo `AppUnhideGuardTest` y `RemoteInstallPolicyTest`).
+  - `node tools/test_functions_index.js`: `OK (35 pruebas)` incluyendo suite de seguridad de `INSTALL_APP`.
+  - `node --check` sobre `admin-backend/functions/index.js` y `admin-backend/public/celular.js` en verde.
   - 6/6 scripts Python de sincronía en verde (`check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `check_store_sync.py`, `check_diag_sync.py`).
-  - Falta confirmación en equipo real (`B.136`).
+  - Falta confirmación en equipo real (`B.136` y `B.137`).
+
 
 
 

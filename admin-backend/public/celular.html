@@ -128,6 +128,19 @@
 
         <div class="ls-card" id="c-play"></div>
 
+        <div class="ls-card" id="c-remote-install-card">
+          <h3>📲 Instalar app en este celular (remoto)</h3>
+          <p class="ls-hint">Descarga desde el servidor verificado (SHA-256) e instala la app en silencio como Device Owner, sin que el usuario tenga que tocar nada ni abrir Play Store. Requiere PIN del equipo y LockSuite v0.7.4+.</p>
+          <div class="ls-row" style="gap:8px;flex-wrap:wrap">
+            <select class="ls-select" id="c-ri-select" style="flex:1 1 220px">
+              <option value="">Elegir del catálogo listo…</option>
+            </select>
+            <input class="ls-input" id="c-ri-pkg" placeholder="o paquete (ej: com.kiloo.subwaysurf)" style="flex:1 1 220px" />
+            <button type="button" class="ls-btn ls-btn-primary" id="c-ri-btn">📲 Instalar en silencio</button>
+          </div>
+          <div id="c-ri-status" style="margin-top:8px"></div>
+        </div>
+
         <div class="ls-card">
           <div class="ls-row" style="margin-bottom:10px">
             <input class="ls-input" id="c-inst-buscar" type="search" placeholder="Buscar por nombre o paquete…" style="flex:1 1 240px" />
@@ -585,7 +598,7 @@
   <script src="dominios_catalogo_io.js?v=1"></script>
   <script src="dominios_clasificar.js?v=1"></script>
   <script src="whitelist_device_ui.js?v=1"></script>
-  <script src="celular.js?v=19"></script>
+  <script src="celular.js?v=20"></script>
   <script src="diag_logic.js?v=1"></script>
   <script src="diag_remoto.js?v=1"></script>
 </body>

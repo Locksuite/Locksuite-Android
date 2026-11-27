@@ -398,7 +398,8 @@ object SelfUpdater {
                         packageName = packageName,
                         splits = prepared.splits,
                         totalBytes = prepared.totalBytes,
-                        isCancelled = isCancelled
+                        isCancelled = isCancelled,
+                        silent = quiet
                     )
                     installCommitSubmitted = true
                 } else {
@@ -433,6 +434,7 @@ object SelfUpdater {
                         // no sabría a qué actualización corresponde el resultado.
                         val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
                             .putExtra(com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver.EXTRA_LS_PACKAGE, packageName)
+                            .putExtra(com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver.EXTRA_SILENT, quiet)
                         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
                         } else {

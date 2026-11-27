@@ -617,6 +617,77 @@ test("auroraStore exige admin, enmascara serverSecrets/aurora, rechaza Dispenser
   }
 });
 
+test("INSTALL_APP exige PIN, valida paquete/fuente SHA-256, respeta super-admin y firma HMAC con TTL 24h", async () => {
+  seedWorld();
+  const sha = "a".repeat(64);
+  state.db.auroraStore = {
+    packages: {
+      com_kiloo_subwaysurf: {
+        packageName: "com.kiloo.subwaysurf",
+        title: "Subway Surfers",
+        status: "ready",
+        variants: {
+          arm64_v8a: {
+            apkUrl: "https://storage.googleapis.com/locksuite-nueva-store-apks/aurora/com_kiloo_subwaysurf/app.apks",
+            sha256: sha,
+            versionCode: 300,
+          },
+        },
+      },
+      com_evil_unsigned: {
+        packageName: "com.evil.unsigned",
+        status: "ready",
+        variants: {
+          universal: {
+            apkUrl: "https://evil.example.com/app.apk",
+            sha256: sha,
+            versionCode: 1,
+          },
+        },
+      },
+    },
+  };
+
+  // Sin PIN -> 412 (NO exento)
+  const noPin = await send({ deviceId: DEV, command: "INSTALL_APP", packages: ["com.kiloo.subwaysurf"] });
+  assert.strictEqual(noPin.statusCode, 412);
+  assert.strictEqual(noPin.body.error, "PIN_REQUIRED");
+
+  // PIN incorrecto -> 403
+  const badPin = await send({ deviceId: DEV, command: "INSTALL_APP", packages: ["com.kiloo.subwaysurf"], devicePin: "000111" });
+  assert.strictEqual(badPin.statusCode, 403);
+
+  // Usuario no admin -> 403
+  const intruso = await send({ deviceId: DEV, command: "INSTALL_APP", packages: ["com.kiloo.subwaysurf"], devicePin: PIN }, "tok-intruso");
+  assert.strictEqual(intruso.statusCode, 403);
+
+  // Paquete inválido / múltiples / críticos -> 400
+  for (const bad of [[], ["invalid"], ["com.kiloo.subwaysurf", "com.waze"], ["com.ejemplo.locksuite"], ["com.android.vending"], ["com.google.android.apps.maps"]]) {
+    const r = await send({ deviceId: DEV, command: "INSTALL_APP", packages: bad, devicePin: PIN });
+    assert.strictEqual(r.statusCode, 400, JSON.stringify(bad));
+  }
+
+  // Paquete faltante o con URL externa no oficial -> 412
+  assert.strictEqual((await send({ deviceId: DEV, command: "INSTALL_APP", packages: ["com.missing.app"], devicePin: PIN })).statusCode, 412);
+  assert.strictEqual((await send({ deviceId: DEV, command: "INSTALL_APP", packages: ["com.evil.unsigned"], devicePin: PIN })).statusCode, 412);
+
+  // Restricción opcional serverSecrets/remoteInstallAllowedUids
+  state.db.serverSecrets = { remoteInstallAllowedUids: { adm1: true } };
+  const blockedAdm2 = await send({ deviceId: DEV, command: "INSTALL_APP", packages: ["com.kiloo.subwaysurf"], devicePin: PIN }, "tok-admin2");
+  assert.strictEqual(blockedAdm2.statusCode, 403);
+
+  // Super-admin adm1 con PIN correcto -> 200 + FCM + HMAC + 24h TTL + log + buzon
+  const ok = await send({ deviceId: DEV, command: "INSTALL_APP", packages: ["com.kiloo.subwaysurf"], devicePin: PIN }, "tok-admin");
+  assert.strictEqual(ok.statusCode, 200, JSON.stringify(ok.body));
+  const msg = state.fcm[state.fcm.length - 1];
+  assert.strictEqual(msg.data.command, "INSTALL_APP");
+  assert.strictEqual(msg.data.packages, "com.kiloo.subwaysurf");
+  assert.ok(msg.data.signature);
+  assert.strictEqual(Number(msg.data.expiresAt) - Number(msg.data.timestamp), 24 * 60 * 60 * 1000);
+  const logEntries = Object.values(state.db.commandLog[DEV] || {});
+  assert.ok(logEntries.some((x) => x.command === "INSTALL_APP" && x.sentBy === "adm1"));
+});
+
 (async () => {
   for (const t of pending) await t();
   Date.now = realNow;

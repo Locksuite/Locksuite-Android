@@ -76,6 +76,11 @@ class PackageInstallStatusReceiver : BroadcastReceiver() {
                 return
             }
 
+            try {
+                com.ejemplo.locksuite.util.RemoteAppInstaller.onInstallStatus(context, packageName, status, message)
+            } catch (_: Exception) {
+            }
+
             if (status == PackageInstaller.STATUS_SUCCESS) {
                 Log.i("PackageInstallStatus", "Instalación exitosa de $packageName")
                 if (!silent) {
