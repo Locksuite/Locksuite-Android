@@ -222,12 +222,22 @@ class PackageReceiver : BroadcastReceiver() {
                     Log.w("PackageReceiver", "Tienda Play: no se pudo registrar el cambio de $packageName: ${e.message}")
                 }
             }
-            // B.132: Tienda Aurora reclama instalaciones nuevas y reconcilia tras updates silenciosos.
+            // B.132/B.134: Tienda reclama instalaciones nuevas, reconcilia tras updates silenciosos
+            // y dispara stubs embebidos cuando se instala o actualiza Android Auto desde la Tienda.
             if (action == Intent.ACTION_PACKAGE_ADDED || action == Intent.ACTION_PACKAGE_REPLACED) {
                 try {
                     com.ejemplo.locksuite.mdm.AuroraStoreManager.onPackageInstalled(context, packageName, isReplacing)
                 } catch (e: Exception) {
                     Log.w("PackageReceiver", "Tienda Aurora: no se pudo registrar $packageName: ${e.message}")
+                }
+                if (packageName == com.ejemplo.locksuite.mdm.AndroidAutoStubs.PKG_ANDROID_AUTO &&
+                    (isStoreInstalling(context, packageName) || UpdateFlowManager.wasRecentlyUpdated(context, packageName))
+                ) {
+                    try {
+                        com.ejemplo.locksuite.mdm.AndroidAutoStubInstaller.ensureInstalledForAndroidAuto(context)
+                    } catch (e: Exception) {
+                        Log.w("PackageReceiver", "AndroidAutoStubInstaller: ${e.message}")
+                    }
                 }
             }
 

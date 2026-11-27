@@ -16,6 +16,7 @@ class PackageInstallStatusReceiver : BroadcastReceiver() {
          */
         const val EXTRA_LS_PACKAGE = "com.ejemplo.locksuite.extra.INSTALL_PACKAGE"
         const val EXTRA_SILENT = "com.ejemplo.locksuite.extra.INSTALL_SILENT"
+        const val EXTRA_AA_STUB = "com.ejemplo.locksuite.extra.AA_STUB"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -26,6 +27,12 @@ class PackageInstallStatusReceiver : BroadcastReceiver() {
             val packageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
                 ?: intent.getStringExtra(EXTRA_LS_PACKAGE)
             val silent = intent.getBooleanExtra(EXTRA_SILENT, false)
+            val isAaStub = intent.getBooleanExtra(EXTRA_AA_STUB, false)
+
+            if (isAaStub) {
+                com.ejemplo.locksuite.mdm.AndroidAutoStubInstaller.onStubInstallResult(context, packageName, status, message)
+                return
+            }
 
             // Restaurar restricciones de instalación del MDM tras completar o fallar el proceso
             // (solo si no hay un flujo de Play Store en curso, para no cortarle permisos a mitad)

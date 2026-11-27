@@ -78,10 +78,6 @@ object NokiaIconSet {
             listOf("com.ejemplo.locksuite.playstore"),
             NokiaIcon("Tienda", Icons.Filled.ShoppingCart, VERDE)
         ),
-        Regla(
-            listOf("com.ejemplo.locksuite.aurorastore"),
-            NokiaIcon("Tienda Aurora", Icons.Filled.CloudDownload, AZUL)
-        ),
         // ── Las del menú clásico ──
         Regla(
             listOf("dialer", "incallui", "telecom", "phone", "telefono", "teléfono", "llamada", "marcador", "טלפון", "חיוג"),

@@ -1,96 +1,99 @@
 package com.ejemplo.locksuite.ui.playstore
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
 import android.text.TextUtils
+import android.text.TextWatcher
 import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.ejemplo.locksuite.mdm.AndroidAutoStubInstaller
+import com.ejemplo.locksuite.mdm.AndroidAutoStubs
+import com.ejemplo.locksuite.mdm.AppController
 import com.ejemplo.locksuite.mdm.AppRequestManager
+import com.ejemplo.locksuite.mdm.AuroraStoreCatalog
+import com.ejemplo.locksuite.mdm.AuroraStoreManager
+import com.ejemplo.locksuite.mdm.PlayStoreCatalog
 import com.ejemplo.locksuite.mdm.PlayStoreManager
+import com.ejemplo.locksuite.mdm.PolicyManager
+import com.ejemplo.locksuite.mdm.PopularNonKosherApps
+import com.ejemplo.locksuite.mdm.UnifiedStoreLogic
+import com.ejemplo.locksuite.mdm.UnifiedStoreLogic.InstalledAppSnapshot
+import com.ejemplo.locksuite.mdm.UnifiedStoreLogic.RowAction
+import com.ejemplo.locksuite.mdm.UnifiedStoreLogic.StoreRowModel
+import com.ejemplo.locksuite.mdm.UpdateRoutePlanner
+import com.ejemplo.locksuite.mdm.WhitelistManager
+import com.ejemplo.locksuite.util.ApkSignatureVerifier
 import com.ejemplo.locksuite.util.FirebaseDeviceSync
+import com.ejemplo.locksuite.util.GoogleAccountGate
 import com.ejemplo.locksuite.util.LocaleManager
 import com.ejemplo.locksuite.util.PrefsHelper
+import com.ejemplo.locksuite.util.StoreInstallManager
+import com.ejemplo.locksuite.util.UpdateFlowManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * TIENDA PLAY (29/10/2026, B.101) — la pantalla.
+ * TIENDA ÚNICA DE LOCKSUITE (B.101 / B.134).
  *
- * Muestra las apps que el administrador permitió para ESTE equipo (`PlayStoreManager.items`),
- * con el ícono y el nombre reales, y un botón por fila:
- *
- *  - **Instalar** → `PlayStoreManager.install` → el MISMO flujo de actualización de apps:
- *    pantalla negra con el progreso, Google Play abierto por debajo y la instalación
- *    permitida solo para ese paquete. Acá no hay ningún otro camino de instalación.
- *  - **Abrir** → la app ya está instalada.
- *  - **Pedir** → la app es "solo a pedido": el pedido le llega al administrador por el mismo
- *    canal de la tienda vieja (`devices/<id>/appRequests`, marcado `store: "play"`), y recién
- *    cuando lo aprueba aparece "Instalar".
- *  - **Instalando… / Pedida** → informativos, sin acción.
- *
- * ## Por qué Views armadas por código y no Compose
- * Es una pantalla de una lista y un botón, y las sesiones de IA de este proyecto no pueden
- * compilar con Gradle: el código de Views sí se puede comprobar de tipos contra el
- * `android.jar` real; el de Compose no. Es una decisión de verificabilidad, no de estilo.
- *
- * ## Reglas
- *  - **Fallar cerrado**: con la tienda cerrada muestra el cartel de "cerrada" y nada más,
- *    aunque la pantalla la haya abierto un widget viejo de la pantalla de inicio.
- *  - La pantalla no decide nada: todo sale de `PlayStoreManager` (que ya comprueba modo,
- *    estado de cada app y la lista blanca) y se vuelve a comprobar al tocar el botón.
- *  - Se redibuja sola cuando cambia la configuración o termina una instalación, y solo si
- *    algo cambió de verdad (sin parpadeos ni perder el lugar de la lista).
- *  - Hebreo: se arma de derecha a izquierda.
+ * Unifica instalación y actualización de apps:
+ *   - Prioriza siempre la descarga silenciosa desde el caché multi-fuente del servidor
+ *     (APKPure -> F-Droid -> Aptoide -> Aurora/Play).
+ *   - Si no hay variante compatible o la firma instalada difiere o falla la descarga directa,
+ *     ofrece respaldo por Google Play previa confirmación y advertencia clara al usuario
+ *     (pantalla tapada + requisito de cuenta Google iniciada en el dispositivo).
+ *   - Mantiene enlace discreto abajo para la Tienda clásica (APKs directos).
  */
 class PlayStoreActivity : Activity() {
 
     companion object {
         private const val TAG = "PlayStoreActivity"
-
-        /** Cuánto se espera para juntar varios cambios de configuración seguidos en un solo redibujado. */
-        private const val REFRESH_DEBOUNCE_MS = 300L
-
-        /** No se vuelven a leer los pedidos más seguido que esto. */
+        private const val REFRESH_DEBOUNCE_MS = 280L
         private const val REQUESTS_REFRESH_MS = 20_000L
-
-        /** Preferencia que `PlayStoreManager.notifyChanged` y `PackageReceiver` mueven ante cualquier cambio. */
         private const val KEY_LAUNCHER_VERSION = "launcher_packages_version"
 
-        /** Intent para abrir la tienda desde el widget, el lanzador o cualquier otro lado. */
         fun intent(context: Context): Intent =
             Intent(context, PlayStoreActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
     }
 
-    private enum class Action { INSTALL, INSTALLING, OPEN, REQUEST, REQUESTED }
+    private class Snapshot(val open: Boolean, val mode: String, val rows: List<StoreRowModel>)
 
-    private class Row(val item: PlayStoreManager.StoreItem, val installed: Boolean)
-
-    private class Snapshot(val open: Boolean, val mode: String, val rows: List<Row>)
-
-    // ── Colores (los del launcher kosher, para que se sienta parte del mismo equipo) ──
     private val colorBgTop = 0xFF0E141B.toInt()
     private val colorBgBottom = 0xFF080C11.toInt()
     private val colorCard = 0xFF1A222C.toInt()
+    private val colorSearch = 0xFF141B24.toInt()
     private val colorTextPrimary = 0xFFFFFFFF.toInt()
     private val colorTextSecondary = 0xFF9FB0C8.toInt()
     private val colorGreen = 0xFF22C55E.toInt()
@@ -98,6 +101,8 @@ class PlayStoreActivity : Activity() {
     private val colorBlue = 0xFF3B82F6.toInt()
     private val colorAmber = 0xFFF5C438.toInt()
     private val colorAmberText = 0xFF1F1300.toInt()
+    private val colorCyan = 0xFF06B6D4.toInt()
+    private val colorCyanText = 0xFF032029.toInt()
     private val colorDisabled = 0xFF334155.toInt()
     private val colorDisabledText = 0xFF94A3B8.toInt()
     private val colorBadge = 0xFF1E3A5F.toInt()
@@ -105,19 +110,29 @@ class PlayStoreActivity : Activity() {
 
     private val ui = Handler(Looper.getMainLooper())
     private var worker: ExecutorService? = null
+    private var uiScope: CoroutineScope? = null
+    private var installStateJob: Job? = null
+    private var installFailureJob: Job? = null
+    private var aaNoticeJob: Job? = null
 
     private var lang = PlayStoreText.LANG_ES
     private var rtl = false
 
+    private lateinit var reloadBtn: TextView
     private lateinit var modeBadge: TextView
     private lateinit var hint: TextView
+    private lateinit var updateAllBar: TextView
+    private lateinit var searchBox: EditText
     private lateinit var scroll: ScrollView
     private lateinit var list: LinearLayout
 
-    /** Cada pedido de redibujado sube el número; solo el último resultado se aplica. */
     private var generation = 0
     private var lastSignature = ""
     private var snapshot: Snapshot? = null
+    private var filterQuery = ""
+    private var activeSilentPkg: String? = null
+    private var activeSilentPct: Int? = null
+    private var syncingRemote = false
 
     private var requests: List<AppRequestManager.Solicitud> = emptyList()
     private val sentHere = ArrayList<AppRequestManager.Solicitud>()
@@ -126,14 +141,16 @@ class PlayStoreActivity : Activity() {
     private val refreshRunnable = Runnable { refresh() }
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key != null && (key.startsWith("play_store_") || key == KEY_LAUNCHER_VERSION)) {
+        if (key != null && (
+                key.startsWith("play_store_") ||
+                    key.startsWith("aurora_store_") ||
+                    key == KEY_LAUNCHER_VERSION ||
+                    key == UpdateFlowManager.KEY_PKG
+                )
+        ) {
             scheduleRefresh(REFRESH_DEBOUNCE_MS)
         }
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // CICLO DE VIDA
-    // ─────────────────────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -148,8 +165,9 @@ class PlayStoreActivity : Activity() {
         try {
             PrefsHelper.getMdmPrefs(this).registerOnSharedPreferenceChangeListener(prefsListener)
         } catch (e: Exception) {
-            Log.w(TAG, "No se pudo escuchar los cambios de la tienda: ${e.message}")
+            Log.w(TAG, "No se pudo escuchar cambios de la tienda: ${e.message}")
         }
+        startCollectors()
     }
 
     override fun onResume() {
@@ -164,6 +182,7 @@ class PlayStoreActivity : Activity() {
     }
 
     override fun onStop() {
+        stopCollectors()
         try {
             PrefsHelper.getMdmPrefs(this).unregisterOnSharedPreferenceChangeListener(prefsListener)
         } catch (_: Exception) {
@@ -179,8 +198,59 @@ class PlayStoreActivity : Activity() {
         super.onDestroy()
     }
 
+    private fun startCollectors() {
+        stopCollectors()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        uiScope = scope
+        installStateJob = scope.launch {
+            StoreInstallManager.state.collect { st ->
+                val newPkg = if (st.key == StoreInstallManager.SELF_KEY) null else st.key
+                val newPct = if (newPkg != null) st.progress else null
+                if (newPkg != activeSilentPkg || newPct != activeSilentPct) {
+                    val pkgChanged = newPkg != activeSilentPkg
+                    activeSilentPkg = newPkg
+                    activeSilentPct = newPct
+                    if (pkgChanged) {
+                        scheduleRefresh(50L)
+                    } else {
+                        updateActiveButtonProgress(newPkg, newPct)
+                    }
+                }
+            }
+        }
+        installFailureJob = scope.launch {
+            StoreInstallManager.lastFailure.collect { failure ->
+                if (failure != null && !isFinishing && !isDestroyed) {
+                    StoreInstallManager.clearFailure(failure.id)
+                    if (failure.allowPlayFallback) {
+                        showSilentFailedPlayOfferDialog(failure)
+                    }
+                }
+            }
+        }
+        aaNoticeJob = scope.launch {
+            AndroidAutoStubInstaller.lastNotice.collect { notice ->
+                if (notice != null && notice.isWarning && !isFinishing && !isDestroyed) {
+                    AndroidAutoStubInstaller.clearNotice(notice.id)
+                    showSimpleNoticeDialog(notice.title, notice.message)
+                }
+            }
+        }
+    }
+
+    private fun stopCollectors() {
+        installStateJob?.cancel()
+        installFailureJob?.cancel()
+        aaNoticeJob?.cancel()
+        installStateJob = null
+        installFailureJob = null
+        aaNoticeJob = null
+        uiScope?.cancel()
+        uiScope = null
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
-    // ARMADO DE LA PANTALLA
+    // INTERFAZ
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun buildContent(): View {
@@ -192,7 +262,7 @@ class PlayStoreActivity : Activity() {
             intArrayOf(colorBgTop, colorBgBottom)
         )
 
-        // ── Encabezado: volver · título · modo ──
+        // ── Encabezado: volver · título · recargar (↻) · modo ──
         val header = LinearLayout(this)
         header.orientation = LinearLayout.HORIZONTAL
         header.gravity = Gravity.CENTER_VERTICAL
@@ -221,6 +291,22 @@ class PlayStoreActivity : Activity() {
         title.ellipsize = TextUtils.TruncateAt.END
         header.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
+        reloadBtn = TextView(this)
+        reloadBtn.text = "↻"
+        reloadBtn.textSize = 19f
+        reloadBtn.setTextColor(colorTextPrimary)
+        reloadBtn.gravity = Gravity.CENTER
+        reloadBtn.minWidth = dp(40)
+        reloadBtn.minHeight = dp(40)
+        reloadBtn.isClickable = true
+        reloadBtn.isFocusable = true
+        reloadBtn.contentDescription = PlayStoreText.t(PlayStoreText.Key.REFRESH, lang)
+        reloadBtn.background = focusOnly(dp(20))
+        reloadBtn.setOnClickListener { forceReloadCatalog() }
+        val reloadLp = LinearLayout.LayoutParams(dp(40), dp(40))
+        reloadLp.marginEnd = dp(6)
+        header.addView(reloadBtn, reloadLp)
+
         modeBadge = TextView(this)
         modeBadge.textSize = 11f
         modeBadge.typeface = Typeface.DEFAULT_BOLD
@@ -237,14 +323,55 @@ class PlayStoreActivity : Activity() {
         hint.text = PlayStoreText.t(PlayStoreText.Key.HINT, lang)
         hint.textSize = 12f
         hint.setTextColor(colorTextSecondary)
-        hint.setPaddingRelative(dp(16), 0, dp(16), dp(8))
+        hint.setPaddingRelative(dp(16), 0, dp(16), dp(6))
         hint.visibility = View.GONE
         root.addView(hint, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // ── Banner Actualizar todas (N) ──
+        updateAllBar = TextView(this)
+        updateAllBar.textSize = 13f
+        updateAllBar.typeface = Typeface.DEFAULT_BOLD
+        updateAllBar.setTextColor(colorCyanText)
+        updateAllBar.gravity = Gravity.CENTER
+        updateAllBar.setPaddingRelative(dp(14), dp(9), dp(14), dp(9))
+        updateAllBar.background = buttonBackground(colorCyan)
+        updateAllBar.isClickable = true
+        updateAllBar.isFocusable = true
+        updateAllBar.visibility = View.GONE
+        updateAllBar.setOnClickListener { onUpdateAllClicked() }
+        val updAllParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        updAllParams.marginStart = dp(12)
+        updAllParams.marginEnd = dp(12)
+        updAllParams.bottomMargin = dp(8)
+        root.addView(updateAllBar, updAllParams)
+
+        // ── Buscador ──
+        searchBox = EditText(this)
+        searchBox.hint = PlayStoreText.t(PlayStoreText.Key.SEARCH_HINT, lang)
+        searchBox.setHintTextColor(colorDisabledText)
+        searchBox.setTextColor(colorTextPrimary)
+        searchBox.textSize = 14f
+        searchBox.setSingleLine(true)
+        searchBox.background = rounded(colorSearch, dp(12))
+        searchBox.setPaddingRelative(dp(14), dp(10), dp(14), dp(10))
+        searchBox.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                filterQuery = s?.toString()?.trim().orEmpty()
+                renderCurrent()
+            }
+        })
+        val searchParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        searchParams.marginStart = dp(12)
+        searchParams.marginEnd = dp(12)
+        searchParams.bottomMargin = dp(8)
+        root.addView(searchBox, searchParams)
 
         // ── Lista ──
         list = LinearLayout(this)
         list.orientation = LinearLayout.VERTICAL
-        list.setPaddingRelative(dp(12), dp(4), dp(12), dp(16))
+        list.setPaddingRelative(dp(12), dp(2), dp(12), dp(14))
 
         scroll = ScrollView(this)
         scroll.isFillViewport = true
@@ -252,7 +379,7 @@ class PlayStoreActivity : Activity() {
         scroll.addView(list, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        // ── Pie discreto: Acceso a la tienda clásica de APKs directos ──
+        // ── Pie discreto: Tienda clásica (APKs directos) ──
         val classicStoreBtn = TextView(this)
         classicStoreBtn.text = if (lang == PlayStoreText.LANG_HE) "📦 חנות קלאסית (הורדה ישירה)"
             else if (lang == PlayStoreText.LANG_EN) "📦 Classic Store (Direct APKs)"
@@ -277,8 +404,48 @@ class PlayStoreActivity : Activity() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // DATOS: se leen en segundo plano, se pintan en el hilo principal
+    // RECARGA DE CATÁLOGO Y LECTURA EN SEGUNDO PLANO
     // ─────────────────────────────────────────────────────────────────────────
+
+    private fun forceReloadCatalog() {
+        if (syncingRemote) return
+        syncingRemote = true
+        reloadBtn.text = "…"
+        reloadBtn.alpha = 0.6f
+        reloadBtn.isEnabled = false
+        Toast.makeText(this, PlayStoreText.t(PlayStoreText.Key.REFRESHING, lang), Toast.LENGTH_SHORT).show()
+
+        val ctx = applicationContext
+        val exec = worker ?: return
+        try {
+            exec.execute {
+                val ok = try {
+                    FirebaseDeviceSync.pullPlayStoreConfig(ctx)
+                } catch (_: Exception) {
+                    false
+                }
+                ui.post {
+                    syncingRemote = false
+                    if (!isFinishing && !isDestroyed) {
+                        reloadBtn.text = "↻"
+                        reloadBtn.alpha = 1f
+                        reloadBtn.isEnabled = true
+                        requestsLoadedAt = 0L
+                        lastSignature = ""
+                        refresh()
+                        if (ok) {
+                            Toast.makeText(this, PlayStoreText.t(PlayStoreText.Key.SYNC_DONE, lang), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            syncingRemote = false
+            reloadBtn.text = "↻"
+            reloadBtn.alpha = 1f
+            reloadBtn.isEnabled = true
+        }
+    }
 
     private fun scheduleRefresh(delayMs: Long) {
         ui.removeCallbacks(refreshRunnable)
@@ -292,20 +459,42 @@ class PlayStoreActivity : Activity() {
         try {
             exec.execute {
                 var open = false
-                var mode = ""
-                var rows: List<Row> = emptyList()
+                var mode = PlayStoreCatalog.MODE_CLOSED
+                var rows: List<StoreRowModel> = emptyList()
                 try {
                     open = PlayStoreManager.isOpen(ctx)
                     mode = PlayStoreManager.mode(ctx)
-                    if (open) {
-                        rows = PlayStoreManager.items(ctx).map {
-                            Row(it, PlayStoreManager.isInstalled(ctx, it.app.packageName))
+                    val catalogApps = if (open) PlayStoreManager.listed(ctx) else emptyList()
+                    val serverPkgs = AuroraStoreManager.packages(ctx)
+                    val abis = AuroraStoreManager.deviceAbis()
+                    val installedSnapshots = collectInstalledSnapshots(ctx, serverPkgs)
+                    val pausedByStore = AuroraStoreManager.pausedByStore(ctx)
+                    val vigentReqPkgs = vigentRequests()
+                        .filter {
+                            it.estado == AppRequestManager.PENDIENTE || it.estado == AppRequestManager.APROBADA
                         }
+                        .map { it.packageName }
+                        .toSet()
+                    val activePlay = try {
+                        if (UpdateFlowManager.hasLiveFlow(ctx)) UpdateFlowManager.currentPackage(ctx) else null
+                    } catch (_: Exception) {
+                        null
                     }
+
+                    rows = UnifiedStoreLogic.buildRows(
+                        storeOpen = open,
+                        catalogApps = catalogApps,
+                        installedApps = installedSnapshots,
+                        serverPackages = serverPkgs,
+                        deviceAbis = abis,
+                        requestedPackages = vigentReqPkgs,
+                        pausedByStorePackages = pausedByStore,
+                        activeSilentPkg = activeSilentPkg,
+                        activeSilentProgress = activeSilentPct,
+                        activePlayPkg = activePlay
+                    )
                 } catch (e: Exception) {
-                    // Fallar cerrado: ante un error no se muestra nada que se pueda dudar.
-                    Log.w(TAG, "No se pudo leer la tienda; se muestra cerrada: ${e.message}")
-                    open = false
+                    Log.w(TAG, "No se pudo armar la Tienda: ${e.message}", e)
                     rows = emptyList()
                 }
                 val result = Snapshot(open, mode, rows)
@@ -317,14 +506,97 @@ class PlayStoreActivity : Activity() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            // El ejecutor ya se cerró: la pantalla se está yendo.
+        } catch (_: Exception) {
         }
     }
 
-    /** Los pedidos solo hacen falta si hay alguna app "a pedido" en la lista. */
+    private fun collectInstalledSnapshots(
+        ctx: Context,
+        serverPackages: Map<String, AuroraStoreCatalog.AuroraPackage>
+    ): List<InstalledAppSnapshot> {
+        val pm = ctx.packageManager
+        val prefs = PrefsHelper.getMdmPrefs(ctx)
+        val policyManager = PolicyManager(ctx)
+        val wlDecisions = try { WhitelistManager(ctx).allDecisions() } catch (_: Exception) { emptyMap() }
+        val blockPopular = try { policyManager.isBlockPopularNonKosherEnabled() } catch (_: Exception) { false }
+        val appController = AppController(ctx)
+
+        val pkgFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            PackageManager.MATCH_UNINSTALLED_PACKAGES
+        } else {
+            @Suppress("DEPRECATION")
+            PackageManager.GET_UNINSTALLED_PACKAGES
+        }
+        val pkgs = try {
+            pm.getInstalledPackages(pkgFlags)
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        val out = ArrayList<InstalledAppSnapshot>(pkgs.size)
+        for (pi in pkgs) {
+            val pkg = pi.packageName ?: continue
+            val ai = pi.applicationInfo ?: continue
+            val isActuallyInstalled = (ai.flags and ApplicationInfo.FLAG_INSTALLED) != 0
+            if (!isActuallyInstalled) continue
+
+            val vc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                pi.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                pi.versionCode.toLong()
+            }
+            val vn = pi.versionName ?: ""
+            val isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+            val isUpdatedSystem = (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            val isHidden = try { appController.isAppHidden(pkg) } catch (_: Exception) { prefs.getBoolean("hide_$pkg", false) }
+            val osSuspended = (ai.flags and AppController.FLAG_SUSPENDED) != 0
+            val isSuspended = osSuspended || try { appController.isAppSuspended(pkg) } catch (_: Exception) { false }
+            val isBlocked = isHidden ||
+                isSuspended ||
+                wlDecisions[pkg] == WhitelistManager.STATE_BLOCK ||
+                (blockPopular && PopularNonKosherApps.isPopularNonKosher(pkg)) ||
+                pkg in AppController.DEFAULT_BLOCKED_PACKAGES
+            val isStub = AndroidAutoStubs.isStub(ctx, pkg)
+            val isCritical = if (pkg in UnifiedStoreLogic.UPDATABLE_SYSTEM_ALLOWLIST) {
+                false
+            } else {
+                try { appController.isCritical(pkg) } catch (_: Exception) { false }
+            }
+            val label = try {
+                pm.getApplicationLabel(ai).toString().trim().ifEmpty { pkg }
+            } catch (_: Exception) {
+                pkg
+            }
+
+            // Solo leemos la firma instalada cuando existe variante en servidor más nueva, para evitar I/O innecesario.
+            val serverEntry = serverPackages[pkg]
+            val signer = if (!isBlocked && !isStub && serverEntry != null && serverEntry.versionCode > vc) {
+                ApkSignatureVerifier.installedSignerSha256(ctx, pkg)
+            } else {
+                null
+            }
+
+            out.add(
+                InstalledAppSnapshot(
+                    packageName = pkg,
+                    label = label,
+                    versionCode = vc,
+                    versionName = vn,
+                    isSystem = isSystem,
+                    isUpdatedSystem = isUpdatedSystem,
+                    isBlocked = isBlocked,
+                    isCritical = isCritical,
+                    isStub = isStub,
+                    signerSha256 = signer
+                )
+            )
+        }
+        return out
+    }
+
     private fun maybeLoadRequests(s: Snapshot) {
-        val needed = s.rows.any { it.item.state == PlayStoreManager.InstallState.REQUESTABLE }
+        val needed = s.rows.any { it.catalogStatus == PlayStoreCatalog.STATUS_REQUEST }
         val now = System.currentTimeMillis()
         if (!needed || now - requestsLoadedAt < REQUESTS_REFRESH_MS) return
         requestsLoadedAt = now
@@ -333,71 +605,113 @@ class PlayStoreActivity : Activity() {
                 ui.post {
                     if (!isFinishing && !isDestroyed) {
                         requests = PlayStoreRows.mergeRequests(fetched, sentHere, System.currentTimeMillis())
-                        renderCurrent()
+                        scheduleRefresh(50L)
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "No se pudieron leer los pedidos: ${e.message}")
+            Log.w(TAG, "No se pudieron leer pedidos: ${e.message}")
         }
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // PINTADO
-    // ─────────────────────────────────────────────────────────────────────────
 
     private fun vigentRequests(): List<AppRequestManager.Solicitud> =
         AppRequestManager.sinAprobacionesViejasDePlay(requests, System.currentTimeMillis())
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // RENDER
+    // ─────────────────────────────────────────────────────────────────────────
+
     private fun renderCurrent() {
         val s = snapshot ?: return
-        val vigentes = vigentRequests()
-        val sig = signature(s, vigentes)
+        val q = filterQuery.lowercase(Locale.ROOT)
+        val visibleRows = if (q.isEmpty()) {
+            s.rows
+        } else {
+            s.rows.filter {
+                it.label.lowercase(Locale.ROOT).contains(q) ||
+                    it.packageName.lowercase(Locale.ROOT).contains(q)
+            }
+        }
+        val updatable = UnifiedStoreLogic.silentUpdatableRows(s.rows)
+        val sig = signature(s, visibleRows, updatable.size)
         if (sig == lastSignature) return
         lastSignature = sig
 
         val keepY = scroll.scrollY
         list.removeAllViews()
 
-        if (!s.open) {
+        if (!s.open && s.rows.isEmpty()) {
             modeBadge.visibility = View.GONE
             hint.visibility = View.GONE
+            updateAllBar.visibility = View.GONE
+            searchBox.visibility = View.GONE
             showMessage(PlayStoreText.Key.CLOSED_TITLE, PlayStoreText.Key.CLOSED_BODY)
             return
         }
 
         modeBadge.text = PlayStoreText.modeLabel(s.mode, lang)
         modeBadge.visibility = View.VISIBLE
+        hint.text = if (s.open) {
+            PlayStoreText.t(PlayStoreText.Key.HINT, lang)
+        } else {
+            PlayStoreText.t(PlayStoreText.Key.CLOSED_UPDATES_ONLY, lang)
+        }
         hint.visibility = View.VISIBLE
+        searchBox.visibility = View.VISIBLE
 
-        if (s.rows.isEmpty()) {
+        if (updatable.isNotEmpty() && activeSilentPkg == null) {
+            updateAllBar.text = String.format(
+                Locale.US,
+                PlayStoreText.t(PlayStoreText.Key.UPDATE_ALL_FMT, lang),
+                updatable.size
+            )
+            updateAllBar.visibility = View.VISIBLE
+        } else {
+            updateAllBar.visibility = View.GONE
+        }
+
+        if (visibleRows.isEmpty()) {
             showMessage(PlayStoreText.Key.EMPTY, null)
             return
         }
 
         list.gravity = Gravity.TOP
-        for (row in s.rows) {
-            list.addView(buildRow(row, vigentes))
+        for (row in visibleRows) {
+            list.addView(buildRow(row))
         }
         scroll.post { scroll.scrollTo(0, keepY) }
     }
 
-    private fun signature(s: Snapshot, vigentes: List<AppRequestManager.Solicitud>): String {
+    private fun signature(s: Snapshot, visibleRows: List<StoreRowModel>, updatableCount: Int): String {
         val sb = StringBuilder()
         sb.append(s.open).append('|').append(s.mode).append('|').append(lang)
-        for (r in s.rows) {
-            val app = r.item.app
+            .append('|').append(filterQuery).append('|').append(updatableCount)
+            .append('|').append(activeSilentPkg ?: "")
+        for (r in visibleRows) {
             sb.append('\n')
-                .append(app.packageName).append(':')
-                .append(r.item.label).append(':')
-                .append(r.item.state.name).append(':')
-                .append(r.installed).append(':')
-                .append(PlayStoreRows.isRequested(vigentes, app.packageName)).append(':')
-                .append(app.access).append(':')
-                .append(app.status).append(':')
-                .append(app.iconUrl ?: "")
+                .append(r.packageName).append(':')
+                .append(r.label).append(':')
+                .append(r.action.name).append(':')
+                .append(r.installedVersionCode).append(':')
+                .append(r.availableVersionCode).append(':')
+                .append(r.source).append(':')
+                .append(r.access).append(':')
+                .append(r.iconUrl ?: "")
         }
         return sb.toString()
+    }
+
+    private fun updateActiveButtonProgress(pkg: String?, pct: Int?) {
+        if (pkg == null) return
+        val tag = "btn:$pkg"
+        val btn = list.findViewWithTag<TextView>(tag) ?: return
+        val row = snapshot?.rows?.firstOrNull { it.packageName == pkg }
+        val baseLabel = if (row?.installed == true) {
+            PlayStoreText.t(PlayStoreText.Key.UPDATING, lang)
+        } else {
+            PlayStoreText.t(PlayStoreText.Key.INSTALLING, lang)
+        }
+        btn.text = if (pct != null && pct in 0..100) "$pct%" else baseLabel
     }
 
     private fun showMessage(titleKey: PlayStoreText.Key, bodyKey: PlayStoreText.Key?) {
@@ -422,12 +736,7 @@ class PlayStoreActivity : Activity() {
         }
     }
 
-    private fun buildRow(row: Row, vigentes: List<AppRequestManager.Solicitud>): View {
-        val item = row.item
-        val app = item.app
-        val requested = PlayStoreRows.isRequested(vigentes, app.packageName)
-        val action = actionFor(item.state, requested)
-
+    private fun buildRow(row: StoreRowModel): View {
         val card = LinearLayout(this)
         card.orientation = LinearLayout.HORIZONTAL
         card.gravity = Gravity.CENTER_VERTICAL
@@ -437,17 +746,15 @@ class PlayStoreActivity : Activity() {
         cardParams.bottomMargin = dp(8)
         card.layoutParams = cardParams
 
-        // Ícono
         val iconParams = LinearLayout.LayoutParams(dp(46), dp(46))
         iconParams.marginEnd = dp(10)
         card.addView(buildIcon(row), iconParams)
 
-        // Nombre + aclaraciones
         val texts = LinearLayout(this)
         texts.orientation = LinearLayout.VERTICAL
 
         val name = TextView(this)
-        name.text = item.label
+        name.text = row.label
         name.textSize = 15f
         name.typeface = Typeface.DEFAULT_BOLD
         name.setTextColor(colorTextPrimary)
@@ -455,11 +762,11 @@ class PlayStoreActivity : Activity() {
         name.ellipsize = TextUtils.TruncateAt.END
         texts.addView(name, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        val tags = PlayStoreRows.tagsFor(app.access, app.status, row.installed, item.state == PlayStoreManager.InstallState.REQUESTABLE)
-        if (tags.isNotEmpty()) {
+        val subtitleStr = buildSubtitle(row)
+        if (subtitleStr.isNotEmpty()) {
             val meta = TextView(this)
-            meta.text = PlayStoreRows.subtitle(tags, lang)
-            meta.textSize = 11f
+            meta.text = subtitleStr
+            meta.textSize = 11.5f
             meta.setTextColor(colorTextSecondary)
             meta.maxLines = 2
             meta.ellipsize = TextUtils.TruncateAt.END
@@ -467,23 +774,71 @@ class PlayStoreActivity : Activity() {
         }
         card.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        // Botón
         val buttonParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         buttonParams.marginStart = dp(8)
-        card.addView(buildButton(action, item), buttonParams)
+        card.addView(buildButton(row), buttonParams)
 
         return card
     }
 
-    private fun buildIcon(row: Row): View {
-        val pkg = row.item.app.packageName
+    private fun buildSubtitle(row: StoreRowModel): String {
+        val parts = ArrayList<String>(4)
+        when (row.action) {
+            RowAction.UPDATE_SILENT, RowAction.UPDATE_PLAY -> {
+                val vOld = row.installedVersionName.ifBlank { row.installedVersionCode.toString() }
+                val vNew = row.availableVersionName.ifBlank { row.availableVersionCode.toString() }
+                if (vOld.isNotBlank() && vNew.isNotBlank() && vOld != vNew) {
+                    parts.add("v$vOld → v$vNew")
+                } else if (vNew.isNotBlank()) {
+                    parts.add("v$vNew")
+                }
+                val sizeTxt = AuroraStoreCatalog.formatSizeMb(row.sizeBytes)
+                if (sizeTxt.isNotEmpty()) parts.add(sizeTxt)
+                if (row.action == RowAction.UPDATE_PLAY) {
+                    parts.add(PlayStoreText.t(PlayStoreText.Key.VIA_GOOGLE_PLAY, lang))
+                } else {
+                    val src = UnifiedStoreLogic.sourceDisplayName(row.source)
+                    if (src.isNotEmpty()) parts.add(src)
+                }
+            }
+            RowAction.OPEN_UP_TO_DATE -> {
+                parts.add(PlayStoreText.t(PlayStoreText.Key.UP_TO_DATE, lang))
+            }
+            RowAction.INSTALL_SILENT, RowAction.INSTALL_PLAY -> {
+                if (row.availableVersionName.isNotBlank()) parts.add("v${row.availableVersionName}")
+                val sizeTxt = AuroraStoreCatalog.formatSizeMb(row.sizeBytes)
+                if (sizeTxt.isNotEmpty()) parts.add(sizeTxt)
+                if (row.action == RowAction.INSTALL_PLAY) {
+                    parts.add(PlayStoreText.t(PlayStoreText.Key.VIA_GOOGLE_PLAY, lang))
+                } else {
+                    val src = UnifiedStoreLogic.sourceDisplayName(row.source)
+                    if (src.isNotEmpty()) parts.add(src)
+                }
+            }
+            RowAction.REQUEST, RowAction.REQUESTED, RowAction.INSTALLING -> Unit
+        }
+
+        val accessTags = PlayStoreRows.tagsFor(
+            row.access,
+            row.catalogStatus,
+            row.installed,
+            row.action == RowAction.REQUEST || row.action == RowAction.REQUESTED
+        )
+        val tagSub = PlayStoreRows.subtitle(accessTags, lang)
+        if (tagSub.isNotEmpty()) parts.add(tagSub)
+
+        return parts.joinToString(" · ")
+    }
+
+    private fun buildIcon(row: StoreRowModel): View {
+        val pkg = row.packageName
         val size = dp(46)
 
         val box = FrameLayout(this)
         box.background = rounded(PlayStoreRows.tileColor(pkg), dp(12))
 
         val letter = TextView(this)
-        letter.text = PlayStoreRows.initial(row.item.label)
+        letter.text = PlayStoreRows.initial(row.label)
         letter.gravity = Gravity.CENTER
         letter.textSize = 20f
         letter.typeface = Typeface.DEFAULT_BOLD
@@ -503,7 +858,7 @@ class PlayStoreActivity : Activity() {
         image.tag = pkg
         box.addView(image, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
-        PlayStoreIcons.load(this, pkg, row.installed, row.item.app.iconUrl, size) { bitmap ->
+        PlayStoreIcons.load(this, pkg, row.installed, row.iconUrl, size) { bitmap ->
             if (image.tag == pkg) {
                 image.setImageBitmap(bitmap)
                 image.visibility = View.VISIBLE
@@ -513,56 +868,56 @@ class PlayStoreActivity : Activity() {
         return box
     }
 
-    private fun actionFor(state: PlayStoreManager.InstallState, requested: Boolean): Action = when (state) {
-        PlayStoreManager.InstallState.NOT_INSTALLED -> Action.INSTALL
-        PlayStoreManager.InstallState.INSTALLING -> Action.INSTALLING
-        PlayStoreManager.InstallState.INSTALLED -> Action.OPEN
-        PlayStoreManager.InstallState.REQUESTABLE -> if (requested) Action.REQUESTED else Action.REQUEST
-    }
-
-    private fun buildButton(action: Action, item: PlayStoreManager.StoreItem): TextView {
-        val enabled = action != Action.INSTALLING && action != Action.REQUESTED
-        val textKey = when (action) {
-            Action.INSTALL -> PlayStoreText.Key.INSTALL
-            Action.INSTALLING -> PlayStoreText.Key.INSTALLING
-            Action.OPEN -> PlayStoreText.Key.OPEN
-            Action.REQUEST -> PlayStoreText.Key.REQUEST
-            Action.REQUESTED -> PlayStoreText.Key.REQUESTED
+    private fun buildButton(row: StoreRowModel): TextView {
+        val enabled = row.action != RowAction.INSTALLING && row.action != RowAction.REQUESTED
+        val label = when (row.action) {
+            RowAction.INSTALL_SILENT, RowAction.INSTALL_PLAY -> PlayStoreText.t(PlayStoreText.Key.INSTALL, lang)
+            RowAction.UPDATE_SILENT, RowAction.UPDATE_PLAY -> PlayStoreText.t(PlayStoreText.Key.UPDATE, lang)
+            RowAction.OPEN_UP_TO_DATE -> PlayStoreText.t(PlayStoreText.Key.OPEN, lang)
+            RowAction.REQUEST -> PlayStoreText.t(PlayStoreText.Key.REQUEST, lang)
+            RowAction.REQUESTED -> PlayStoreText.t(PlayStoreText.Key.REQUESTED, lang)
+            RowAction.INSTALLING -> {
+                val pct = row.progressPct
+                if (pct != null && pct in 0..100) "$pct%"
+                else if (row.installed) PlayStoreText.t(PlayStoreText.Key.UPDATING, lang)
+                else PlayStoreText.t(PlayStoreText.Key.INSTALLING, lang)
+            }
         }
-        val fill = when (action) {
-            Action.INSTALL -> colorGreen
-            Action.OPEN -> colorBlue
-            Action.REQUEST -> colorAmber
+        val fill = when (row.action) {
+            RowAction.INSTALL_SILENT, RowAction.INSTALL_PLAY -> colorGreen
+            RowAction.UPDATE_SILENT, RowAction.UPDATE_PLAY -> colorAmber
+            RowAction.OPEN_UP_TO_DATE -> colorBlue
+            RowAction.REQUEST -> colorAmber
             else -> colorDisabled
         }
-        val textColor = when (action) {
-            Action.INSTALL -> colorGreenText
-            Action.OPEN -> colorTextPrimary
-            Action.REQUEST -> colorAmberText
+        val textColor = when (row.action) {
+            RowAction.INSTALL_SILENT, RowAction.INSTALL_PLAY -> colorGreenText
+            RowAction.UPDATE_SILENT, RowAction.UPDATE_PLAY -> colorAmberText
+            RowAction.OPEN_UP_TO_DATE -> colorTextPrimary
+            RowAction.REQUEST -> colorAmberText
             else -> colorDisabledText
         }
-        val label = PlayStoreText.t(textKey, lang)
 
         val button = TextView(this)
+        button.tag = "btn:${row.packageName}"
         button.text = label
         button.textSize = 13f
         button.typeface = Typeface.DEFAULT_BOLD
         button.setTextColor(textColor)
         button.gravity = Gravity.CENTER
-        button.minWidth = dp(84)
+        button.minWidth = dp(88)
         button.minHeight = dp(38)
         button.setPaddingRelative(dp(12), 0, dp(12), 0)
-        button.contentDescription = label + " " + item.label
+        button.contentDescription = "$label ${row.label}"
         button.isEnabled = enabled
         button.isClickable = enabled
         button.isFocusable = enabled
         if (enabled) {
             button.background = buttonBackground(fill)
             button.setOnClickListener {
-                // Se apaga en el acto: dos toques seguidos no pueden mandar dos pedidos.
                 button.isEnabled = false
                 button.isClickable = false
-                onAction(action, item)
+                onAction(row)
             }
         } else {
             button.background = rounded(fill, dp(12))
@@ -571,23 +926,122 @@ class PlayStoreActivity : Activity() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ACCIONES
+    // ACCIONES Y RESPALDO POR GOOGLE PLAY
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun onAction(action: Action, item: PlayStoreManager.StoreItem) {
-        when (action) {
-            Action.INSTALL -> install(item)
-            Action.OPEN -> openApp(item)
-            Action.REQUEST -> requestApp(item)
-            Action.INSTALLING, Action.REQUESTED -> Unit
+    private fun onAction(row: StoreRowModel) {
+        when (row.action) {
+            RowAction.INSTALL_SILENT -> {
+                val err = AuroraStoreManager.startInstallOrUpdate(applicationContext, row.packageName)
+                if (err != null) {
+                    Toast.makeText(this, err, Toast.LENGTH_LONG).show()
+                }
+                lastSignature = ""
+                scheduleRefresh(120L)
+            }
+            RowAction.UPDATE_SILENT -> {
+                val err = AuroraStoreManager.startSilentUpdate(applicationContext, row.packageName, row.variant, row.label)
+                if (err != null) {
+                    Toast.makeText(this, err, Toast.LENGTH_LONG).show()
+                }
+                lastSignature = ""
+                scheduleRefresh(120L)
+            }
+            RowAction.INSTALL_PLAY -> showPlayFallbackDialog(row.packageName, row.label, isInstall = true)
+            RowAction.UPDATE_PLAY -> showPlayFallbackDialog(row.packageName, row.label, isInstall = false)
+            RowAction.OPEN_UP_TO_DATE -> openApp(row)
+            RowAction.REQUEST -> requestApp(row)
+            RowAction.INSTALLING, RowAction.REQUESTED -> Unit
         }
     }
 
-    private fun install(item: PlayStoreManager.StoreItem) {
-        // Toda la comprobación (tienda abierta, app ofrecida, espacio, accesibilidad…) vive
-        // en PlayStoreManager.install / UpdateFlowManager.startInstall. Devuelve null si el
-        // flujo arrancó (la pantalla se tapa sola) o el motivo, ya escrito para el usuario.
-        val error = PlayStoreManager.install(applicationContext, item.app.packageName)
+    private fun onUpdateAllClicked() {
+        val rows = snapshot?.rows ?: return
+        val (count, err) = AuroraStoreManager.startUpdateAllRows(applicationContext, rows)
+        if (err != null) {
+            Toast.makeText(this, err, Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(this, "Iniciando $count actualización(es) en silencio…", Toast.LENGTH_SHORT).show()
+        }
+        lastSignature = ""
+        scheduleRefresh(150L)
+    }
+
+    private fun showPlayFallbackDialog(
+        packageName: String,
+        label: String,
+        isInstall: Boolean,
+        extraPrefix: String? = null
+    ) {
+        val acctState = GoogleAccountGate.state(this)
+        val sb = StringBuilder()
+        if (!extraPrefix.isNullOrBlank()) {
+            sb.append(extraPrefix).append("\n\n")
+        }
+        sb.append(PlayStoreText.t(PlayStoreText.Key.PLAY_FALLBACK_BODY, lang))
+        when (acctState) {
+            GoogleAccountGate.State.NO_ACCOUNT -> {
+                sb.append("\n\n").append(PlayStoreText.t(PlayStoreText.Key.PLAY_FALLBACK_NO_ACCOUNT, lang))
+            }
+            GoogleAccountGate.State.BLOCKED -> {
+                sb.append("\n\n").append(PlayStoreText.t(PlayStoreText.Key.PLAY_FALLBACK_ACCOUNT_BLOCKED, lang))
+            }
+            else -> Unit
+        }
+
+        val builder = AlertDialog.Builder(this)
+            .setTitle("${PlayStoreText.t(PlayStoreText.Key.PLAY_FALLBACK_TITLE, lang)}: $label")
+            .setMessage(sb.toString())
+            .setNegativeButton(PlayStoreText.t(PlayStoreText.Key.CANCEL, lang)) { _, _ ->
+                lastSignature = ""
+                scheduleRefresh(100L)
+            }
+            .setPositiveButton(PlayStoreText.t(PlayStoreText.Key.PLAY_FALLBACK_CONTINUE, lang)) { _, _ ->
+                launchPlayFlow(packageName, isInstall)
+            }
+
+        if (acctState == GoogleAccountGate.State.NO_ACCOUNT) {
+            builder.setNeutralButton(PlayStoreText.t(PlayStoreText.Key.PLAY_FALLBACK_ADD_ACCOUNT, lang)) { _, _ ->
+                GoogleAccountGate.startSignIn(this)
+            }
+        }
+        builder.setOnCancelListener {
+            lastSignature = ""
+            scheduleRefresh(100L)
+        }
+        builder.show()
+    }
+
+    private fun showSilentFailedPlayOfferDialog(failure: StoreInstallManager.InstallFailure) {
+        val prefix = "${failure.label}: ${failure.error}\n\n${PlayStoreText.t(PlayStoreText.Key.SILENT_FAILED_PLAY_PROMPT, lang)}"
+        showPlayFallbackDialog(
+            packageName = failure.packageName,
+            label = failure.label,
+            isInstall = !failure.isUpdate,
+            extraPrefix = prefix
+        )
+    }
+
+    private fun showSimpleNoticeDialog(title: String, message: String) {
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton(PlayStoreText.t(PlayStoreText.Key.OK, lang), null)
+            .show()
+    }
+
+    private fun launchPlayFlow(packageName: String, isInstall: Boolean) {
+        val error = if (isInstall) {
+            PlayStoreManager.install(applicationContext, packageName)
+        } else {
+            UpdateFlowManager.start(
+                context = applicationContext,
+                packageName = packageName,
+                source = UpdateFlowManager.SOURCE_LOCAL,
+                cancelable = true,
+                routePref = UpdateRoutePlanner.PREF_PLAY
+            )
+        }
         if (error != null) {
             Toast.makeText(this, error, Toast.LENGTH_LONG).show()
         }
@@ -595,9 +1049,9 @@ class PlayStoreActivity : Activity() {
         scheduleRefresh(150L)
     }
 
-    private fun openApp(item: PlayStoreManager.StoreItem) {
+    private fun openApp(row: StoreRowModel) {
         try {
-            val launch = packageManager.getLaunchIntentForPackage(item.app.packageName)
+            val launch = packageManager.getLaunchIntentForPackage(row.packageName)
             if (launch == null) {
                 Toast.makeText(this, PlayStoreText.t(PlayStoreText.Key.OPEN_FAILED, lang), Toast.LENGTH_LONG).show()
             } else {
@@ -605,30 +1059,29 @@ class PlayStoreActivity : Activity() {
                 startActivity(launch)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "No se pudo abrir ${item.app.packageName}: ${e.message}")
+            Log.w(TAG, "No se pudo abrir ${row.packageName}: ${e.message}")
             Toast.makeText(this, PlayStoreText.t(PlayStoreText.Key.OPEN_FAILED, lang), Toast.LENGTH_LONG).show()
         }
         lastSignature = ""
         scheduleRefresh(150L)
     }
 
-    private fun requestApp(item: PlayStoreManager.StoreItem) {
+    private fun requestApp(row: StoreRowModel) {
         val ctx = applicationContext
         val verdict = FirebaseDeviceSync.enviarSolicitudApp(
             ctx,
-            item.app.packageName,
-            item.label,
+            row.packageName,
+            row.label,
             null,
             PlayStoreManager.offeredPackages(ctx),
             vigentRequests(),
             AppRequestManager.FUENTE_PLAY
         )
-        // Siempre se dice algo: un botón que no contesta es el bug de B.28/B.42/B.54.
         Toast.makeText(this, AppRequestManager.motivo(verdict, lang), Toast.LENGTH_LONG).show()
         if (verdict == AppRequestManager.Veredicto.OK) {
             val mine = AppRequestManager.Solicitud(
-                packageName = item.app.packageName,
-                label = item.label,
+                packageName = row.packageName,
+                label = row.label,
                 estado = AppRequestManager.PENDIENTE,
                 pedidaEnMs = System.currentTimeMillis(),
                 fuente = AppRequestManager.FUENTE_PLAY
@@ -638,7 +1091,7 @@ class PlayStoreActivity : Activity() {
             requests = requests.filterNot { it.packageName == mine.packageName } + mine
         }
         lastSignature = ""
-        renderCurrent()
+        scheduleRefresh(50L)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -668,7 +1121,6 @@ class PlayStoreActivity : Activity() {
         return Color.rgb(r, g, b)
     }
 
-    /** Botón con estado enfocado (para teclas / cruceta), apretado y normal. */
     private fun buttonBackground(fill: Int): StateListDrawable {
         val states = StateListDrawable()
         states.addState(intArrayOf(android.R.attr.state_focused), roundedRing(fill, dp(12), colorTextPrimary, dp(2)))
@@ -677,7 +1129,6 @@ class PlayStoreActivity : Activity() {
         return states
     }
 
-    /** Fondo invisible que solo se marca cuando el elemento tiene el foco (cruceta). */
     private fun focusOnly(radiusPx: Int): StateListDrawable {
         val states = StateListDrawable()
         states.addState(intArrayOf(android.R.attr.state_focused), rounded(0x33FFFFFF, radiusPx))

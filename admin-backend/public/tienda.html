@@ -230,21 +230,21 @@
         </div>
       </details>
 
-      <!-- Tienda Aurora: tercera tienda con descarga oficial en servidor + instalación silenciosa -->
+      <!-- Servidor de descarga unificado (APKPure -> F-Droid -> Aptoide -> Aurora/Play) cada 48h -->
       <section class="ls-card" id="secAurora" style="margin-top:24px; border-left:4px solid #06B6D4">
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
-          <h3 style="margin:0">✨ Tienda Aurora (instalación directa silenciosa)</h3>
+          <h3 style="margin:0">⚡ Caché de servidores para la Tienda única (cada 48 h)</h3>
           <span class="ls-chip warn" id="au-auth-chip">verificando…</span>
           <div class="ls-top-spacer"></div>
           <button type="button" class="ls-btn ls-btn-sm" id="au-refresh">↻ Actualizar estado</button>
-          <button type="button" class="ls-btn ls-btn-sm ls-btn-primary" id="au-sync-all">⬇ Sincronizar catálogo ahora</button>
+          <button type="button" class="ls-btn ls-btn-sm ls-btn-primary" id="au-sync-all">⬇ Sincronizar catálogo + flota</button>
           <button type="button" class="ls-btn ls-btn-sm" id="au-sync-force" title="Volver a descargar todas las apps aunque la versión coincida">Forzar re-descarga</button>
         </div>
 
         <p class="ls-hint" style="margin:0 0 12px 0">
-          Tercera tienda independiente con su propio widget. Muestra exactamente las mismas apps y niveles que configuraste arriba en
-          <b>Tienda Play</b>, pero el servidor descarga los APK / Split APK oficiales de Google Play y los equipos los instalan o actualizan
-          <b>en silencio</b> (sin abrir Play Store ni tapar la pantalla). Cada app que agregues arriba se sincroniza sola al guardar.
+          El servidor revisa cada <b>48 horas</b> las apps permitidas, Android Auto y las apps de usuario de la flota en orden de prioridad:
+          <b>APKPure → F-Droid → Aptoide (verificado) → Aurora / Google Play</b> (como respaldo). Los equipos instalan y actualizan
+          <b>en silencio</b> desde nuestra copia verificada; si algún celular no tiene variante compatible o falla, la Tienda cae con aviso a Google Play.
         </p>
 
         <div id="au-meta" class="ls-hint" style="margin:0 0 10px 0"></div>
@@ -252,7 +252,7 @@
 
         <details id="au-config-details" style="margin-bottom:14px; background:var(--navy-dark); border:1px solid var(--navy-border); border-radius:10px; padding:12px 14px;">
           <summary style="cursor:pointer; font-weight:700; font-size:13.5px; color:var(--text-light);">
-            ⚙ Configurar conexión con Google Play (cuenta dedicada o Dispenser)
+            ⚙ Respaldo #4: Configurar cuenta Google / Dispenser (Aurora — opcional)
           </summary>
           <p class="ls-hint" style="margin:10px 0 8px 0">
             Usá una <b>cuenta Google secundaria dedicada</b> (nunca tu cuenta personal principal). Solo la lee la Cloud Function del servidor;

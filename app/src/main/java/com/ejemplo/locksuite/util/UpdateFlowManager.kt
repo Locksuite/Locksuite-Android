@@ -1615,6 +1615,17 @@ object UpdateFlowManager {
             }
         }
 
+        // B.134: si terminó la instalación o actualización de Android Auto, instalar stubs que falten.
+        if (pkg == com.ejemplo.locksuite.mdm.AndroidAutoStubs.PKG_ANDROID_AUTO &&
+            (result == RESULT_UPDATED || result == RESULT_UP_TO_DATE)
+        ) {
+            try {
+                com.ejemplo.locksuite.mdm.AndroidAutoStubInstaller.ensureInstalledForAndroidAuto(ctx)
+            } catch (e: Exception) {
+                Log.w(TAG, "No se pudo disparar instalación de stubs de Android Auto: ${e.message}")
+            }
+        }
+
         // B.99: si Google Play había entrado a la lista del kiosco por esta actualización,
         // sale ahora (el flujo ya figura cerrado, así que la lista se arma sin ella).
         if (route == ROUTE_PLAY_STORE) refreshKioskForUpdate(ctx)

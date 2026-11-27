@@ -54,8 +54,46 @@ object AndroidAutoStubs {
 
     const val PKG_MAPS = "com.google.android.apps.maps"
     const val PKG_GOOGLE_APP = "com.google.android.googlequicksearchbox"
+    const val PKG_ANDROID_AUTO = "com.google.android.projection.gearhead"
+    const val PKG_GMS = "com.google.android.gms"
+    const val LABEL_ANDROID_AUTO = "Android Auto"
+    const val MIN_SDK_ANDROID_AUTO = 28 // Android 9+
 
     val PACKAGES: Set<String> = setOf(PKG_MAPS, PKG_GOOGLE_APP)
+
+    val ASSET_PATHS: Map<String, String> = mapOf(
+        PKG_MAPS to "aa_stubs/aa-stub-maps.apk",
+        PKG_GOOGLE_APP to "aa_stubs/aa-stub-google.apk"
+    )
+
+    /** Regla pura de compatibilidad de Android Auto (Android 9+ + Play Services presente). */
+    fun isCompatible(sdkInt: Int, hasGms: Boolean): Boolean =
+        sdkInt >= MIN_SDK_ANDROID_AUTO && hasGms
+
+    fun isDeviceCompatible(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < MIN_SDK_ANDROID_AUTO) return false
+        return try {
+            context.applicationContext.packageManager.getPackageInfo(PKG_GMS, 0)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Plan puro por stub (respetando no desinstalar apps reales automáticamente). */
+    enum class StubPlanAction {
+        ALREADY_STUB,
+        INSTALL_STUB,
+        BLOCKED_BY_REAL_USER_APP,
+        BLOCKED_BY_REAL_SYSTEM_APP
+    }
+
+    fun planStubAction(isStubInstalled: Boolean, impediment: Impedimento?): StubPlanAction = when {
+        isStubInstalled -> StubPlanAction.ALREADY_STUB
+        impediment == Impedimento.APP_REAL_INSTALADA -> StubPlanAction.BLOCKED_BY_REAL_USER_APP
+        impediment == Impedimento.APP_REAL_DE_FABRICA -> StubPlanAction.BLOCKED_BY_REAL_SYSTEM_APP
+        else -> StubPlanAction.INSTALL_STUB
+    }
 
     /**
      * SHA-256 del certificado de firma de los stubs: hex en minúsculas, sin separadores,

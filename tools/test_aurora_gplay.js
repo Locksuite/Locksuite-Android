@@ -329,6 +329,7 @@ test("aurora_sync deduplicates identical universal APK, splits multi-ABI APKs, s
     sessions: { arm64_v8a: mockSession("64", Buffer.from("SAME-UNIVERSAL-APK")), armeabi_v7a: mockSession("32", Buffer.from("SAME-UNIVERSAL-APK")) },
     db,
     bucket,
+    mirrorProviders: [],
   });
   assert.strictEqual(r1.ok, true);
   assert.deepStrictEqual(r1.variants, ["universal"]);
@@ -344,6 +345,7 @@ test("aurora_sync deduplicates identical universal APK, splits multi-ABI APKs, s
     },
     db,
     bucket,
+    mirrorProviders: [],
   });
   assert.strictEqual(r1Skip.upToDate, true);
 
@@ -356,6 +358,7 @@ test("aurora_sync deduplicates identical universal APK, splits multi-ABI APKs, s
     },
     db,
     bucket,
+    mirrorProviders: [],
   });
   assert.strictEqual(r2.ok, true);
   assert.deepStrictEqual(r2.variants.sort(), ["arm64_v8a", "armeabi_v7a"]);
@@ -372,6 +375,7 @@ test("aurora_sync deduplicates identical universal APK, splits multi-ABI APKs, s
     },
     db,
     bucket,
+    mirrorProviders: [],
   });
   assert.strictEqual(rFail.ok, false);
   assert.strictEqual(rFail.preservedPrevious, true);

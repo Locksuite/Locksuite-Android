@@ -59,7 +59,7 @@ class PlayStoreUiLogicTest {
     @Test
     fun unIdiomaDesconocidoOAusenteCaeEnEspanol() {
         for (lang in listOf(null, "", "fr", "ES")) {
-            assertEquals("Tienda Play", PlayStoreText.t(PlayStoreText.Key.TITLE, lang))
+            assertEquals("Tienda", PlayStoreText.t(PlayStoreText.Key.TITLE, lang))
         }
     }
 

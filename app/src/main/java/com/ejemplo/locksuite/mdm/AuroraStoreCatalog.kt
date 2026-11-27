@@ -25,7 +25,9 @@ object AuroraStoreCatalog {
         val versionName: String,
         val splitCount: Int,
         val bundleFormat: String,
-        val abis: List<String>
+        val abis: List<String>,
+        val source: String = "",
+        val signerSha256: String? = null
     )
 
     data class AuroraPackage(
@@ -37,8 +39,14 @@ object AuroraStoreCatalog {
         val error: String?,
         val updatedAt: Long,
         val hasObb: Boolean,
-        val variants: Map<String, AuroraVariant>
+        val variants: Map<String, AuroraVariant>,
+        val primarySource: String = "",
+        val latestVersionCode: Long = 0L,
+        val latestVersionName: String = ""
     )
+
+    fun effectiveLatestVersionCode(pkg: AuroraPackage?, variant: AuroraVariant?): Long =
+        maxOf(pkg?.latestVersionCode ?: 0L, pkg?.versionCode ?: 0L, variant?.versionCode ?: 0L)
 
     enum class ItemAction {
         INSTALL,
@@ -110,6 +118,9 @@ object AuroraStoreCatalog {
         val hasObb = optBool(m, "hasObb")
         val pkgVc = optLong(m, "versionCode", 0L)
         val pkgVn = optString(m, "versionName")
+        val primarySource = optString(m, "primarySource").lowercase(Locale.ROOT)
+        val latestVc = optLong(m, "latestVersionCode", pkgVc)
+        val latestVn = optString(m, "latestVersionName").ifEmpty { pkgVn }
 
         val variantsMap = asMap(m["variants"])
         val variants = LinkedHashMap<String, AuroraVariant>()
@@ -130,7 +141,10 @@ object AuroraStoreCatalog {
             error = error,
             updatedAt = updatedAt,
             hasObb = hasObb,
-            variants = variants
+            variants = variants,
+            primarySource = primarySource,
+            latestVersionCode = latestVc,
+            latestVersionName = latestVn
         )
     }
 
@@ -153,6 +167,9 @@ object AuroraStoreCatalog {
         val abis = (m["abis"] as? List<*>)
             ?.mapNotNull { (it as? String)?.trim()?.takeIf { s -> s.isNotEmpty() } }
             ?: emptyList()
+        val source = optString(m, "source").lowercase(Locale.ROOT)
+        val rawSigner = optString(m, "signerSha256").lowercase(Locale.ROOT)
+        val signerSha256 = if (SHA256_REGEX.matches(rawSigner)) rawSigner else null
         return AuroraVariant(
             key = key,
             apkUrl = url,
@@ -162,7 +179,9 @@ object AuroraStoreCatalog {
             versionName = vn,
             splitCount = splitCount,
             bundleFormat = bundleFormat,
-            abis = abis
+            abis = abis,
+            source = source,
+            signerSha256 = signerSha256
         )
     }
 

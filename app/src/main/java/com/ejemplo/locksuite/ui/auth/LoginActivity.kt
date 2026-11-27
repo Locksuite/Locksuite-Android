@@ -445,7 +445,7 @@ fun LoginScreen(
                         0
                     }
                     
-                    // Botón para Tienda Kosher
+                    // Botón único para Tienda (instalar + actualizar)
                     Button(
                         onClick = {
                             context.startActivity(com.ejemplo.locksuite.ui.playstore.PlayStoreActivity.intent(context))
@@ -455,25 +455,7 @@ fun LoginScreen(
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Text(
-                            text = if (LocaleManager.getLang() == "he") "חנות אפליקציות" else if (LocaleManager.getLang() == "en") "App Store" else "Tienda",
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    // Botón para Tienda Aurora (instalación directa silenciosa)
-                    Button(
-                        onClick = {
-                            context.startActivity(com.ejemplo.locksuite.ui.aurora.AuroraStoreActivity.intent(context))
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0E7490), contentColor = Color.White),
-                        modifier = Modifier.fillMaxWidth(0.85f),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            text = com.ejemplo.locksuite.ui.aurora.AuroraStoreText.t(
-                                com.ejemplo.locksuite.ui.aurora.AuroraStoreText.Key.TITLE,
-                                LocaleManager.getLang()
-                            ),
+                            text = if (LocaleManager.getLang() == "he") "חנות" else if (LocaleManager.getLang() == "en") "App Store" else "Tienda",
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -492,34 +474,7 @@ fun LoginScreen(
                         )
                     }
 
-                    // Botón para actualizar aplicaciones por Google Play
-                    //
-                    // Agregado el 16/8/2026. Antes, para actualizar WhatsApp o Waze
-                    // en un equipo con Play Store bloqueada había que pedírselo al
-                    // administrador desde el panel. Este botón hace exactamente el
-                    // mismo flujo protegido (pantalla tapada, clic automático,
-                    // Play Store cerrada y vuelta a bloquear al terminar), así que
-                    // el usuario puede actualizar solo sin que eso abra ni por un
-                    // segundo un camino para instalar lo que quiera.
-                    Button(
-                        onClick = { showAppUpdateDialog = true },
-                        enabled = updateProgress == null,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = navyMedium,
-                            contentColor = Color.White,
-                            disabledContainerColor = Color.White.copy(alpha = 0.1f),
-                            disabledContentColor = Color.White.copy(alpha = 0.4f)
-                        ),
-                        modifier = Modifier.fillMaxWidth(0.85f),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            text = if (LocaleManager.getLang() == "he") "עדכון אפליקציות" else if (LocaleManager.getLang() == "en") "Update apps" else "Actualizar apps",
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    // Botón para Actualizar
+                    // Botón para Actualizar LockSuite
                     Button(
                         onClick = {
                             // 19/11/2026 (B.125, T4): en el scope de PROCESO, no en el de la

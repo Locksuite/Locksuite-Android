@@ -270,10 +270,9 @@ class KosherLauncherActivity : ComponentActivity() {
                     null
                 )
             )
-            // Tienda Play (B.101) y Tienda Aurora (B.132): entradas del menú mientras la tienda esté abierta.
+            // Tienda única (B.101 / B.134): entrada única en el menú mientras la tienda esté abierta.
             if (com.ejemplo.locksuite.mdm.PlayStoreManager.isOpen(this)) {
                 lista.add(PlayStoreTile.item(this))
-                lista.add(AuroraStoreTile.item(this))
             }
             lista.sortedBy { NokiaIconSet.para(it.packageName, it.label).label.lowercase() }
         } catch (e: Exception) {
@@ -633,10 +632,9 @@ fun LauncherScreen(
             )
         )
 
-        // Tienda Play (B.101) y Tienda Aurora (B.132) en la grilla del lanzador kosher.
+        // Tienda única (B.101 / B.134) en la grilla del lanzador kosher.
         if (com.ejemplo.locksuite.mdm.PlayStoreManager.isOpen(context)) {
             list.add(PlayStoreTile.item(context))
-            list.add(AuroraStoreTile.item(context))
         }
 
         // Ordenar según prioridad solicitada por el usuario:
@@ -651,7 +649,7 @@ fun LauncherScreen(
                 pkg.contains("bluetooth") || lbl.lowercase().contains("bluetooth")) {
                 return 4
             }
-            if (item.packageName == PlayStoreTile.PACKAGE || item.packageName == AuroraStoreTile.PACKAGE) {
+            if (item.packageName == PlayStoreTile.PACKAGE) {
                 return 2
             }
             if (lbl == "Galería" || lbl == "Archivos" || lbl == "Música" || lbl == "Grabadora") {

@@ -164,7 +164,7 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
                     e.printStackTrace()
                 }
                 try {
-                    com.ejemplo.locksuite.util.FirebaseDeviceSync.pullPlayStoreConfig(applicationContext)
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.pullPlayStoreConfigIfDue(applicationContext)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }

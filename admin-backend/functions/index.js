@@ -1287,19 +1287,22 @@ exports.auroraStore = onRequest(
         }
         const secSnap = await db.ref(AURORA_SECRET_PATH).once("value");
         const secret = secSnap.val();
-        if (!secret) {
-          res.status(412).json({ error: "Configurá primero la cuenta o Dispenser de Google Play en Tienda Aurora." });
-          return;
-        }
-        let sessions;
-        try {
-          sessions = await auroraSync.createSessionsForSecret(secret);
-        } catch (err) {
-          throw { status: 400, message: "Error al iniciar sesión en Google Play: " + (err && err.message ? err.message : String(err)) };
-        }
+        let cachedSessions = null;
+        let sessionInitPromise = null;
+        const getSessions = async () => {
+          if (cachedSessions) return cachedSessions;
+          if (!secret) throw new Error("Aurora/Play no está configurado como respaldo #4.");
+          if (!sessionInitPromise) {
+            sessionInitPromise = auroraSync.createSessionsForSecret(secret).then((s) => {
+              cachedSessions = s;
+              return s;
+            });
+          }
+          return sessionInitPromise;
+        };
         const result = await auroraSync.syncSinglePackage({
           packageName: pkg,
-          sessions,
+          getSessions,
           db,
           bucket,
           force: !!body.force,
@@ -1312,10 +1315,6 @@ exports.auroraStore = onRequest(
       if (action === "syncCatalog") {
         const secSnap = await db.ref(AURORA_SECRET_PATH).once("value");
         const secret = secSnap.val();
-        if (!secret) {
-          res.status(412).json({ error: "Configurá primero la cuenta o Dispenser de Google Play en Tienda Aurora." });
-          return;
-        }
 
         const force = !!body.force;
         const limitRaw = Number(body.limit);
@@ -1353,12 +1352,19 @@ exports.auroraStore = onRequest(
           return;
         }
 
-        let sessions;
-        try {
-          sessions = await auroraSync.createSessionsForSecret(secret);
-        } catch (err) {
-          throw { status: 400, message: "Error al iniciar sesión en Google Play: " + (err && err.message ? err.message : String(err)) };
-        }
+        let cachedSessions = null;
+        let sessionInitPromise = null;
+        const getSessions = async () => {
+          if (cachedSessions) return cachedSessions;
+          if (!secret) throw new Error("Aurora/Play no está configurado como respaldo #4.");
+          if (!sessionInitPromise) {
+            sessionInitPromise = auroraSync.createSessionsForSecret(secret).then((s) => {
+              cachedSessions = s;
+              return s;
+            });
+          }
+          return sessionInitPromise;
+        };
 
         const results = [];
         let synced = 0;
@@ -1369,7 +1375,7 @@ exports.auroraStore = onRequest(
           try {
             r = await auroraSync.syncSinglePackage({
               packageName: pkg,
-              sessions,
+              getSessions,
               db,
               bucket,
               force,
@@ -1427,60 +1433,89 @@ exports.auroraStore = onRequest(
 );
 
 exports.auroraSyncCatalogScheduled = onSchedule(
-  { region: "us-central1", schedule: "every 12 hours", timeoutSeconds: 540, memory: "2GiB" },
+  { region: "us-central1", schedule: "every 48 hours", timeoutSeconds: 540, memory: "2GiB" },
   async () => {
     const db = admin.database();
     const bucket = admin.storage().bucket(STORE_APKS_BUCKET);
     const secSnap = await db.ref(AURORA_SECRET_PATH).once("value");
     const secret = secSnap.val();
-    if (!secret) {
-      console.log("auroraSyncCatalogScheduled: sin configuración en serverSecrets/aurora, omitido.");
-      return;
-    }
 
     const catalogPkgs = await auroraSync.collectCatalogPackages(db, CLASSIC_NEVER_OFFERED);
     const catalogSet = new Set(catalogPkgs);
-    let sessions;
-    try {
-      sessions = await auroraSync.createSessionsForSecret(secret);
-    } catch (err) {
-      const msg = err && err.message ? err.message : String(err);
-      console.error("auroraSyncCatalogScheduled login error:", msg);
-      await db.ref(AURORA_META_PATH).update({ lastAutoSyncAt: Date.now(), lastAutoError: msg });
-      return;
-    }
 
+    let cachedSessions = null;
+    let sessionError = null;
+    let sessionInitPromise = null;
+    const getSessions = async () => {
+      if (cachedSessions) return cachedSessions;
+      if (sessionError) throw new Error(sessionError);
+      if (!secret) throw new Error("Aurora/Play no está configurado como respaldo #4.");
+      if (!sessionInitPromise) {
+        sessionInitPromise = auroraSync.createSessionsForSecret(secret)
+          .then((s) => {
+            cachedSessions = s;
+            return s;
+          })
+          .catch((err) => {
+            sessionError = err && err.message ? err.message : String(err);
+            throw err;
+          });
+      }
+      return sessionInitPromise;
+    };
+
+    const deadlineMs = Date.now() + 450_000;
+    let processed = 0;
     let synced = 0;
     let upToDate = 0;
     let failed = 0;
+    let budgetHit = false;
+    const sourcesUsed = {};
+
     for (const pkg of catalogPkgs) {
+      if (Date.now() > deadlineMs) {
+        budgetHit = true;
+        break;
+      }
+      processed++;
       try {
-        const r = await auroraSync.syncSinglePackage({ packageName: pkg, sessions, db, bucket, force: false });
-        if (!r.ok) failed++;
-        else if (r.upToDate) upToDate++;
-        else synced++;
+        const r = await auroraSync.syncSinglePackage({ packageName: pkg, getSessions, db, bucket, force: false });
+        if (!r.ok) {
+          failed++;
+        } else {
+          const src = r.source || "aurora";
+          sourcesUsed[src] = (sourcesUsed[src] || 0) + 1;
+          if (r.upToDate) upToDate++;
+          else synced++;
+        }
       } catch (e) {
         failed++;
         console.warn(`auroraSyncCatalogScheduled: fallo en ${pkg}:`, e && e.message ? e.message : e);
       }
     }
 
-    // Limpiar paquetes eliminados hace tiempo del catálogo global y de extras
-    const existingSnap = await db.ref("auroraStore/packages").once("value");
-    const existing = existingSnap.val() || {};
+    // Limpiar paquetes eliminados hace tiempo solo si completamos la recorrida entera sin timeout
     let removed = 0;
-    for (const [key, entry] of Object.entries(existing)) {
-      const pkg = (entry && entry.packageName) || key.replace(/_/g, ".");
-      if (!catalogSet.has(pkg)) {
-        await auroraSync.deletePackageArtifacts({ packageName: pkg, db, bucket });
-        removed++;
+    if (!budgetHit) {
+      const existingSnap = await db.ref("auroraStore/packages").once("value");
+      const existing = existingSnap.val() || {};
+      for (const [key, entry] of Object.entries(existing)) {
+        const pkg = (entry && entry.packageName) || key.replace(/_/g, ".");
+        if (!catalogSet.has(pkg)) {
+          await auroraSync.deletePackageArtifacts({ packageName: pkg, db, bucket });
+          removed++;
+        }
       }
     }
 
-    await db.ref(AURORA_META_PATH).set({
+    const metaUpdate = {
       lastAutoSyncAt: Date.now(),
-      lastAutoSummary: { total: catalogPkgs.length, synced, upToDate, failed, removed },
-    });
-    console.log(`auroraSyncCatalogScheduled: total=${catalogPkgs.length} synced=${synced} upToDate=${upToDate} failed=${failed} removed=${removed}`);
+      lastAutoSummary: { total: catalogPkgs.length, processed, synced, upToDate, failed, removed, budgetHit, sourcesUsed },
+    };
+    if (sessionError) metaUpdate.lastAutoError = "Aurora respaldo: " + sessionError;
+    await db.ref(AURORA_META_PATH).set(metaUpdate);
+    console.log(
+      `auroraSyncCatalogScheduled: total=${catalogPkgs.length} processed=${processed} synced=${synced} upToDate=${upToDate} failed=${failed} removed=${removed}`
+    );
   }
 );

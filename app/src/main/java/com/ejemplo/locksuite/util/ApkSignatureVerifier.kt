@@ -118,6 +118,20 @@ object ApkSignatureVerifier {
         }
     }
 
+    /** Huella SHA-256 (64 hex minúsculas) del certificado firmante del paquete instalado, o null si no está / no se pudo leer. */
+    fun installedSignerSha256(context: Context, packageName: String): String? = try {
+        val pm = context.packageManager
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pm.getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getPackageInfo(packageName, PackageManager.GET_SIGNATURES)
+        }
+        huellaDe(info)
+    } catch (_: Exception) {
+        null
+    }
+
     /**
      * Huella SHA-256 del primer certificado de firma, en hexadecimal.
      *

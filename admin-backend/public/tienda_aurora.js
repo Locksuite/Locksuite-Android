@@ -87,7 +87,7 @@
     const container = $("au-list");
     if (!container) return;
     const appsMap = state.playApps || {};
-    const rows = Object.entries(appsMap)
+    const catalogRows = Object.entries(appsMap)
       .filter(([, e]) => e && typeof e === "object" && String(e.status || "enabled").toLowerCase() !== "blocked")
       .map(([k, e]) => ({
         key: k,
@@ -96,13 +96,37 @@
         tier: e.tier || 1,
         status: String(e.status || "enabled").toLowerCase(),
         cached: (state.packages && state.packages[k]) || null,
+        fleetOnly: false,
       }))
       .sort((a, b) => String(a.label).localeCompare(String(b.label)));
 
+    const catalogKeys = new Set(catalogRows.map((r) => r.key));
+    const fleetRows = Object.entries(state.packages || {})
+      .filter(([k, c]) => c && typeof c === "object" && !catalogKeys.has(k))
+      .map(([k, c]) => ({
+        key: k,
+        pkg: c.packageName || k.replace(/_/g, "."),
+        label: c.title || c.packageName || k,
+        tier: 0,
+        status: "fleet",
+        cached: c,
+        fleetOnly: true,
+      }))
+      .sort((a, b) => String(a.label).localeCompare(String(b.label)));
+
+    const rows = catalogRows.concat(fleetRows);
+
     if (!rows.length) {
-      container.innerHTML = '<p class="ls-hint">No hay apps activas ni a pedido guardadas todavía en Tienda Play.</p>';
+      container.innerHTML = '<p class="ls-hint">No hay apps activas ni cacheadas todavía.</p>';
       return;
     }
+
+    const sourceLabel = (s) => ({
+      apkpure: "APKPure",
+      fdroid: "F-Droid",
+      aptoide: "Aptoide",
+      aurora: "Aurora / Play",
+    }[String(s || "").toLowerCase()] || s || "Servidor");
 
     let html = '<div style="display:flex; flex-direction:column; gap:8px;">';
     for (const r of rows) {
@@ -116,13 +140,20 @@
         const abiLabel = vKeys.includes("universal")
           ? "Universal"
           : vKeys.map((k) => k === "arm64_v8a" ? "64-bit" : k === "armeabi_v7a" ? "32-bit" : k).join(" + ");
+        const srcList = Array.from(new Set(
+          Object.values(c.variants).map((v) => v && v.source).filter(Boolean).concat(c.primarySource ? [c.primarySource] : [])
+        ));
+        const srcText = srcList.length ? srcList.map(sourceLabel).join(" + ") : "Servidor";
         const totalSize = Object.values(c.variants).map((v) => v.sizeBytes || 0);
         const maxSize = totalSize.length ? Math.max(...totalSize) : 0;
-        statusChip = `<span class="ls-chip ok">Lista v${esc(c.versionName || c.versionCode)} (${esc(abiLabel)})</span>`;
+        statusChip = `<span class="ls-chip ok">Lista v${esc(c.versionName || c.versionCode)} · ${esc(abiLabel)}</span> <span class="ls-chip">${esc(srcText)}</span>`;
         detailText = `VersionCode ${esc(c.versionCode)} · ${esc(formatBytes(maxSize))}` +
           (firstV && firstV.splitCount ? ` · ${firstV.splitCount + 1} APKs (.apks)` : " · APK único") +
           (c.updatedAt && LS.fecha ? ` · ${esc(LS.fecha(c.updatedAt))}` : "") +
           (c.lastSyncError ? ` · ⚠ último reintento: ${esc(c.lastSyncError)}` : "");
+      } else if (c && c.status === "play_fallback") {
+        statusChip = `<span class="ls-chip warn">Solo Google Play (v${esc(c.versionName || c.versionCode)})</span>`;
+        detailText = esc(c.error || "Requiere Google Play en el dispositivo.");
       } else if (c && c.status === "error") {
         statusChip = '<span class="ls-chip bad">Error al descargar</span>';
         detailText = esc(c.error || "Error desconocido");
@@ -132,7 +163,7 @@
         `<div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:var(--navy-dark); border:1px solid var(--navy-border); border-radius:10px; padding:10px 12px;">` +
         `<div style="min-width:190px; flex:1;">` +
         `<div><b>${esc(r.label)}</b> <code style="font-size:11.5px; color:var(--text-muted)">${esc(r.pkg)}</code> ` +
-        (r.status === "request" ? '<span class="ls-chip warn">A pedido</span>' : "") +
+        (r.status === "request" ? '<span class="ls-chip warn">A pedido</span>' : r.fleetOnly ? '<span class="ls-chip">Flota / Sistema</span>' : "") +
         `</div>` +
         `<div class="ls-hint" style="margin:2px 0 0 0">${detailText}</div>` +
         `</div>` +
@@ -338,12 +369,6 @@
     onPlayStoreSaved(savedAppsMap) {
       state.playApps = savedAppsMap || {};
       renderList();
-      if (!state.auth || !state.auth.configured) {
-        if ($("secAurora")) {
-          LS.toast("Tienda Aurora compartirá estas apps en cuanto configures la cuenta Google / Dispenser abajo.", "info");
-        }
-        return;
-      }
       const missing = Object.entries(state.playApps)
         .filter(([k, e]) => {
           if (!e || typeof e !== "object") return false;

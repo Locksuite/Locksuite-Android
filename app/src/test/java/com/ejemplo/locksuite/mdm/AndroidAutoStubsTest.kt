@@ -142,4 +142,29 @@ class AndroidAutoStubsTest {
         )
         assertEquals(AndroidAutoStubs.PACKAGES, AndroidAutoStubs.APK_SHA256.keys)
     }
+
+    @Test
+    fun compatibilidadAndroidAutoYPlanDeStubsSinDesinstalarReales() {
+        assertTrue(AndroidAutoStubs.isCompatible(28, hasGms = true))
+        assertTrue(AndroidAutoStubs.isCompatible(34, hasGms = true))
+        assertFalse(AndroidAutoStubs.isCompatible(27, hasGms = true))
+        assertFalse(AndroidAutoStubs.isCompatible(33, hasGms = false))
+
+        assertEquals(
+            AndroidAutoStubs.StubPlanAction.ALREADY_STUB,
+            AndroidAutoStubs.planStubAction(isStubInstalled = true, impediment = null)
+        )
+        assertEquals(
+            AndroidAutoStubs.StubPlanAction.INSTALL_STUB,
+            AndroidAutoStubs.planStubAction(isStubInstalled = false, impediment = null)
+        )
+        assertEquals(
+            AndroidAutoStubs.StubPlanAction.BLOCKED_BY_REAL_USER_APP,
+            AndroidAutoStubs.planStubAction(isStubInstalled = false, impediment = AndroidAutoStubs.Impedimento.APP_REAL_INSTALADA)
+        )
+        assertEquals(
+            AndroidAutoStubs.StubPlanAction.BLOCKED_BY_REAL_SYSTEM_APP,
+            AndroidAutoStubs.planStubAction(isStubInstalled = false, impediment = AndroidAutoStubs.Impedimento.APP_REAL_DE_FABRICA)
+        )
+    }
 }

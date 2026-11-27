@@ -8,11 +8,9 @@
          Ver KnoxHardening.kt para el resto de los pasos de integracion. -->
     <string name="knox_license_key" translatable="false">TU_LICENCIA_KPE_STANDARD_ACA</string>
 
-    <!-- Tienda Play (B.101): nombre que ve el usuario en el selector de widgets y debajo del
-         ícono. El texto de debajo del ícono lo reemplaza PlayStoreWidgetProvider por el del
-         idioma elegido en LockSuite (es / en / he). -->
+    <!-- Tienda única (B.101 / B.134): nombre que ve el usuario en el selector de widgets y debajo del ícono. -->
     <string name="widget_play_store_label">Tienda</string>
-    <string name="widget_play_store_description">Abre la Tienda Play: las apps que tu administrador permitió, para instalar desde Google Play.</string>
+    <string name="widget_play_store_description">Abre la Tienda: instalá apps permitidas y actualizá tus apps.</string>
     <string name="widget_aurora_store_label">Tienda Aurora</string>
     <string name="widget_aurora_store_description">Abre Tienda Aurora: instalación y actualización directa en silencio.</string>
 </resources>

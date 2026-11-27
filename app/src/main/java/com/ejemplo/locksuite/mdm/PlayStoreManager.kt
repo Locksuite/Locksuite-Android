@@ -286,6 +286,47 @@ object PlayStoreManager {
         }
     }
 
+    private fun isAndroidAutoExplicitlyBlocked(
+        ctx: Context,
+        global: List<StoreApp>,
+        extras: List<StoreApp>,
+        blocked: (String) -> Boolean
+    ): Boolean {
+        val pkg = AndroidAutoStubs.PKG_ANDROID_AUTO
+        if (pkg in PlayStoreCatalog.NEVER_OFFERED || blocked(pkg)) return true
+        val p = prefs(ctx)
+        if (p.getBoolean("hide_$pkg", false) || p.getBoolean("suspend_$pkg", false)) return true
+        val extraEntry = extras.firstOrNull { it.packageName == pkg }
+        if (extraEntry != null) return extraEntry.status == PlayStoreCatalog.STATUS_BLOCKED
+        val globalEntry = global.firstOrNull { it.packageName == pkg }
+        return globalEntry?.status == PlayStoreCatalog.STATUS_BLOCKED
+    }
+
+    private fun withUniversalAndroidAuto(
+        ctx: Context,
+        apps: List<StoreApp>,
+        global: List<StoreApp>,
+        extras: List<StoreApp>,
+        blocked: (String) -> Boolean
+    ): List<StoreApp> {
+        val pkg = AndroidAutoStubs.PKG_ANDROID_AUTO
+        if (apps.any { it.packageName == pkg }) return apps
+        if (!AndroidAutoStubs.isDeviceCompatible(ctx)) return apps
+        if (isAndroidAutoExplicitlyBlocked(ctx, global, extras, blocked)) return apps
+        val autoApp = StoreApp(
+            packageName = pkg,
+            label = AndroidAutoStubs.LABEL_ANDROID_AUTO,
+            tier = PlayStoreCatalog.TIER_KOSHER,
+            access = PlayStoreCatalog.ACCESS_FULL,
+            allow = emptyList(),
+            block = emptyList(),
+            iconUrl = null,
+            extra = true,
+            status = PlayStoreCatalog.STATUS_ENABLED
+        )
+        return (apps + autoApp).sortedWith(compareBy({ it.label.lowercase() }, { it.packageName }))
+    }
+
     /**
      * Las apps que la tienda ofrece AHORA para INSTALAR en este equipo (habilitadas),
      * ordenadas por nombre. Es lo que cuenta para instalar, la lista blanca, el kiosco y la
@@ -295,7 +336,11 @@ object PlayStoreManager {
         val ctx = context.applicationContext
         val mode = mode(ctx)
         if (!PlayStoreCatalog.isOpen(mode)) return emptyList()
-        return PlayStoreCatalog.effective(mode, globalApps(ctx), extraApps(ctx), blockedChecker(ctx))
+        val global = globalApps(ctx)
+        val extras = extraApps(ctx)
+        val blocked = blockedChecker(ctx)
+        val base = PlayStoreCatalog.effective(mode, global, extras, blocked)
+        return withUniversalAndroidAuto(ctx, base, global, extras, blocked)
     }
 
     /**
@@ -306,7 +351,11 @@ object PlayStoreManager {
         val ctx = context.applicationContext
         val mode = mode(ctx)
         if (!PlayStoreCatalog.isOpen(mode)) return emptyList()
-        return PlayStoreCatalog.listed(mode, globalApps(ctx), extraApps(ctx), blockedChecker(ctx))
+        val global = globalApps(ctx)
+        val extras = extraApps(ctx)
+        val blocked = blockedChecker(ctx)
+        val base = PlayStoreCatalog.listed(mode, global, extras, blocked)
+        return withUniversalAndroidAuto(ctx, base, global, extras, blocked)
     }
 
     fun offeredPackages(context: Context): Set<String> =
@@ -661,10 +710,6 @@ object PlayStoreManager {
         // enciende (abierta) sin esperar a la actualización diaria del sistema.
         try {
             com.ejemplo.locksuite.widget.PlayStoreWidgetProvider.refreshAll(ctx)
-        } catch (_: Exception) {
-        }
-        try {
-            com.ejemplo.locksuite.widget.AuroraStoreWidgetProvider.refreshAll(ctx)
         } catch (_: Exception) {
         }
         try {

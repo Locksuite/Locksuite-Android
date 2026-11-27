@@ -8,9 +8,11 @@ import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 19/11/2026 (B.125, T4) — INSTALACIONES DE LA TIENDA Y AUTOACTUALIZACIÓN DESDE EL CELULAR,
@@ -28,11 +30,31 @@ object StoreInstallManager {
     /** Clave de la autoactualización de LockSuite dentro de [state]. */
     const val SELF_KEY = "__locksuite_self_update__"
 
+    data class InstallFailure(
+        val id: Long,
+        val packageName: String,
+        val label: String,
+        val isUpdate: Boolean,
+        val error: String,
+        val allowPlayFallback: Boolean
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val core = StoreInstallCore(scope)
+    private val failureSeq = AtomicLong(0L)
+    private val _lastFailure = MutableStateFlow<InstallFailure?>(null)
 
     /** `key == null`: nada en curso. `key == SELF_KEY`: autoactualización. Otro: ese paquete. */
     val state: StateFlow<StoreInstallCore.State> get() = core.state
+
+    /** Último fallo de descarga/instalación silenciosa para ofrecer respaldo vía Google Play. */
+    val lastFailure: StateFlow<InstallFailure?> get() = _lastFailure
+
+    fun clearFailure(id: Long) {
+        if (_lastFailure.value?.id == id) {
+            _lastFailure.value = null
+        }
+    }
 
     private fun toast(app: Context, text: String) {
         Handler(Looper.getMainLooper()).post {
@@ -158,6 +180,14 @@ object StoreInstallManager {
                 clearProgress(app)
                 if (err != null) {
                     com.ejemplo.locksuite.mdm.AuroraStoreManager.clearPendingClaim(app, packageName)
+                    _lastFailure.value = InstallFailure(
+                        id = failureSeq.incrementAndGet(),
+                        packageName = packageName,
+                        label = label,
+                        isUpdate = isUpdate,
+                        error = err,
+                        allowPlayFallback = !com.ejemplo.locksuite.mdm.UpdateRoutePlanner.isNoSpaceMessage(err)
+                    )
                     toast(app, err)
                 } else {
                     val verb = if (isUpdate) "Actualización de $label" else "Instalación de $label"

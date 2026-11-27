@@ -133,6 +133,78 @@ object AuroraStoreManager {
     }
 
     /**
+     * Inicia una actualización silenciosa para cualquier app NO bloqueada instalada en el equipo
+     * (catálogo, app de usuario de la flota o app de sistema permitida como Android Auto/Gboard).
+     */
+    fun startSilentUpdate(
+        context: Context,
+        packageName: String,
+        variant: AuroraVariant? = null,
+        labelOverride: String? = null
+    ): String? {
+        val ctx = context.applicationContext
+        if (packageName in PlayStoreCatalog.NEVER_OFFERED || packageName in AndroidAutoStubs.PACKAGES) {
+            return "Esta aplicación del sistema no se puede actualizar desde la tienda."
+        }
+        val installedVc = installedVersionCode(ctx, packageName)
+        if (installedVc <= 0L) {
+            return "La aplicación no está instalada en este equipo."
+        }
+        val selected = variant ?: variantForDevice(ctx, packageName)
+            ?: return "No hay versión compatible en el servidor para este equipo."
+        if (!selected.apkUrl.startsWith(AuroraStoreCatalog.ALLOWED_APK_PREFIX) || selected.sha256.length != 64) {
+            return "La copia del servidor no tiene huella SHA-256 válida."
+        }
+        if (selected.versionCode <= installedVc) {
+            return "La aplicación ya está actualizada."
+        }
+        val label = labelOverride?.takeIf { it.isNotBlank() }
+            ?: PlayStoreManager.installedLabel(ctx, packageName)
+            ?: packageName
+        val started = StoreInstallManager.installAuroraApp(
+            context = ctx,
+            apkUrl = selected.apkUrl,
+            packageName = packageName,
+            label = label,
+            sha256 = selected.sha256,
+            isUpdate = true
+        )
+        return if (started) null else "Ya hay otra instalación o actualización en curso. Esperá a que termine."
+    }
+
+    /**
+     * Actualiza en secuencia las filas elegibles de la Tienda unificada.
+     */
+    fun startUpdateAllRows(context: Context, rows: List<UnifiedStoreLogic.StoreRowModel>): Pair<Int, String?> {
+        val ctx = context.applicationContext
+        val targets = UnifiedStoreLogic.silentUpdatableRows(rows)
+        if (targets.isEmpty()) {
+            return 0 to "Todas las aplicaciones ya están al día."
+        }
+        val items = ArrayList<StoreInstallManager.AuroraBatchItem>(targets.size)
+        for (row in targets) {
+            val v = row.variant ?: continue
+            if (!v.apkUrl.startsWith(AuroraStoreCatalog.ALLOWED_APK_PREFIX) || v.sha256.length != 64) continue
+            items.add(
+                StoreInstallManager.AuroraBatchItem(
+                    apkUrl = v.apkUrl,
+                    packageName = row.packageName,
+                    label = row.label,
+                    sha256 = v.sha256,
+                    isUpdate = true
+                )
+            )
+        }
+        if (items.isEmpty()) return 0 to "No hay actualizaciones listas para descargar."
+        val started = StoreInstallManager.installAuroraBatch(ctx, items)
+        return if (started) {
+            items.size to null
+        } else {
+            0 to "Ya hay una instalación en curso. Esperá a que termine."
+        }
+    }
+
+    /**
      * Actualiza en secuencia todas las apps instaladas del catálogo que tienen versión más nueva
      * en Tienda Aurora.
      */

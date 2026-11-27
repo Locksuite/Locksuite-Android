@@ -1594,11 +1594,31 @@ object FirebaseDeviceSync {
             if (auroraJson != null) {
                 com.ejemplo.locksuite.mdm.AuroraStoreManager.replacePackages(ctx, auroraJson)
             }
-            globalJson != null || extrasJson != null || auroraJson != null
+            val anySuccess = globalJson != null || extrasJson != null || auroraJson != null
+            if (anySuccess) {
+                PrefsHelper.getMdmPrefs(ctx).edit()
+                    .putLong(KEY_STORE_LAST_BG_SYNC_AT, System.currentTimeMillis())
+                    .apply()
+            }
+            anySuccess
         } catch (e: Exception) {
             android.util.Log.e("FirebaseDeviceSync", "Tienda Play: pullPlayStoreConfig falló: ${e.message}", e)
             false
         }
+    }
+
+    /** Intervalo de revisión automática en segundo plano de la Tienda (48 horas). */
+    const val STORE_BG_SYNC_INTERVAL_MS = 48L * 60L * 60L * 1000L
+    const val KEY_STORE_LAST_BG_SYNC_AT = "store_last_bg_sync_at"
+
+    fun isStoreBgSyncDue(lastSyncAtMs: Long, nowMs: Long = System.currentTimeMillis()): Boolean =
+        lastSyncAtMs <= 0L || nowMs < lastSyncAtMs || (nowMs - lastSyncAtMs) >= STORE_BG_SYNC_INTERVAL_MS
+
+    /** Ejecuta [pullPlayStoreConfig] solo si pasaron al menos 48h desde la última revisión. */
+    fun pullPlayStoreConfigIfDue(context: Context, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val last = PrefsHelper.getMdmPrefs(context.applicationContext).getLong(KEY_STORE_LAST_BG_SYNC_AT, 0L)
+        if (!isStoreBgSyncDue(last, nowMs)) return false
+        return pullPlayStoreConfig(context)
     }
 
     /** Serializa `auroraStore/packages` en JSON limpio para [AuroraStoreManager.replacePackages]. */
@@ -1612,6 +1632,9 @@ object FirebaseDeviceSync {
             child.child("title").getValue(String::class.java)?.let { o.put("title", it) }
             child.child("versionCode").getValue(Long::class.java)?.let { o.put("versionCode", it) }
             child.child("versionName").getValue(String::class.java)?.let { o.put("versionName", it) }
+            child.child("latestVersionCode").getValue(Long::class.java)?.let { o.put("latestVersionCode", it) }
+            child.child("latestVersionName").getValue(String::class.java)?.let { o.put("latestVersionName", it) }
+            child.child("primarySource").getValue(String::class.java)?.let { o.put("primarySource", it) }
             child.child("status").getValue(String::class.java)?.let { o.put("status", it) }
             child.child("error").getValue(String::class.java)?.let { o.put("error", it) }
             child.child("updatedAt").getValue(Long::class.java)?.let { o.put("updatedAt", it) }
@@ -1627,6 +1650,8 @@ object FirebaseDeviceSync {
                 vSnap.child("versionName").getValue(String::class.java)?.let { vo.put("versionName", it) }
                 vSnap.child("splitCount").getValue(Long::class.java)?.let { vo.put("splitCount", it.toInt()) }
                 vSnap.child("bundleFormat").getValue(String::class.java)?.let { vo.put("bundleFormat", it) }
+                vSnap.child("source").getValue(String::class.java)?.let { vo.put("source", it) }
+                vSnap.child("signerSha256").getValue(String::class.java)?.let { vo.put("signerSha256", it) }
                 val abisArr = org.json.JSONArray()
                 vSnap.child("abis").children.forEach { a ->
                     a.getValue(String::class.java)?.let { abisArr.put(it) }

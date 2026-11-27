@@ -28,6 +28,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.GET_ACCOUNTS" />
 
     <!-- Alarma exacta: la usa el watchdog de 10 min del flujo de actualizacion
          (UpdateFlowManager) como respaldo final para sacar la pantalla negra y
@@ -312,19 +313,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- STORE APP WIDGET PROVIDER (Acceso directo a la Tienda en la pantalla de inicio, compatible con Stealth) -->
-        <receiver
-            android:name=".widget.StoreWidgetProvider"
-            android:label="Tienda"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/store_widget_info" />
-        </receiver>
-
         <!-- ADMIN PANEL APP WIDGET PROVIDER (Acceso directo al Panel de Administración con icono de engranaje) -->
         <receiver
             android:name=".widget.AdminWidgetProvider"
@@ -338,26 +326,13 @@
                 android:resource="@xml/admin_widget_info" />
         </receiver>
 
-        <!-- APP UPDATE ACTIVITY (Menú exclusivo de actualización de aplicaciones) -->
+        <!-- APP UPDATE ACTIVITY (redirige a la Tienda única) -->
         <activity
             android:name=".ui.update.AppUpdateActivity"
             android:exported="false"
             android:theme="@style/Theme.LockSuite" />
 
-        <!-- APP UPDATE WIDGET PROVIDER (Acceso directo a Actualizaciones de Apps) -->
-        <receiver
-            android:name=".widget.AppUpdateWidgetProvider"
-            android:label="Actualizar Apps"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/app_update_widget_info" />
-        </receiver>
-
-        <!-- GOOGLE VERIFY WIDGET (Acceso directo al escáner de QR de verificación de Google - B.92) -->
+        <!-- GOOGLE VERIFICATION ACTIVITY WIDGET (Acceso directo al escáner de QR de verificación de Google - B.92) -->
         <receiver
             android:name=".widget.GoogleVerifyWidgetProvider"
             android:label="Verificar Google"
@@ -370,20 +345,18 @@
                 android:resource="@xml/google_verify_widget_info" />
         </receiver>
 
-        <!-- TIENDA PLAY (B.101): la pantalla con las apps que el administrador permitió. Solo la
-             abre LockSuite (el widget, el lanzador kosher, el modo teclas): exported="false".
-             singleTop: tocar el ícono otra vez trae la pantalla que ya está abierta. -->
+        <!-- TIENDA ÚNICA (B.101 / B.134): instala y actualiza desde el servidor unificado o Google Play.
+             Solo la abre LockSuite: exported="false". -->
         <activity
             android:name=".ui.playstore.PlayStoreActivity"
             android:exported="false"
             android:launchMode="singleTop"
             android:theme="@style/Theme.LockSuite" />
 
-        <!-- TIENDA PLAY WIDGET (B.101): "widget" de una celda que se ve como el ícono de una app.
-             Se apaga/enciende solo según el modo (PlayStoreManager.notifyChanged → refreshAll). -->
+        <!-- WIDGET DE LA TIENDA ÚNICA: ícono de una celda, se apaga/enciende según el modo. -->
         <receiver
             android:name=".widget.PlayStoreWidgetProvider"
-            android:label="Tienda Play"
+            android:label="@string/widget_play_store_label"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -393,24 +366,12 @@
                 android:resource="@xml/play_store_widget_info" />
         </receiver>
 
-        <!-- TIENDA AURORA (B.132): tercera tienda con instalación directa silenciosa. -->
+        <!-- TIENDA AURORA LEGACY: redirige automáticamente a la Tienda única (PlayStoreActivity). -->
         <activity
             android:name=".ui.aurora.AuroraStoreActivity"
             android:exported="false"
             android:launchMode="singleTop"
             android:theme="@style/Theme.LockSuite" />
-
-        <receiver
-            android:name=".widget.AuroraStoreWidgetProvider"
-            android:label="@string/widget_aurora_store_label"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/aurora_store_widget_info" />
-        </receiver>
 
         <!-- GOOGLE VERIFICATION ACTIVITY (Microvisor Confinado de Verificaciones de Google - B.92)
              ⚠️ (22/10) En Android 12+ estos intent-filter NO reciben el link de la cámara del

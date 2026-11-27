@@ -24,8 +24,14 @@ import zipfile
 RAIZ = pathlib.Path(__file__).resolve().parents[2]
 KOTLIN = RAIZ / "app/src/main/java/com/ejemplo/locksuite/mdm/AndroidAutoStubs.kt"
 APKS = {
-    "PKG_MAPS": RAIZ / "tools/aa_stubs/apk/aa-stub-maps.apk",
-    "PKG_GOOGLE_APP": RAIZ / "tools/aa_stubs/apk/aa-stub-google.apk",
+    "PKG_MAPS": [
+        RAIZ / "tools/aa_stubs/apk/aa-stub-maps.apk",
+        RAIZ / "app/src/main/assets/aa_stubs/aa-stub-maps.apk",
+    ],
+    "PKG_GOOGLE_APP": [
+        RAIZ / "tools/aa_stubs/apk/aa-stub-google.apk",
+        RAIZ / "app/src/main/assets/aa_stubs/aa-stub-google.apk",
+    ],
 }
 PERMITIDOS = {"AndroidManifest.xml", "resources.arsc"}
 
@@ -33,22 +39,24 @@ PERMITIDOS = {"AndroidManifest.xml", "resources.arsc"}
 def main() -> int:
     fuente = KOTLIN.read_text(encoding="utf-8")
     errores = []
-    for constante, apk in APKS.items():
+    for constante, rutas in APKS.items():
         m = re.search(constante + r'\s+to\s+"([0-9a-f]{64})"', fuente)
         if not m:
             errores.append(f"{constante}: no encuentro su huella en {KOTLIN.name}")
             continue
-        if not apk.exists():
-            errores.append(f"{apk.name}: no existe")
-            continue
-        real = hashlib.sha256(apk.read_bytes()).hexdigest()
-        if real != m.group(1):
-            errores.append(f"{apk.name}: sha256 {real} != fijado en el código {m.group(1)}")
-        with zipfile.ZipFile(apk) as z:
-            extras = [n for n in z.namelist() if n not in PERMITIDOS and not n.startswith("META-INF/")]
-            if extras:
-                errores.append(f"{apk.name}: NO está vacío, trae {extras}")
-        print(f"{apk.name}: sha256 {real}")
+        for apk in rutas:
+            rel = apk.relative_to(RAIZ)
+            if not apk.exists():
+                errores.append(f"{rel}: no existe")
+                continue
+            real = hashlib.sha256(apk.read_bytes()).hexdigest()
+            if real != m.group(1):
+                errores.append(f"{rel}: sha256 {real} != fijado en el código {m.group(1)}")
+            with zipfile.ZipFile(apk) as z:
+                extras = [n for n in z.namelist() if n not in PERMITIDOS and not n.startswith("META-INF/")]
+                if extras:
+                    errores.append(f"{rel}: NO está vacío, trae {extras}")
+            print(f"{rel}: sha256 {real}")
 
     if errores:
         print("\nROJO:")
