@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Ficha del celular — LockSuite</title>
   <link rel="stylesheet" href="styles.css?v=26" />
-  <link rel="stylesheet" href="panel2.css?v=7" />
+  <link rel="stylesheet" href="panel2.css?v=8" />
   <script>
     (function() {
       try {
@@ -60,7 +60,7 @@
       <button data-sec="resumen" class="active">📋 Resumen</button>
       <button data-sec="rapida">⚡ Configuración rápida</button>
       <button data-sec="celapps">📱 Apps del celular <span class="ls-rail-count" id="cnt-cel"></span></button>
-      <button data-sec="apps">🧭 Filtro de apps <span class="ls-rail-count" id="cnt-apps"></span></button>
+      <button data-sec="whitelist" id="c-rail-whitelist" class="hidden">🛡️ Lista blanca <span class="ls-rail-count" id="cnt-wl"></span></button>
       <button data-sec="politicas">🔒 Políticas <span class="ls-rail-count" id="cnt-pol"></span></button>
       <button data-sec="actualizaciones">⬆️ Actualizaciones <span class="ls-rail-count" id="cnt-upd"></span></button>
       <button data-sec="dns">🌐 DNS</button>
@@ -84,6 +84,7 @@
           <div class="ls-card"><h3>Salud del filtro</h3><div id="c-salud"></div></div>
           <div class="ls-card"><h3>Configuración aplicada</h3><div id="c-config"></div></div>
         </div>
+        <div class="ls-card" id="c-wl-switch-card"></div>
         <div id="c-upd-resumen"></div>
         <div class="ls-card">
           <h3>🛑 Qué cerró la Capa 3</h3>
@@ -123,8 +124,7 @@
         <h2>Apps del celular</h2>
         <p class="ls-lead">Las apps que tiene instaladas este equipo y lo que se le puede hacer a
           cada una <b>al instante</b>: ocultarla, suspenderla, cortarle la web o internet, taparle
-          las imágenes o actualizarla. (Qué apps puede usar según el filtro está en
-          <a href="#apps" data-ir="apps">Filtro de apps</a>.)</p>
+          las imágenes o actualizarla.</p>
 
         <div class="ls-card" id="c-play"></div>
 
@@ -162,41 +162,103 @@
         </div>
       </section>
 
-      <!-- ── FILTRO DE APPS Y DOMINIOS ─────────────────────────────────── -->
-      <section class="ls-section" data-sec="apps">
-        <h2>Filtro de apps y dominios</h2>
-        <p class="ls-lead">Una sola lista. Cada app está en uno de tres estados, y ese estado decide
-          <b>las tres cosas a la vez</b>: si se ve y se puede abrir en el celular, si se puede bajar
-          de la Tienda, y qué dominios suyos resuelven. Los cambios de esta lista se juntan abajo y
-          se mandan todos juntos.</p>
-
-        <div class="ls-card">
-          <h3>Modo del filtro</h3>
-          <p class="ls-hint">Lo único que cambia entre los tres modos es qué pasa con las apps
-            <b>sin marcar</b>. Las prohibidas quedan cerradas siempre, y los dominios no kosher que
-            viven adentro de una app permitida quedan bloqueados en los tres modos.</p>
-          <div class="ls-modes" id="c-modos"></div>
-          <div style="margin-top:12px" id="c-cdn"></div>
-        </div>
-
-        <div class="ls-card">
-          <div class="ls-row" style="margin-bottom:12px">
-            <input class="ls-input" id="c-apps-buscar" placeholder="Filtrar por nombre, paquete o dominio…" style="flex:1 1 260px" />
-            <select class="ls-select" id="c-apps-filtro">
-              <option value="todas">Todas</option>
-              <option value="instaladas">Solo instaladas en este celular</option>
-              <option value="allow">Permitidas</option>
-              <option value="block">Prohibidas</option>
-              <option value="unset">Sin marcar</option>
-              <option value="propias">Con decisión propia de este celular</option>
-              <option value="tienda">En la Tienda</option>
-            </select>
-            <a class="ls-btn ls-btn-sm" href="dominios.html" target="_blank" rel="noopener">✏️ Editar dominios (global) ↗</a>
+      <!-- ── LISTA BLANCA POR DISPOSITIVO (solo visible si whitelistEnabled) ── -->
+      <section class="ls-section" data-sec="whitelist">
+        <div class="ls-wl-switch-row">
+          <div>
+            <h2>🛡️ Lista blanca de este celular</h2>
+            <p class="ls-lead" style="margin-bottom:0">Catálogo independiente por dispositivo: apps habilitadas/bloqueadas, dominios permitidos y prohibidos, acceso Sin web, reglas globales del celular, auditoría y respaldos.</p>
           </div>
-          <div id="c-apps"></div>
+          <button type="button" class="ls-btn ls-btn-danger" id="wl-disable-btn">Volver a lista negra normal</button>
         </div>
 
-        <div class="ls-card" id="c-iab"></div>
+        <div class="ls-card" style="margin-top:14px">
+          <h3>Modo del filtro de lista blanca</h3>
+          <p class="ls-hint">En <b>Simulación</b> anota lo que quedaría afuera sin bloquear. En <b>Lista blanca — ESTRICTA</b> solo resuelven los dominios permitidos de esta configuración.</p>
+          <div class="ls-modes" id="wl-modes"></div>
+          <div style="margin-top:12px" id="wl-cdn"></div>
+        </div>
+
+        <div class="ls-card">
+          <div class="ls-wl-switch-row">
+            <h3 style="margin:0">Apps y sus dominios</h3>
+            <span class="ls-chip" id="wl-status-chip">Cargando…</span>
+          </div>
+          <div class="ls-wl-toolbar">
+            <button type="button" class="ls-btn ls-btn-primary" id="wl-save-sync-btn">💾 Guardar y aplicar al celular</button>
+            <button type="button" class="ls-btn" id="wl-add-app-btn">➕ Agregar app</button>
+            <button type="button" class="ls-btn" id="wl-history-btn">🕘 Respaldos</button>
+            <label class="ls-btn" style="cursor:pointer">📤 Subir .txt/.docx<input type="file" id="wl-upload-file" accept=".txt,.docx,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="hidden" /></label>
+            <button type="button" class="ls-btn" id="wl-download-btn">⬇️ Descargar .txt</button>
+            <button type="button" class="ls-btn" id="wl-reset-default-btn">♻️ Restaurar por defecto</button>
+          </div>
+          <div class="ls-wl-subrow">
+            <input class="ls-input" id="wl-apps-search" type="search" placeholder="Buscar app, paquete o dominio…" style="flex:1 1 240px" />
+            <select class="ls-select" id="wl-apps-filter">
+              <option value="all">Todas</option>
+              <option value="enabled">Habilitadas</option>
+              <option value="disabled">Deshabilitadas</option>
+              <option value="blocked">Bloqueadas</option>
+              <option value="noweb">Sin web</option>
+              <option value="installed">Instaladas en este celular</option>
+            </select>
+          </div>
+          <div class="ls-wl-apps-grid" id="wl-apps-grid" style="margin-top:12px"></div>
+        </div>
+
+        <div class="ls-card">
+          <div class="ls-wl-switch-row">
+            <div>
+              <h3 style="margin:0">Dominios para todo el celular</h3>
+              <p class="ls-hint" style="margin:4px 0 0">Se aplican a todo el equipo sin depender de una app particular. Los prohibidos le ganan siempre a los permitidos.</p>
+            </div>
+            <button type="button" class="ls-btn ls-btn-primary" id="wl-global-save-btn">💾 Guardar y aplicar</button>
+          </div>
+          <div class="ls-wl-global-grid">
+            <div class="ls-wl-box allow">
+              <div class="ls-wl-box-head">
+                <b>✅ Permitidos (<span id="wl-gallow-count">0</span>)</b>
+                <div class="ls-wl-card-actions">
+                  <label class="ls-btn ls-btn-sm" style="cursor:pointer">📤<input type="file" id="wl-gallow-file" accept=".txt,.docx,text/plain" class="hidden" /></label>
+                  <button type="button" class="ls-btn ls-btn-sm" id="wl-gallow-export">⬇️</button>
+                </div>
+              </div>
+              <div class="ls-row">
+                <input class="ls-input" id="wl-gallow-input" placeholder="ej: whatsapp.net, gstatic.com" style="flex:1 1 160px" />
+                <button type="button" class="ls-btn ls-btn-sm ls-btn-primary" id="wl-gallow-add">Agregar</button>
+              </div>
+              <input class="ls-input ls-wide" id="wl-gallow-search" type="search" placeholder="Filtrar permitidos…" style="margin-top:8px" />
+              <div class="ls-wl-list" id="wl-gallow-items"></div>
+            </div>
+            <div class="ls-wl-box block">
+              <div class="ls-wl-box-head">
+                <b>🚫 Prohibidos (<span id="wl-gblock-count">0</span>)</b>
+                <div class="ls-wl-card-actions">
+                  <label class="ls-btn ls-btn-sm" style="cursor:pointer">📤<input type="file" id="wl-gblock-file" accept=".txt,.docx,text/plain" class="hidden" /></label>
+                  <button type="button" class="ls-btn ls-btn-sm" id="wl-gblock-export">⬇️</button>
+                </div>
+              </div>
+              <div class="ls-row">
+                <input class="ls-input" id="wl-gblock-input" placeholder="ej: tiktok.com, doubleclick.net" style="flex:1 1 160px" />
+                <button type="button" class="ls-btn ls-btn-sm ls-btn-danger" id="wl-gblock-add">Prohibir</button>
+              </div>
+              <input class="ls-input ls-wide" id="wl-gblock-search" type="search" placeholder="Filtrar prohibidos…" style="margin-top:8px" />
+              <div class="ls-wl-list" id="wl-gblock-items"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ls-card">
+          <div class="ls-wl-switch-row">
+            <div>
+              <h3 style="margin:0">🕵️ Auditoría de dominios bloqueados (<span id="wl-audit-count">0</span>)</h3>
+              <p class="ls-hint" style="margin:4px 0 0">Lo que este celular intentó resolver y la lista blanca frenó (o simuló frenar). Sumalo con 1 clic a una app, al celular o prohibilo.</p>
+            </div>
+            <button type="button" class="ls-btn ls-btn-sm" id="wl-audit-clear">🧹 Vaciar registro</button>
+          </div>
+          <input class="ls-input ls-wide" id="wl-audit-search" type="search" placeholder="Filtrar dominios bloqueados…" style="margin-top:10px" />
+          <div class="ls-wl-audit-list" id="wl-audit-list"></div>
+        </div>
       </section>
 
       <!-- ── POLÍTICAS ─────────────────────────────────────────────────── -->
@@ -225,6 +287,7 @@
             aplican de a uno de forma inmediata.</p>
           <div id="c-especiales"></div>
         </div>
+        <div class="ls-card" id="c-iab"></div>
       </section>
 
       <!-- ── ACTUALIZACIONES ───────────────────────────────────────────── -->
@@ -315,9 +378,7 @@
       <!-- ── TIENDA ────────────────────────────────────────────────────── -->
       <section class="ls-section" data-sec="tienda">
         <h2>Tienda</h2>
-        <p class="ls-lead">Lo que este celular puede instalar. Una app se habilita permitiéndola en
-          <b>Filtro de apps</b>; acá se ve si además está cargada en la Tienda para poder bajarla, y
-          las que ya están instaladas se pueden actualizar desde acá, en silencio.</p>
+        <p class="ls-lead">Lo que este celular puede instalar. Acá se ve qué apps están cargadas en la Tienda para poder bajarlas, y las que ya están instaladas se pueden actualizar desde acá, en silencio.</p>
         <div class="ls-card"><div id="c-tienda"></div></div>
         <div class="ls-card">
           <h3>Pedidos de este celular</h3>
@@ -429,6 +490,81 @@
     </main>
   </div>
 
+  <!-- Modales de Lista blanca por dispositivo -->
+  <div class="ls-wl-modal hidden" id="wl-app-modal">
+    <div class="ls-wl-modal-card">
+      <div class="ls-wl-modal-head">
+        <h3 id="wl-app-modal-title" style="margin:0">App en lista blanca</h3>
+        <button type="button" class="ls-btn ls-btn-sm" id="wl-app-close">✕</button>
+      </div>
+      <div id="wl-app-pick-installed-wrap" class="hidden" style="margin-bottom:10px">
+        <select class="ls-select ls-wide" id="wl-app-pick-installed"></select>
+      </div>
+      <label class="ls-hint">Nombre visible</label>
+      <input class="ls-input ls-wide" id="wl-app-label" placeholder="Ej: Waze" style="margin-bottom:10px" />
+      <label class="ls-hint">Package Name</label>
+      <input class="ls-input ls-wide" id="wl-app-pkg" placeholder="Ej: com.waze" style="margin-bottom:10px" />
+      <div class="ls-row" style="margin-bottom:10px; justify-content:space-between">
+        <select class="ls-select" id="wl-app-status">
+          <option value="enabled">Habilitada</option>
+          <option value="disabled">Deshabilitada</option>
+          <option value="blocked">Bloqueada</option>
+        </select>
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px">
+          <input type="checkbox" id="wl-app-noweb" /> 🚫 Acceso Sin web (corta internet/WebView)
+        </label>
+      </div>
+      <label class="ls-hint">Dominios permitidos (uno por línea o separados por coma)</label>
+      <textarea class="ls-input ls-wide" id="wl-app-allow" rows="5" style="font-family:monospace; margin-bottom:10px"></textarea>
+      <label class="ls-hint">Dominios prohibidos (le ganan siempre a los permitidos)</label>
+      <textarea class="ls-input ls-wide" id="wl-app-block" rows="4" style="font-family:monospace; margin-bottom:10px"></textarea>
+      <p id="wl-app-error" style="color:#F87171; font-size:12px; min-height:16px"></p>
+      <div class="ls-row" style="justify-content:space-between; margin-top:8px">
+        <button type="button" class="ls-btn ls-btn-danger" id="wl-app-delete">🗑️ Quitar app</button>
+        <div class="ls-row">
+          <button type="button" class="ls-btn" id="wl-app-cancel">Cancelar</button>
+          <button type="button" class="ls-btn ls-btn-primary" id="wl-app-save">💾 Guardar y aplicar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ls-wl-modal hidden" id="wl-history-modal">
+    <div class="ls-wl-modal-card">
+      <div class="ls-wl-modal-head">
+        <h3 style="margin:0">🕘 Respaldos de lista blanca (<span id="wl-history-count">0</span>)</h3>
+        <button type="button" class="ls-btn ls-btn-sm" id="wl-history-close">✕</button>
+      </div>
+      <p class="ls-hint" id="wl-history-current-summary" style="margin-top:0"></p>
+      <div class="ls-wl-toolbar" style="margin-bottom:10px">
+        <button type="button" class="ls-btn ls-btn-sm ls-btn-primary" id="wl-history-manual-save">💾 Guardar respaldo ahora</button>
+        <button type="button" class="ls-btn ls-btn-sm" id="wl-history-download-current">⬇️ Descargar actual</button>
+        <label class="ls-btn ls-btn-sm" style="cursor:pointer">📤 Restaurar archivo<input type="file" id="wl-history-upload-file" accept=".txt,.docx,text/plain" class="hidden" /></label>
+        <button type="button" class="ls-btn ls-btn-sm" id="wl-history-refresh">🔄</button>
+        <label style="font-size:12px; display:flex; align-items:center; gap:4px"><input type="checkbox" id="wl-history-only-favs" /> ⭐ Favoritos</label>
+      </div>
+      <p class="ls-hint" id="wl-history-status"></p>
+      <div id="wl-history-list" style="max-height:360px; overflow-y:auto"></div>
+      <div class="ls-row" style="justify-content:flex-end; margin-top:10px">
+        <button type="button" class="ls-btn" id="wl-history-cancel">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="ls-wl-modal hidden" id="wl-pick-app-modal">
+    <div class="ls-wl-modal-card">
+      <div class="ls-wl-modal-head">
+        <h3 style="margin:0">Sumar <code id="wl-pick-dom"></code> a una app</h3>
+        <button type="button" class="ls-btn ls-btn-sm" id="wl-pick-close">✕</button>
+      </div>
+      <input class="ls-input ls-wide" id="wl-pick-search" type="search" placeholder="Buscar app…" style="margin-bottom:10px" />
+      <div id="wl-pick-app-list" style="max-height:320px; overflow-y:auto"></div>
+      <div class="ls-row" style="justify-content:flex-end; margin-top:10px">
+        <button type="button" class="ls-btn" id="wl-pick-cancel">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Barra de cambios pendientes -->
   <div class="ls-cart" id="c-cart">
     <b id="c-cart-n">0 cambios sin aplicar</b>
@@ -442,10 +578,14 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
   <script src="catalog.js?v=4"></script>
-  <script src="policies.js?v=5"></script>
+  <script src="policies.js?v=6"></script>
   <script src="comun.js?v=11"></script>
   <script src="tienda_logic.js?v=4"></script>
-  <script src="celular.js?v=18"></script>
+  <script src="default_whitelist_catalog.js?v=1"></script>
+  <script src="dominios_catalogo_io.js?v=1"></script>
+  <script src="dominios_clasificar.js?v=1"></script>
+  <script src="whitelist_device_ui.js?v=1"></script>
+  <script src="celular.js?v=19"></script>
   <script src="diag_logic.js?v=1"></script>
   <script src="diag_remoto.js?v=1"></script>
 </body>

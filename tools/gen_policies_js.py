@@ -55,6 +55,9 @@ APARTE = {
     "locksuiteSuspended",      # levanta TODAS las protecciones (B.11)
     "kioskLockTaskEnabled",    # puede dejar el equipo sin marcar *#*#9999#*#* (B.35)
     "nokiaTouchEnabled",       # puede dejar el equipo sin forma de operarlo (B.36)
+    "whitelistEnabled",        # vive en Resumen como interruptor propio (B.135)
+    "whitelistEnforce",        # solo aparece dentro de Lista blanca cuando whitelistEnabled (B.135)
+    "whitelistSharedCdn",      # solo aparece dentro de Lista blanca cuando whitelistEnabled (B.135)
 }
 
 

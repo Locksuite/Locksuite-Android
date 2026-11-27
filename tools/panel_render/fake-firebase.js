@@ -87,7 +87,17 @@
       set: (v) => { log("set", path, v); if (hasTrusted(path, v)) return Promise.reject(denyErr("write trustedAdmins")); setAt(path, v); notify(path); return Promise.resolve(); },
       update: (obj) => { log("update", path, obj); if (Object.keys(obj).some((k) => hasTrusted(path + "/" + k, obj[k]))) return Promise.reject(denyErr("write trustedAdmins")); for (const k of Object.keys(obj)) setAt(path + "/" + k, obj[k]); notify(path); return Promise.resolve(); },
       remove: () => { log("remove", path); setAt(path, null); notify(path); return Promise.resolve(); },
-      push: (v) => { log("push", path, v); const k = "p" + Math.random().toString(36).slice(2, 10); setAt(path + "/" + k, v); notify(path); return Promise.resolve(ref(path + "/" + k)); },
+      push: (v) => {
+        const k = "p" + Math.random().toString(36).slice(2, 10);
+        const childRef = ref(path + "/" + k);
+        if (v !== undefined) {
+          log("push", path, v);
+          setAt(path + "/" + k, v);
+          notify(path);
+        }
+        const p = Promise.resolve(childRef);
+        return Object.assign(childRef, { then: p.then.bind(p), catch: p.catch.bind(p) });
+      },
       orderByChild: () => r, limitToLast: () => r, equalTo: () => r
     };
     return r;

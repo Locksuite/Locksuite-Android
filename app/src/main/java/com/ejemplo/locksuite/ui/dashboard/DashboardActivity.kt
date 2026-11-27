@@ -248,7 +248,17 @@ fun DashboardScreen(
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
-    var selectedTab by remember { mutableIntStateOf(0) }
+    val initialWhitelistOn = remember { PolicyManager(context).isWhitelistModeEnabled() }
+    var whitelistModeEnabled by remember { mutableStateOf(initialWhitelistOn) }
+    var selectedTab by remember { mutableStateOf(DashboardTab.HOME) }
+    val visibleTabs = remember(whitelistModeEnabled) {
+        if (whitelistModeEnabled) DashboardTab.entries else DashboardTab.entries.filter { it != DashboardTab.WHITELIST }
+    }
+    LaunchedEffect(whitelistModeEnabled) {
+        if (!whitelistModeEnabled && selectedTab == DashboardTab.WHITELIST) {
+            selectedTab = DashboardTab.HOME
+        }
+    }
 
     LaunchedEffect(Unit) {
         try {
@@ -435,37 +445,30 @@ fun DashboardScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            val selectedIndex = visibleTabs.indexOf(selectedTab).coerceAtLeast(0)
             ScrollableTabRow(
-                selectedTabIndex = selectedTab,
+                selectedTabIndex = selectedIndex,
                 containerColor = navyDark,
                 contentColor = accentOrange,
                 edgePadding = 0.dp,
                 indicator = { tabPositions ->
-                    TabRowDefaults.SecondaryIndicator(
-                        modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                        color = accentOrange
-                    )
+                    if (selectedIndex < tabPositions.size) {
+                        TabRowDefaults.SecondaryIndicator(
+                            modifier = Modifier.tabIndicatorOffset(tabPositions[selectedIndex]),
+                            color = accentOrange
+                        )
+                    }
                 }
             ) {
-                // ── ORDEN Y NOMBRES: LOS MISMOS QUE LA FICHA DEL PANEL WEB (10/9/2026) ──
-                //
-                // Antes eran seis pestañas en otro orden y con otros nombres que el panel
-                // ("Presets" acá / "Perfiles" allá; "Lista blanca" acá / "Apps y dominios"
-                // allá), así que quien administraba desde los dos lados tenía que aprender
-                // dos mapas distintos de la misma cosa. Ahora las dos pantallas se leen
-                // igual, y eso es la mitad de lo que el dueño pidió al decir que quedaba
-                // "muy mareador y cosas en distintas pestañas".
-                //
-                // «Inicio» es nueva y es el hub: contesta "¿cómo está este equipo?" y lleva
-                // a donde haya que ir, en vez de obligar a recorrer las pestañas buscando.
-                LOCKSUITE_TABS.forEachIndexed { indice, titulo ->
+                visibleTabs.forEach { tab ->
+                    val isSel = selectedTab == tab
                     Tab(
-                        selected = selectedTab == indice,
-                        onClick = { selectedTab = indice },
+                        selected = isSel,
+                        onClick = { selectedTab = tab },
                         text = {
                             Text(
-                                LocaleManager.t(titulo),
-                                color = if (selectedTab == indice) accentOrange else Color.Gray
+                                LocaleManager.t(tab.label),
+                                color = if (isSel) accentOrange else Color.Gray
                             )
                         }
                     )
@@ -473,65 +476,60 @@ fun DashboardScreen(
             }
 
             when (selectedTab) {
-                0 -> HomeTabContent(context) { destino -> selectedTab = destino }
-                1 -> WhitelistTabContent(context)
-                2 -> AppManagerTabContent(context)
-                3 -> PoliciesTabContent(context)
-                4 -> DnsActivityTabContent(context)
-                5 -> ServicesTabContent(
+                DashboardTab.HOME -> HomeTabContent(
+                    context = context,
+                    whitelistModeEnabled = whitelistModeEnabled,
+                    onWhitelistModeChanged = { enabled -> whitelistModeEnabled = enabled },
+                    onIrA = { destino -> selectedTab = destino }
+                )
+                DashboardTab.WHITELIST -> WhitelistTabContent(
+                    context = context,
+                    onDisableWhitelist = {
+                        PolicyManager(context).setWhitelistModeEnabled(false)
+                        whitelistModeEnabled = false
+                        selectedTab = DashboardTab.HOME
+                        dashboardScope.launch(Dispatchers.IO) {
+                            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncWhitelistState(context, force = true)
+                            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+                        }
+                    }
+                )
+                DashboardTab.APPS -> AppManagerTabContent(context)
+                DashboardTab.POLICIES -> PoliciesTabContent(context)
+                DashboardTab.DNS -> DnsActivityTabContent(context)
+                DashboardTab.SERVICES -> ServicesTabContent(
                     context = context,
                     vpnRefreshTick = vpnRefreshTick,
                     onBumpVpnRefresh = onBumpVpnRefresh,
                     onTriggerPermissionsReauth = { showReauthDialogForPermissions = true },
                     onTriggerUninstallReauth = { showReauthDialogForUninstall = true }
                 )
-                6 -> PresetsTabContent(context)
+                DashboardTab.PROFILES -> PresetsTabContent(context)
             }
         }
     }
 }
 
-/**
- * Los nombres de las pestañas, en un solo lugar y en el mismo orden que la ficha del
- * panel web (`admin-backend/public/celular.html`). Están acá arriba a propósito: el
- * `when` de abajo y esta lista tienen que moverse juntos, y con las pestañas escritas
- * una por una era fácil renumerar solo la mitad.
- */
-private val LOCKSUITE_TABS = listOf(
-    "Inicio",            // 0
-    "Apps y dominios",   // 1  (antes "Lista blanca")
-    "Aplicaciones",      // 2
-    "Políticas",         // 3
-    "DNS",               // 4
-    "Servicios",         // 5
-    "Perfiles"           // 6  (antes "Presets")
-)
+enum class DashboardTab(val label: String) {
+    HOME("Inicio"),
+    WHITELIST("Lista blanca"),
+    APPS("Aplicaciones"),
+    POLICIES("Políticas"),
+    DNS("DNS"),
+    SERVICES("Servicios"),
+    PROFILES("Perfiles")
+}
 
-/**
- * ── PESTAÑA «INICIO» (10/9/2026) ──
- *
- * Es la respuesta del lado del celular al mismo pedido que motivó la ficha nueva del
- * panel: *"locksuite y el panel web quedaron muy mareadores y cosas en distintas
- * pestañas. Hacelo más cómodo y unificado"*.
- *
- * Contesta dos preguntas y nada más, que son las dos que uno tiene al abrir la app:
- *
- *   1. **¿Cómo está este equipo AHORA?** — no una lista de todo lo configurable, sino
- *      lo que está mal en este momento. Un panel que grita siempre no se mira; por eso
- *      cuando está todo bien muestra una sola línea verde y se calla.
- *   2. **¿Y ahora a dónde voy?** — accesos directos a las otras pestañas, con lo que
- *      cada una hace dicho en una línea. Reemplaza a "acordarse en qué pestaña estaba
- *      tal cosa", que es literal la queja.
- *
- * Y arriba de todo, la Configuración rápida — la misma tarjeta que ya vivía en la
- * pestaña Perfiles. **Se REUSA `MasterProfilesCard`, no se copia**: si mañana un perfil
- * hace una cosa más, la hace en los dos lugares. Duplicarla habría sido la quinta
- * repetición del bug de familia de B.28.
- */
 @Composable
-fun HomeTabContent(context: Context, onIrA: (Int) -> Unit) {
+fun HomeTabContent(
+    context: Context,
+    whitelistModeEnabled: Boolean,
+    onWhitelistModeChanged: (Boolean) -> Unit,
+    onIrA: (DashboardTab) -> Unit
+) {
     val policyManager = remember { PolicyManager(context) }
     val prefs = remember { PrefsHelper.getMdmPrefs(context) }
+    val homeScope = rememberCoroutineScope()
     var refreshKey by remember { mutableIntStateOf(0) }
 
     val accentOrange = Color(0xFFF5C438)
@@ -552,8 +550,8 @@ fun HomeTabContent(context: Context, onIrA: (Int) -> Unit) {
         try { com.ejemplo.locksuite.service.KosherVpnService.tunnelHealth(context) }
         catch (e: Exception) { com.ejemplo.locksuite.service.KosherVpnService.HEALTH_UNKNOWN }
     }
-    val listaBlancaOn = remember(refreshKey) { policyManager.isWhitelistModeEnabled() }
-    val simulando = remember(refreshKey) { policyManager.isWhitelistSimulation() }
+    val listaBlancaOn = whitelistModeEnabled
+    val simulando = remember(refreshKey, whitelistModeEnabled) { policyManager.isWhitelistSimulation() }
     val graciaActiva = remember(refreshKey) {
         try { com.ejemplo.locksuite.mdm.GracePeriodManager.isActive(context) }
         catch (e: Exception) { false }
@@ -634,6 +632,70 @@ fun HomeTabContent(context: Context, onIrA: (Int) -> Unit) {
             }
         }
 
+        // ── Modo Lista blanca (oculto hasta que se active acá) ──
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = navyMedium),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "🛡️ Activar modo lista blanca",
+                                color = accentOrange,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                            Text(
+                                if (listaBlancaOn) {
+                                    if (simulando) "Activo (simulación). La pestaña Lista blanca está habilitada para este equipo."
+                                    else "Activo (estricto). Solo resuelven los dominios de tu Lista blanca."
+                                } else {
+                                    "Apagado: el celular funciona en modo lista negra normal y la sección Lista blanca permanece oculta."
+                                },
+                                color = Color.White.copy(alpha = 0.72f),
+                                fontSize = 12.sp
+                            )
+                        }
+                        Switch(
+                            checked = listaBlancaOn,
+                            onCheckedChange = { enabled ->
+                                policyManager.setWhitelistModeEnabled(enabled)
+                                onWhitelistModeChanged(enabled)
+                                refreshKey++
+                                homeScope.launch(Dispatchers.IO) {
+                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncWhitelistState(context, force = true)
+                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+                                }
+                                Toast.makeText(
+                                    context,
+                                    if (enabled) "Modo lista blanca activado" else "Modo lista blanca desactivado (modo lista negra)",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color(0xFF0E141B),
+                                checkedTrackColor = accentOrange
+                            )
+                        )
+                    }
+                    if (listaBlancaOn) {
+                        TextButton(onClick = { onIrA(DashboardTab.WHITELIST) }) {
+                            Text("Abrir Lista blanca →", color = accentOrange, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Configuración rápida (la MISMA tarjeta de la pestaña Perfiles) ──
         item {
             MasterProfilesCard(policyManager = policyManager, onApplied = { refreshKey++ })
@@ -645,27 +707,29 @@ fun HomeTabContent(context: Context, onIrA: (Int) -> Unit) {
                 fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
 
-        val destinos = listOf(
-            Triple(1, "📱 " + LocaleManager.t("Apps y dominios"),
-                LocaleManager.t("Permitir o prohibir cada app. Decide a la vez si se ve, si se puede bajar de la tienda y qué dominios suyos resuelven.")),
-            Triple(2, "🧩 " + LocaleManager.t("Aplicaciones"),
-                LocaleManager.t("Ocultar, suspender o desinstalar apps una por una, y ver el inventario del equipo.")),
-            Triple(3, "🔒 " + LocaleManager.t("Políticas"),
-                LocaleManager.t("Los interruptores del sistema: cámara, wifi, instalación, restauración de fábrica.")),
-            Triple(4, "🌐 " + LocaleManager.t("DNS"),
-                LocaleManager.t("Forzar permitir o prohibir un dominio puntual. Le gana a todo lo demás.")),
-            Triple(5, "⚙️ " + LocaleManager.t("Servicios"),
-                LocaleManager.t("Accesibilidad, VPN, permisos y el estado de los servicios de fondo.")),
-            Triple(6, "📋 " + LocaleManager.t("Perfiles"),
-                LocaleManager.t("Exportar e importar la configuración completa de este equipo."))
-        )
+        val destinos = buildList {
+            if (listaBlancaOn) {
+                add(Triple(DashboardTab.WHITELIST, "🛡️ " + LocaleManager.t("Lista blanca"),
+                    LocaleManager.t("Apps y dominios permitidos o prohibidos en este equipo, listas globales, respaldos y auditoría.")))
+            }
+            add(Triple(DashboardTab.APPS, "🧩 " + LocaleManager.t("Aplicaciones"),
+                LocaleManager.t("Ocultar, suspender o desinstalar apps una por una, y ver el inventario del equipo.")))
+            add(Triple(DashboardTab.POLICIES, "🔒 " + LocaleManager.t("Políticas"),
+                LocaleManager.t("Los interruptores del sistema: cámara, wifi, instalación, restauración de fábrica y filtros.")))
+            add(Triple(DashboardTab.DNS, "🌐 " + LocaleManager.t("DNS"),
+                LocaleManager.t("Forzar permitir o prohibir un dominio puntual. Le gana a todo lo demás.")))
+            add(Triple(DashboardTab.SERVICES, "⚙️ " + LocaleManager.t("Servicios"),
+                LocaleManager.t("Accesibilidad, VPN, PIN de administrador y estado de los servicios de fondo.")))
+            add(Triple(DashboardTab.PROFILES, "📋 " + LocaleManager.t("Perfiles"),
+                LocaleManager.t("Exportar e importar la configuración completa de este equipo.")))
+        }
 
-        items(destinos) { (indice, titulo, detalle) ->
+        items(destinos) { (destino, titulo, detalle) ->
             Card(
                 colors = CardDefaults.cardColors(containerColor = navyMedium),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onIrA(indice) },
+                    .clickable { onIrA(destino) },
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
@@ -967,29 +1031,6 @@ fun PoliciesTabContent(context: Context) {
                 )
             ),
             PolicySection(
-                title = "🛡️ Modo lista blanca",
-                items = listOf(
-                    PolicySwitchItem(
-                        key = "whitelistEnabled",
-                        label = "Activar el filtro de lista blanca",
-                        isChecked = policyManager.isWhitelistModeEnabled(),
-                        onCheckedChange = { policyManager.setWhitelistModeEnabled(it).also { refreshKey++ } }
-                    ),
-                    PolicySwitchItem(
-                        key = "whitelistEnforce",
-                        label = "  ↳ Bloquear de verdad (apagado = solo simular)",
-                        isChecked = !policyManager.isWhitelistSimulation(),
-                        onCheckedChange = { policyManager.setWhitelistSimulation(!it).also { refreshKey++ } }
-                    ),
-                    PolicySwitchItem(
-                        key = "whitelistSharedCdn",
-                        label = "  ↳ Permitir CDN compartidos (CloudFront, Akamai, Fastly)",
-                        isChecked = policyManager.isWhitelistSharedCdnAllowed(),
-                        onCheckedChange = { policyManager.setWhitelistSharedCdnAllowed(it).also { refreshKey++ } }
-                    )
-                )
-            ),
-            PolicySection(
                 title = "Arranque protegido",
                 items = listOf(
                     PolicySwitchItem(
@@ -1248,24 +1289,6 @@ fun PoliciesTabContent(context: Context) {
     val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     val isDeviceOwner = dpm.isDeviceOwnerApp(context.packageName)
 
-    val policyScope = rememberCoroutineScope()
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let { selectedUri ->
-            policyScope.launch {
-                val error = withContext(Dispatchers.IO) {
-                    com.ejemplo.locksuite.util.ApkInstaller.installApk(context, selectedUri)
-                }
-                if (error != null) {
-                    Toast.makeText(context, error, Toast.LENGTH_LONG).show()
-                } else {
-                    Toast.makeText(context, "Iniciando instalación programática...", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-    }
-
     LaunchedEffect(refreshKey) {
         try {
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
@@ -1437,67 +1460,6 @@ fun PoliciesTabContent(context: Context) {
                         ) {
                             Text("Guardar", fontWeight = FontWeight.Bold)
                         }
-                    }
-                }
-            }
-        }
-
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Instalar / Actualizar APK Permitida", color = Color(0xFFF5C438), fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text(
-                        "Si tienes el archivo APK de una aplicación permitida en tu almacenamiento, puedes seleccionarlo aquí para instalarlo o actualizarlo, incluso si el bloqueo de APKs está activo.",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp
-                    )
-                    Button(
-                        onClick = {
-                            try {
-                                DashboardActivity.isLaunchingInternalFlow = true
-                                launcher.launch("application/vnd.android.package-archive")
-                            } catch (e: Exception) {
-                                DashboardActivity.isLaunchingInternalFlow = false
-                                Toast.makeText(context, "Error al abrir selector de archivos: ${e.message}", Toast.LENGTH_LONG).show()
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C438), contentColor = Color(0xFF0E141B)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Seleccionar e Instalar APK", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C)),
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Actualizar LockSuite", color = Color(0xFFF5C438), fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text(
-                        "Comprueba si hay una nueva versión del sistema LockSuite MDM e instálala de forma inmediata.",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp
-                    )
-                    Button(
-                        onClick = {
-                            // 19/11/2026 (B.125, T4): en el scope de PROCESO. Antes corría en
-                            // `rememberCoroutineScope()` y salir de esta pantalla cancelaba la
-                            // actualización a mitad de camino.
-                            com.ejemplo.locksuite.util.StoreInstallManager.selfUpdate(context, true)
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C438), contentColor = Color(0xFF0E141B)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Buscar Actualizaciones", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -3332,14 +3294,11 @@ fun ServicesTabContent(
 ) {
     val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     val isDeviceOwner = dpm.isDeviceOwnerApp(context.packageName)
-    val scope = rememberCoroutineScope()
     val policyManager = remember { com.ejemplo.locksuite.mdm.PolicyManager(context) }
-    
-    val aliasComponent = ComponentName(context, "com.ejemplo.locksuite.LauncherAlias")
-    val pm = context.packageManager
-    val isStealthActive = pm.getComponentEnabledSetting(aliasComponent) == PackageManager.COMPONENT_ENABLED_STATE_DISABLED
 
-    var stealthModeState by remember { mutableStateOf(isStealthActive) }
+    val aliasComponent = ComponentName(context, "com.ejemplo.locksuite.LauncherAlias")
+    val isStealthActive = context.packageManager.getComponentEnabledSetting(aliasComponent) ==
+        PackageManager.COMPONENT_ENABLED_STATE_DISABLED
 
     // Antes el estado del Watchdog se mostraba como "ACTIVO" en un string fijo,
     // sin verificar nada real: si el servicio moría (p.ej. un OEM agresivo con la
@@ -3391,7 +3350,7 @@ fun ServicesTabContent(
                         value = if (isWatchdogRunning) "ACTIVO (Servicio de Primer Plano)" else "⚠️ INACTIVO — reabra la app para reiniciarlo"
                     )
                     StatusLabelRow(label = "Canal FCM de Control Remoto", value = "LISTO (Firebase Cloud Messaging)")
-                    StatusLabelRow(label = "Modo Stealth (Launcher Oculto)", value = if (stealthModeState) "ACTIVADO" else "DESACTIVADO")
+                    StatusLabelRow(label = "Modo Stealth (Launcher Oculto)", value = if (isStealthActive) "ACTIVADO" else "DESACTIVADO")
                 }
             }
         }
@@ -3525,264 +3484,6 @@ fun ServicesTabContent(
                     ) {
                         Text("Cambiar PIN de Administrador", fontWeight = FontWeight.Bold)
                     }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Activar Modo Stealth", color = Color.White, fontSize = 14.sp)
-                            Text(
-                                "Oculta el ícono del menú. Para volver a abrir: marque *#*#1234#*#* en el teléfono, o vaya a Ajustes → Aplicaciones → LockSuite MDM → (ícono de engranaje ⚙️).",
-                                color = Color.LightGray,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                        Switch(
-                            checked = stealthModeState,
-                            onCheckedChange = { enabled ->
-                                val state = if (enabled) {
-                                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-                                } else {
-                                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-                                }
-                                try {
-                                    pm.setComponentEnabledSetting(
-                                        aliasComponent,
-                                        state,
-                                        PackageManager.DONT_KILL_APP
-                                    )
-                                    stealthModeState = enabled
-                                    Toast.makeText(context, if (enabled) "Modo Stealth Activado. El ícono desaparecerá." else "Modo Stealth Desactivado.", Toast.LENGTH_LONG).show()
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
-                                }
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0E141B),
-                                checkedTrackColor = accentOrange
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Auto Evasión en Ajustes", color = Color.White, fontSize = 14.sp)
-                            Text(
-                                "Evita que desactiven el administrador o fuercen la detención desde los Ajustes del sistema.",
-                                color = Color.LightGray,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                        var evasionEnabledState by remember {
-                            mutableStateOf(policyManager.isSettingsEvasionEnabled())
-                        }
-                        Switch(
-                            checked = evasionEnabledState,
-                            onCheckedChange = { enabled ->
-                                val ok = policyManager.setSettingsEvasionEnabled(enabled)
-                                if (ok) {
-                                    evasionEnabledState = enabled
-                                    Toast.makeText(context, if (enabled) "Auto Evasión Activada." else "Auto Evasión Desactivada.", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0E141B),
-                                checkedTrackColor = accentOrange
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Bloquear Estados de WhatsApp", color = Color.White, fontSize = 14.sp)
-                            Text(
-                                "Evita ver o publicar Estados de contactos en WhatsApp.",
-                                color = Color.LightGray,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                        var blockStatusState by remember {
-                            mutableStateOf(policyManager.isWhatsAppBlockStatusEnabled())
-                        }
-                        Switch(
-                            checked = blockStatusState,
-                            onCheckedChange = { enabled ->
-                                policyManager.setWhatsAppBlockStatus(enabled)
-                                blockStatusState = enabled
-                                scope.launch(Dispatchers.IO) {
-                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
-                                }
-                                Toast.makeText(context, if (enabled) "Estados Bloqueados." else "Estados Permitidos.", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0E141B),
-                                checkedTrackColor = accentOrange
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Bloquear Canales de WhatsApp", color = Color.White, fontSize = 14.sp)
-                            Text(
-                                "Evita buscar, seguir o ver Canales/Newsletters en WhatsApp.",
-                                color = Color.LightGray,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                        var blockChannelsState by remember {
-                            mutableStateOf(policyManager.isWhatsAppBlockChannelsEnabled())
-                        }
-                        Switch(
-                            checked = blockChannelsState,
-                            onCheckedChange = { enabled ->
-                                policyManager.setWhatsAppBlockChannels(enabled)
-                                blockChannelsState = enabled
-                                scope.launch(Dispatchers.IO) {
-                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
-                                }
-                                Toast.makeText(context, if (enabled) "Canales Bloqueados." else "Canales Permitidos.", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0E141B),
-                                checkedTrackColor = accentOrange
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Bloquear Ofertas MP (Accesibilidad)", color = Color.White, fontSize = 14.sp)
-                            Text(
-                                "Bloquea visualmente la pestaña de Ofertas y Promociones en la pantalla de Mercado Pago.",
-                                color = Color.LightGray,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                        var blockMpAccState by remember {
-                            mutableStateOf(policyManager.isMercadoPagoBlockOffersAccessibilityEnabled())
-                        }
-                        Switch(
-                            checked = blockMpAccState,
-                            onCheckedChange = { enabled ->
-                                policyManager.setMercadoPagoBlockOffersAccessibility(enabled)
-                                blockMpAccState = enabled
-                                scope.launch(Dispatchers.IO) {
-                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
-                                }
-                                Toast.makeText(context, if (enabled) "Ofertas MP (Accesibilidad) Bloqueadas." else "Ofertas MP Permitidas.", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0E141B),
-                                checkedTrackColor = accentOrange
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Bloquear Ofertas MP (por VPN)", color = Color.White, fontSize = 14.sp)
-                            Text(
-                                "Bloquea las peticiones de red y APIs de promociones y créditos en Mercado Pago.",
-                                color = Color.LightGray,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                        var blockMpVpnState by remember {
-                            mutableStateOf(policyManager.isMercadoPagoBlockOffersVpnEnabled())
-                        }
-                        Switch(
-                            checked = blockMpVpnState,
-                            onCheckedChange = { enabled ->
-                                policyManager.setMercadoPagoBlockOffersVpn(enabled)
-                                blockMpVpnState = enabled
-                                scope.launch(Dispatchers.IO) {
-                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
-                                }
-                                Toast.makeText(context, if (enabled) "Ofertas MP (VPN) Bloqueadas." else "Ofertas MP Permitidas.", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0E141B),
-                                checkedTrackColor = accentOrange
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Bloqueo de Mercado Libre en Mercado Pago", color = Color.White, fontSize = 14.sp)
-                            Text(
-                                "Bloquea por DNS los dominios de Mercado Libre en Mercado Pago (click1, listado, mobile, snoopy, www).",
-                                color = Color.LightGray,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                        var blockMlState by remember {
-                            mutableStateOf(policyManager.isMercadoLibreInMpBlocked())
-                        }
-                        Switch(
-                            checked = blockMlState,
-                            onCheckedChange = { enabled ->
-                                policyManager.setMercadoLibreInMpBlocked(enabled)
-                                blockMlState = enabled
-                                scope.launch(Dispatchers.IO) {
-                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
-                                }
-                                Toast.makeText(context, if (enabled) "Mercado Libre en MP Bloqueado." else "Mercado Libre en MP Permitido.", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF0E141B),
-                                checkedTrackColor = accentOrange
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
 
                     // Configuración de Accesibilidad (Enlace directo al sistema)
                     Row(
@@ -4534,436 +4235,3 @@ private fun DnsActivityRow(
     }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// PESTAÑA "LISTA BLANCA" (8/9/2026) — ver mdm/WhitelistManager.kt
-// ═════════════════════════════════════════════════════════════════════════════
-//
-// Pedido del dueño: *"tendría que haber una sección en donde yo active modo lista
-// blanca y tenga una lista de apps que yo pueda permitir o no"*, y que permitir o
-// prohibir sea UN solo toque que arrastre las tres cosas (app, tienda, dominios).
-//
-// Dos decisiones de esta pantalla que conviene no "simplificar":
-//
-// · **El interruptor de simulación va ARRIBA del maestro y se explica en texto.**
-//   Encender el filtro estricto sin haber simulado es la forma más rápida de dejar
-//   un celular a medio funcionar sin saber por qué; la pantalla tiene que decirlo
-//   antes, no después.
-// · **La auditoría se muestra en esta misma pantalla, no solo en el panel.** El que
-//   está probando el equipo lo tiene en la mano: obligarlo a ir a la web para ver
-//   qué se bloqueó convierte diez minutos de trabajo en una tarde.
-
-@Composable
-private fun WhitelistTabContent(context: Context) {
-    val scope = rememberCoroutineScope()
-    val wl = remember { com.ejemplo.locksuite.mdm.WhitelistManager(context) }
-
-    var enabled by remember { mutableStateOf(wl.isEnabled()) }
-    var simulation by remember { mutableStateOf(wl.isSimulation()) }
-    var sharedCdn by remember { mutableStateOf(wl.isSharedCdnAllowed()) }
-    var decisions by remember { mutableStateOf(wl.allDecisions()) }
-    var domainCount by remember { mutableIntStateOf(wl.ruleCount()) }
-    var audit by remember { mutableStateOf(com.ejemplo.locksuite.mdm.WhitelistManager.auditSnapshot()) }
-    var busy by remember { mutableStateOf(false) }
-    var filtro by remember { mutableStateOf("") }
-
-    val accentOrange = Color(0xFFF5C438)
-    val navyMedium = Color(0xFF1A222C)
-
-    fun refresh() {
-        decisions = wl.allDecisions()
-        domainCount = wl.ruleCount()
-        audit = com.ejemplo.locksuite.mdm.WhitelistManager.auditSnapshot()
-    }
-
-    // La auditoría se refresca sola mientras la pantalla está abierta y en STARTED: durante la
-    // simulación es un contador vivo y mirarlo es justamente lo que hay que hacer.
-    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
-    LaunchedEffect(enabled, lifecycleOwner) {
-        lifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
-            while (true) {
-                kotlinx.coroutines.delay(3000)
-                audit = com.ejemplo.locksuite.mdm.WhitelistManager.auditSnapshot()
-            }
-        }
-    }
-
-    val instaladas = remember {
-        com.ejemplo.locksuite.mdm.WhitelistCatalog.APPS.associate { entry ->
-            entry.packageName to try {
-                context.packageManager.getPackageInfo(entry.packageName, 0)
-                true
-            } catch (e: Exception) {
-                false
-            }
-        }
-    }
-
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
-
-        item {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    LocaleManager.t("Apps y dominios"),
-                    color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold
-                )
-                Spacer(Modifier.height(6.dp))
-                // 10/9/2026 — el texto decía solo lo que hace el modo estricto, y esta
-                // pantalla ya no es "la del modo lista blanca": es la de decidir apps.
-                // Lo que pasa con una app PROHIBIDA y con los dominios no kosher de una
-                // app permitida rige con el modo apagado también, y no decirlo hacía
-                // pensar que había que encender el filtro estricto para que sirviera.
-                Text(
-                    LocaleManager.t(
-                        "Permitir o prohibir una app decide tres cosas a la vez: si se ve en el " +
-                        "celular, si se puede bajar de la tienda, y qué dominios suyos resuelven."
-                    ),
-                    color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    LocaleManager.t(
-                        "Los dominios no kosher que viven adentro de una app (las ofertas de " +
-                        "Mercado Pago, el foro de Waze, los GIF) quedan bloqueados siempre, " +
-                        "aunque la app esté permitida y aunque el filtro estricto esté apagado."
-                    ),
-                    color = Color(0xFFF59E0B), fontSize = 12.sp
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    LocaleManager.t(
-                        "El filtro estricto de abajo es aparte: cierra además todo lo que NO " +
-                        "esté en la lista, incluidas las apps sin marcar."
-                    ),
-                    color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp
-                )
-            }
-        }
-
-        // ── Paso 1: simulación ──
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                colors = CardDefaults.cardColors(containerColor = navyMedium)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                if (simulation) LocaleManager.t("Paso 1 — Modo simulación (no bloquea nada)")
-                                else LocaleManager.t("Modo estricto (bloquea de verdad)"),
-                                color = if (simulation) accentOrange else Color(0xFFFF5252),
-                                fontWeight = FontWeight.Bold, fontSize = 15.sp
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                if (simulation) LocaleManager.t(
-                                    "Anota qué SE HABRÍA bloqueado, sin bloquearlo. Usá el celular " +
-                                    "normalmente unos días, revisá la lista de abajo y agregá lo que falte. " +
-                                    "Recién entonces pasá a estricto."
-                                ) else LocaleManager.t(
-                                    "Todo lo que no esté en la lista deja de resolver AHORA. Si una app " +
-                                    "deja de andar, va a aparecer abajo el dominio que le faltó."
-                                ),
-                                color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp
-                            )
-                        }
-                        Switch(
-                            checked = !simulation,
-                            onCheckedChange = { estricto ->
-                                simulation = !estricto
-                                wl.setSimulation(!estricto)
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFFF5252))
-                        )
-                    }
-                }
-            }
-        }
-
-        // ── Maestro ──
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                colors = CardDefaults.cardColors(containerColor = navyMedium)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                LocaleManager.t("Activar el filtro de lista blanca"),
-                                color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp
-                            )
-                            Text(
-                                LocaleManager.t("Dominios cargados") + ": $domainCount",
-                                color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp
-                            )
-                        }
-                        Switch(
-                            checked = enabled,
-                            onCheckedChange = {
-                                enabled = it
-                                wl.setEnabled(it)
-                                refresh()
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = accentOrange)
-                        )
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                LocaleManager.t("Permitir CDN compartidos"),
-                                color = Color.White, fontSize = 14.sp
-                            )
-                            Text(
-                                LocaleManager.t(
-                                    "CloudFront, Akamai, Fastly. Varias apps los necesitan, pero " +
-                                    "permiten una porción grande de internet. Apagalo para endurecer."
-                                ),
-                                color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp
-                            )
-                        }
-                        Switch(
-                            checked = sharedCdn,
-                            onCheckedChange = {
-                                sharedCdn = it
-                                wl.setSharedCdnAllowed(it)
-                                domainCount = wl.ruleCount()
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = accentOrange)
-                        )
-                    }
-                }
-            }
-        }
-
-        // ── Auditoría ──
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                colors = CardDefaults.cardColors(containerColor = navyMedium)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            if (simulation) LocaleManager.t("Se habría bloqueado")
-                            else LocaleManager.t("Bloqueado por la lista blanca"),
-                            color = Color.White, fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp, modifier = Modifier.weight(1f)
-                        )
-                        Text("${audit.size}", color = accentOrange, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(onClick = {
-                            com.ejemplo.locksuite.mdm.WhitelistManager.clearAudit()
-                            audit = emptyList()
-                        }) { Text(LocaleManager.t("Limpiar"), color = Color(0xFFFF5252), fontSize = 11.sp) }
-                    }
-                    if (audit.isEmpty()) {
-                        Text(
-                            if (enabled) LocaleManager.t("Nada bloqueado todavía. Usá el celular un rato.")
-                            else LocaleManager.t("Activá el filtro para empezar a registrar."),
-                            color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp
-                        )
-                    } else {
-                        Text(
-                            LocaleManager.t(
-                                "Cada línea es un dominio que alguna app pidió y no está en ninguna lista. " +
-                                "Si una app que querés permitir dejó de andar, su dominio está acá."
-                            ),
-                            color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        audit.take(40).forEach { (dominio, golpes) ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(dominio, color = Color.White, fontSize = 12.sp, maxLines = 1)
-                                    Text(
-                                        "$golpes " + LocaleManager.t("intento(s)"),
-                                        color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp
-                                    )
-                                }
-                                // Atajo: mandarlo directo a "forzar permitir" de la sección DNS.
-                                // Es la salida rápida cuando hace falta destrabar algo YA; lo
-                                // ordenado es agregarlo a la app que corresponda desde el panel.
-                                TextButton(onClick = {
-                                    try {
-                                        com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager
-                                            .setRule(dominio, RuleType.FORCE_ALLOW)
-                                        Toast.makeText(
-                                            context,
-                                            LocaleManager.t("Permitido a la fuerza") + ": $dominio",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    } catch (e: Exception) {
-                                        e.printStackTrace()
-                                    }
-                                }) {
-                                    Text(LocaleManager.t("Permitir"), color = Color(0xFF69F0AE), fontSize = 11.sp)
-                                }
-                            }
-                        }
-                        if (audit.size > 40) {
-                            Text(
-                                LocaleManager.t("…y") + " ${audit.size - 40} " + LocaleManager.t("más (se ven todos en el panel)"),
-                                color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Buscador ──
-        item {
-            OutlinedTextField(
-                value = filtro,
-                onValueChange = { filtro = it },
-                label = { Text(LocaleManager.t("Buscar app"), color = Color.White.copy(alpha = 0.8f)) },
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = accentOrange,
-                    unfocusedBorderColor = Color.White.copy(alpha = 0.4f),
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
-                ),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
-            )
-        }
-
-        // ── Catálogo de apps ──
-        //
-        // ⚠️ 10/9/2026 — LO QUE SE TOCA ACÁ ES UNA DECISIÓN DE **ESTE** EQUIPO.
-        //
-        // Antes estos botones escribían el mapa global (`allowApp`/`blockApp`), que es
-        // el catálogo de la FLOTA. Como el celular no puede escribir el nodo global de
-        // Firebase, el efecto real era peor que "le cambia la configuración a todos":
-        // el cambio valía hasta el próximo `SYNC_WHITELIST`, que lo pisaba con lo que
-        // dijera el panel — o sea que se deshacía solo, en silencio, horas después.
-        // Ahora van a `whitelist_device_decisions`, que le gana al global y sobrevive
-        // a la sincronización. Ver WhitelistManager.KEY_DEVICE_DECISIONS.
-        val visibles = com.ejemplo.locksuite.mdm.WhitelistCatalog.APPS.filter {
-            filtro.isBlank() ||
-                it.label.contains(filtro, ignoreCase = true) ||
-                it.packageName.contains(filtro, ignoreCase = true)
-        }
-
-        items(visibles) { entry ->
-            val estado = decisions[entry.packageName]
-                ?: com.ejemplo.locksuite.mdm.WhitelistManager.STATE_UNSET
-            WhitelistAppRow(
-                label = entry.label,
-                packageName = entry.packageName,
-                allowCount = entry.allow.size,
-                blockCount = entry.block.size,
-                note = entry.note,
-                installed = instaladas[entry.packageName] == true,
-                state = estado,
-                busy = busy,
-                onAllow = {
-                    busy = true
-                    scope.launch {
-                        withContext(Dispatchers.IO) { wl.setDeviceState(entry.packageName, com.ejemplo.locksuite.mdm.WhitelistManager.STATE_ALLOW) }
-                        refresh(); busy = false
-                    }
-                },
-                onBlock = {
-                    busy = true
-                    scope.launch {
-                        withContext(Dispatchers.IO) { wl.setDeviceState(entry.packageName, com.ejemplo.locksuite.mdm.WhitelistManager.STATE_BLOCK) }
-                        refresh(); busy = false
-                    }
-                },
-                onUnset = {
-                    busy = true
-                    scope.launch {
-                        withContext(Dispatchers.IO) { wl.clearDeviceState(entry.packageName) }
-                        refresh(); busy = false
-                    }
-                }
-            )
-        }
-
-        item { Spacer(Modifier.height(24.dp)) }
-    }
-}
-
-@Composable
-private fun WhitelistAppRow(
-    label: String,
-    packageName: String,
-    allowCount: Int,
-    blockCount: Int,
-    note: String,
-    installed: Boolean,
-    state: String,
-    busy: Boolean,
-    onAllow: () -> Unit,
-    onBlock: () -> Unit,
-    onUnset: () -> Unit
-) {
-    val permitida = state == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_ALLOW
-    val prohibida = state == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_BLOCK
-
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A222C))
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                        if (!installed) {
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                LocaleManager.t("(no instalada)"),
-                                color = Color.White.copy(alpha = 0.45f), fontSize = 11.sp
-                            )
-                        }
-                    }
-                    Text(packageName, color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, maxLines = 1)
-                    Text(
-                        "$allowCount " + LocaleManager.t("dominios permitidos") +
-                            if (blockCount > 0) " · $blockCount " + LocaleManager.t("bloqueados") else "",
-                        color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp
-                    )
-                }
-                val (texto, color) = when {
-                    permitida -> LocaleManager.t("Permitida") to Color(0xFF69F0AE)
-                    prohibida -> LocaleManager.t("Prohibida") to Color(0xFFFF5252)
-                    else -> LocaleManager.t("Sin marcar") to Color.White.copy(alpha = 0.5f)
-                }
-                Text(texto, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            }
-
-            if (note.isNotBlank()) {
-                Spacer(Modifier.height(6.dp))
-                Text(note, color = Color(0xFFFFD180), fontSize = 11.sp)
-            }
-
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = onAllow,
-                    enabled = !busy && !permitida,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
-                    modifier = Modifier.weight(1f)
-                ) { Text(LocaleManager.t("Permitir"), fontSize = 12.sp, color = Color.White) }
-                Button(
-                    onClick = onBlock,
-                    enabled = !busy && !prohibida,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
-                    modifier = Modifier.weight(1f)
-                ) { Text(LocaleManager.t("Prohibir"), fontSize = 12.sp, color = Color.White) }
-                if (permitida || prohibida) {
-                    TextButton(onClick = onUnset, enabled = !busy) {
-                        Text(LocaleManager.t("Quitar"), color = Color(0xFFFFD180), fontSize = 11.sp)
-                    }
-                }
-            }
-        }
-    }
-}

@@ -226,6 +226,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await page.evaluate(() => openDeviceSidebar('dev2', currentDevicesData['dev2']));
   await sleep(300);
   await page.screenshot({ path: 'panel_sin_fcm.png' });
+  const navCheck = await page.evaluate(() => ({
+    noTabWl: !document.getElementById('main-tab-whitelist'),
+    noTabDom: !document.getElementById('main-tab-dominios'),
+    activeBoxHidden: document.getElementById('whitelist-device-active-box')?.classList.contains('hidden')
+  }));
+  ok(navCheck.noTabWl && navCheck.noTabDom && navCheck.activeBoxHidden,
+    'navegación sin Lista blanca/Dominios globales y caja activa oculta por defecto: ' + JSON.stringify(navCheck));
   ok(errores.length === 0, 'sin errores de consola/página: ' + JSON.stringify(errores.slice(0, 5)));
   await browser.close();
   console.log(fallas ? fallas + ' FALLAS' : 'TODO VERDE');

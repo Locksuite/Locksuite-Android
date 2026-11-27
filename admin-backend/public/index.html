@@ -73,12 +73,6 @@
           <button id="main-tab-archived" class="main-nav-btn" type="button">📦 Archivados</button>
           <button id="main-tab-presets" class="main-nav-btn" type="button">📋 Perfiles</button>
           <button id="main-tab-global-settings" class="main-nav-btn" type="button">⚙️ Ajustes</button>
-          <button id="main-tab-whitelist" class="main-nav-btn" type="button">🛡️ Lista blanca</button>
-          <!-- 10/9/2026: editor global de "qué dominio de cada app es kosher".
-               Es una página aparte porque es configuración GLOBAL y conviene que se
-               vea como tal: lo que se toca ahí rige para toda la flota. -->
-          <a id="main-tab-dominios" class="main-nav-btn" href="dominios.html" target="_blank"
-             rel="noopener" style="text-decoration:none">🌐 Dominios por app ↗</a>
           <!-- 29/10/2026 (B.101): la Tienda Play — apps de Google Play que se instalan con la
                pantalla tapada (mismo mecanismo que «Actualizar app»). Catálogo GLOBAL en 3
                niveles; también es una página aparte por la misma razón que Dominios. -->
@@ -259,79 +253,11 @@
               <p class="loading-text">Cargando aplicaciones de la tienda…</p>
             </div>
           </div>
-        </div>
-
-        <!-- ════════════════════════════════════════════════════════════════
-             MODO LISTA BLANCA (8/9/2026)
-
-             El catálogo es GLOBAL: la condición kosher de una app no cambia de
-             un celular a otro. Lo que sí es por dispositivo son los
-             interruptores (encendido / simulación), que están en la pestaña
-             "Políticas" de cada equipo.
-             ════════════════════════════════════════════════════════════════ -->
-        <!-- ════════════════════════════════════════════════════════════════
-             PEDIDOS DE APPS (10/9/2026, B.59) — ver app/mdm/AppRequestManager.kt
-             El usuario pide desde la Tienda del celular y acá se aprueba o se
-             rechaza. Aprobar hace las MISMAS tres cosas que "Permitir" de la
-             lista blanca, más despertar la app si estaba suspendida u oculta.
-             ════════════════════════════════════════════════════════════════ -->
-        <div id="requests-container" class="hidden">
-          <div class="sidebar-card" style="margin-bottom: 24px;">
-            <h2>🔔 Pedidos de apps</h2>
-            <p class="hint-text" style="font-size: 13px; color: var(--text-gray); margin-top: 4px; margin-bottom: 8px;">
-              Lo que los usuarios pidieron desde la Tienda de su celular.
-              <strong>Aprobar</strong> hace las mismas tres cosas que «Permitir» en la lista blanca
-              (descargable de tu tienda, no oculta ni suspendida, dominios abiertos) y además
-              le avisa al celular. Te va a pedir el PIN de ese equipo.
-            </p>
-            <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-bottom: 16px;">
-              ⚠️ Aprobar <strong>no sube el APK</strong>. Si la app no está en tu tienda, cargala en
-              Ajustes → Tienda de Apps con su URL (y calculá la huella) o el celular la va a ver
-              permitida y no la va a encontrar para bajar.
-            </p>
-            <div style="display:flex; gap:12px; align-items:center; margin-bottom:16px;">
-              <label style="font-size:13px; color: var(--text-gray);">
-                <input type="checkbox" id="requests-show-resolved" /> Mostrar también los ya contestados
-              </label>
-              <span id="requests-status-msg" style="font-size: 13px;"></span>
-            </div>
-            <div id="app-requests-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px;">
-              <p class="loading-text" style="grid-column:1/-1;">Cargando pedidos…</p>
-            </div>
-          </div>
-        </div>
-
-        <div id="whitelist-container" class="hidden">
-          <div class="sidebar-card" style="margin-bottom: 24px;">
-            <h2>🛡️ Lista blanca — catálogo de apps</h2>
-            <p class="hint-text" style="font-size: 13px; color: var(--text-gray); margin-top: 4px; margin-bottom: 8px;">
-              <strong>Permitir</strong> una app hace tres cosas de un toque: se puede descargar de tu tienda,
-              no queda oculta ni suspendida en el celular, y sus dominios resuelven.
-              <strong>Prohibir</strong> hace las tres al revés.
-              Una app <strong>sin marcar</strong> no se toca, pero no tiene ningún dominio abierto: con el
-              filtro estricto encendido, se queda sin internet.
-            </p>
-            <p class="hint-text" style="font-size: 12px; color: var(--accent); margin-bottom: 16px;">
-              ⚠️ Antes de pasar un equipo a estricto, dejalo unos días en <strong>simulación</strong> y revisá
-              la auditoría en su pestaña Políticas: ahí aparece, dominio por dominio, lo que se habría
-              bloqueado. Ninguna lista escrita de antemano está completa.
-            </p>
-
-            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
-              <input type="text" id="whitelist-filter" placeholder="Buscar app…" style="flex:1; min-width:180px; background: var(--navy-dark); border: 1px solid var(--navy-light); color: var(--text-light); padding: 9px 12px; border-radius: 8px;" />
-              <button id="whitelist-push-all-btn" class="action-btn" style="background: var(--accent); color: var(--navy-dark); font-weight: bold; border: none; padding: 9px 16px; border-radius: 8px; cursor: pointer;">📤 Enviar a todos los celulares</button>
-            </div>
-            <p id="whitelist-status-msg" style="font-size: 12px; margin-bottom: 12px; min-height: 18px; color: var(--accent);"></p>
-
-            <div id="whitelist-apps-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px;">
-              <p class="loading-text" style="grid-column:1/-1;">Cargando catálogo…</p>
-            </div>
-          </div>
 
           <!-- ════════════════════════════════════════════════════════════════
                ALTA POR QR (10/9/2026, B.61) — ver app/receiver/DeviceAdminReceiver.kt
                ════════════════════════════════════════════════════════════════ -->
-          <div class="sidebar-card" style="margin-bottom: 24px;">
+          <div class="sidebar-card" id="qr-card" style="margin-bottom: 24px;">
             <h2>📲 Alta de un equipo nuevo por QR</h2>
             <p class="hint-text" style="font-size: 13px; color: var(--text-gray); margin-top: 4px; margin-bottom: 8px;">
               En un equipo <strong>recién reseteado y sin cuenta de Google</strong>, tocá seis veces la
@@ -370,24 +296,12 @@
 
           <!-- ════════════════════════════════════════════════════════════════
                DETECTOR DE NAVEGADORES EMBEBIDOS (10/9/2026, B.60)
-               Ver app/mdm/EmbeddedBrowserDetector.kt. Va en esta pestaña y no en
-               Ajustes porque es lo mismo que la lista blanca —qué se bloquea y qué
-               no— y porque el flujo es idéntico: encender, mirar la simulación
-               unos días, y recién ahí apagar la simulación.
                ════════════════════════════════════════════════════════════════ -->
           <div class="sidebar-card" style="margin-bottom: 24px;">
             <h2>🕵️ Detector de navegadores embebidos</h2>
             <p class="hint-text" style="font-size: 13px; color: var(--text-gray); margin-top: 4px; margin-bottom: 8px;">
-              El bloqueo de WebView de hoy es <strong>app por app</strong>: hay que acertar de antemano
-              cuáles traen un navegador adentro, y siempre aparece una nueva. Esto lo detecta
-              <strong>por la forma de la pantalla</strong> —si hay una barra de direcciones o los
-              controles de un navegador— así que funciona con apps en las que nadie pensó.
-              No usa ninguna lista blanca.
-            </p>
-            <p class="hint-text" style="font-size: 12px; color: var(--accent); margin-bottom: 16px;">
-              ⚠️ <strong>Dejalo en simulación unos días antes de que bloquee.</strong> En simulación no
-              rompe nada: solo anota abajo qué habría bloqueado, y con qué motivo. Un falso positivo
-              deja una app sin funcionar y nadie sabe por qué.
+              El bloqueo de WebView detecta pantallas de navegador embebido por su estructura visual.
+              Dejalo en simulación unos días antes de pasar a bloqueo real.
             </p>
             <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
               <select id="iab-device" style="flex:1; min-width:200px; background: var(--navy-dark); border:1px solid var(--navy-light); color: var(--text-light); padding:9px 12px; border-radius:8px;"></select>
@@ -401,23 +315,32 @@
               <p class="loading-text" style="grid-column:1/-1;">Elegí un celular.</p>
             </div>
           </div>
+        </div>
 
-          <!-- Agregar una app que no está en el catálogo de fábrica -->
-          <div class="sidebar-card">
-            <h2>Agregar una app que no está en la lista</h2>
-            <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-top: 4px; margin-bottom: 16px;">
-              Poné el paquete y los dominios que querés permitirle. Los subdominios se heredan solos:
-              con <code>ejemplo.com</code> ya entran <code>api.ejemplo.com</code> y <code>www.ejemplo.com</code>.
-              En "dominios prohibidos" van las partes no kosher de una app por lo demás aceptable —
-              se aplican aunque la app esté permitida.
+        <!-- ════════════════════════════════════════════════════════════════
+             PEDIDOS DE APPS (10/9/2026, B.59)
+             ════════════════════════════════════════════════════════════════ -->
+        <div id="requests-container" class="hidden">
+          <div class="sidebar-card" style="margin-bottom: 24px;">
+            <h2>🔔 Pedidos de apps</h2>
+            <p class="hint-text" style="font-size: 13px; color: var(--text-gray); margin-top: 4px; margin-bottom: 8px;">
+              Lo que los usuarios pidieron desde la Tienda de su celular.
+              <strong>Aprobar</strong> permite la app y avisa al celular. Te va a pedir el PIN de ese equipo.
             </p>
-            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:12px;">
-              <input type="text" id="wl-custom-label" placeholder="Nombre (ej: Banco Ciudad)" style="background: var(--navy-medium); border: 1px solid var(--navy-light); color: var(--text-light); padding: 9px 12px; border-radius: 8px; font-size:13px;" />
-              <input type="text" id="wl-custom-package" placeholder="Paquete (ej: ar.com.bancociudad)" style="background: var(--navy-medium); border: 1px solid var(--navy-light); color: var(--text-light); padding: 9px 12px; border-radius: 8px; font-size:13px;" />
+            <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-bottom: 16px;">
+              ⚠️ Aprobar <strong>no sube el APK</strong>. Si la app no está en tu tienda, cargala en
+              Ajustes → Tienda de Apps con su URL (y calculá la huella) o el celular la va a ver
+              permitida y no la va a encontrar para bajar.
+            </p>
+            <div style="display:flex; gap:12px; align-items:center; margin-bottom:16px;">
+              <label style="font-size:13px; color: var(--text-gray);">
+                <input type="checkbox" id="requests-show-resolved" /> Mostrar también los ya contestados
+              </label>
+              <span id="requests-status-msg" style="font-size: 13px;"></span>
             </div>
-            <input type="text" id="wl-custom-allow" placeholder="Dominios permitidos, separados por coma" style="width:100%; box-sizing:border-box; background: var(--navy-medium); border: 1px solid var(--navy-light); color: var(--text-light); padding: 9px 12px; border-radius: 8px; font-size:13px; margin-bottom:12px;" />
-            <input type="text" id="wl-custom-block" placeholder="Dominios prohibidos (opcional), separados por coma" style="width:100%; box-sizing:border-box; background: var(--navy-medium); border: 1px solid var(--navy-light); color: var(--text-light); padding: 9px 12px; border-radius: 8px; font-size:13px; margin-bottom:16px;" />
-            <button id="wl-custom-add-btn" class="action-btn" style="background: var(--accent); color: var(--navy-dark); font-weight:bold; border:none; padding:10px 16px; border-radius:8px; cursor:pointer; font-size:13px;">➕ Agregar al catálogo</button>
+            <div id="app-requests-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px;">
+              <p class="loading-text" style="grid-column:1/-1;">Cargando pedidos…</p>
+            </div>
           </div>
         </div>
       </div>
@@ -676,39 +599,18 @@
               </div>
             </div>
 
-            <!-- ══ MODO LISTA BLANCA (8/9/2026) — por dispositivo ══ -->
+            <!-- ══ MODO LISTA BLANCA — por dispositivo (oculto salvo que esté activado) ══ -->
             <div class="sidebar-card" id="whitelist-device-card">
               <h3 style="margin-top:0;">🛡️ Modo lista blanca</h3>
               <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-bottom: 12px;">
-                Filtro estricto: <strong>solo resuelven los dominios de las apps permitidas</strong>. Lo demás
-                queda sin internet, incluidas las apps que no marcaste. El catálogo (qué apps, qué dominios)
-                se edita una sola vez en la pestaña <strong>🛡️ Lista blanca</strong> de arriba y vale para
-                todos los equipos; acá se decide si ESTE equipo lo aplica y con qué dureza.
-                <br /><br />
-                <strong>Empezá siempre en simulación.</strong> No bloquea nada: anota lo que se habría
-                bloqueado y lo publica abajo. Con eso completás el catálogo mirando datos reales en vez de
-                adivinar. Ninguna lista escrita de antemano está completa — eso es parte del diseño.
-                <br /><br />
-                Para permitir o prohibir un dominio suelto, usá <strong>forzar permitir / forzar prohibir</strong>
-                de la sección DNS: esas dos reglas le ganan a la lista blanca y a la infraestructura.
+                Cada celular maneja su propia lista blanca (catálogo, dominios y respaldos). Mientras esté apagado, funciona en modo lista negra normal y la sección Lista blanca permanece oculta.
               </p>
               <div class="toggle-list">
-                <label class="toggle-row"><span>Activar el filtro de lista blanca</span><input type="checkbox" class="policy-switch" data-policy="whitelistEnabled" /></label>
-                <label class="toggle-row"><span style="padding-left:14px;">↳ <strong>Bloquear de verdad</strong> (apagado = solo simular)</span><input type="checkbox" class="policy-switch" data-policy="whitelistEnforce" /></label>
-                <label class="toggle-row"><span style="padding-left:14px;">↳ Permitir CDN compartidos (CloudFront, Akamai, Fastly)</span><input type="checkbox" class="policy-switch" data-policy="whitelistSharedCdn" /></label>
+                <label class="toggle-row"><span>Activar modo lista blanca en este celular</span><input type="checkbox" class="policy-switch" data-policy="whitelistEnabled" /></label>
               </div>
-              <div style="display:flex; gap:8px; flex-wrap:wrap; margin: 12px 0;">
-                <button class="action-btn wl-device-btn" data-cmd="SYNC_WHITELIST" style="background: var(--navy-light); color: var(--text-light); border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:12px;">🔄 Sincronizar catálogo</button>
-                <button class="action-btn wl-device-btn" data-cmd="CLEAR_WHITELIST_AUDIT" style="background: var(--navy-light); color: var(--text-light); border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:12px;">🧹 Limpiar auditoría</button>
-              </div>
-              <p id="whitelist-device-summary" style="font-size:12px; color: var(--text-gray); margin: 8px 0;"></p>
-              <h4 style="margin: 14px 0 6px; font-size: 13px;">Dominios que quedaron afuera</h4>
-              <p class="hint-text" style="font-size: 11px; color: var(--text-gray); margin-bottom: 8px;">
-                Si una app que querés permitir dejó de andar, su dominio está acá. "Agregar a…" lo suma al
-                catálogo global de esa app, así queda arreglado para toda la flota de una.
-              </p>
-              <div id="whitelist-audit-list" style="max-height: 320px; overflow-y: auto;">
-                <p class="loading-text" style="font-size:12px;">Sin datos todavía.</p>
+              <div id="whitelist-device-active-box" class="hidden" style="margin-top:10px;">
+                <p id="whitelist-device-summary" style="font-size:12px; color: var(--text-gray); margin: 0 0 8px;"></p>
+                <a id="whitelist-open-full-link" href="celular.html" target="_blank" rel="noopener" class="action-btn" style="display:inline-block; text-decoration:none; background: var(--accent); color: var(--navy-dark); font-weight:bold; padding:8px 14px; border-radius:8px; font-size:12px;">🛡️ Abrir Lista blanca completa →</a>
               </div>
             </div>
 
@@ -1204,11 +1106,11 @@
   <!-- 26/10/2026 (B.95): app.js usa policies.js para saber qué interruptor toca cada
        comando pendiente (marca «⏳ pendiente»). Es el mismo archivo generado que ya usa
        la ficha nueva; si faltara, la barra funciona igual, solo sin esa marca. -->
-  <script src="policies.js?v=5"></script>
+  <script src="policies.js?v=6"></script>
   <!-- 29/10/2026 (B.101): aprobar un pedido de la Tienda Play usa la lógica pura de la pantalla
        tienda.html (TiendaLogic.approveRequest). Si faltara, el resto del panel sigue igual y solo
        esos pedidos avisan que no se pueden aprobar desde acá. -->
   <script src="tienda_logic.js?v=4"></script>
-  <script src="app.js?v=56"></script>
+  <script src="app.js?v=57"></script>
 </body>
 </html>

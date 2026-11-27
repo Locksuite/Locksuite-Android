@@ -88,10 +88,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await p.goto('file://' + path.resolve('celular.html') + '?id=dev1');
   await p.waitForTimeout(1200);
 
-  // Todas las secciones existen y se abren desde el riel.
+  // Todas las secciones visibles por defecto existen (y whitelist permanece oculta con whitelistEnabled=false).
   const secciones = await p.evaluate(() => [...document.querySelectorAll('#c-rail button:not(.hidden)')].map(x => x.dataset.sec));
-  ok(['resumen', 'rapida', 'celapps', 'apps', 'politicas', 'actualizaciones', 'dns', 'tiendaplay', 'acciones', 'diag']
-    .every(s => secciones.includes(s)), 'riel con todas las secciones (incluida Tienda Play): ' + secciones.join(','));
+  ok(['resumen', 'rapida', 'celapps', 'politicas', 'actualizaciones', 'dns', 'tiendaplay', 'acciones', 'diag']
+    .every(s => secciones.includes(s)) && !secciones.includes('whitelist'),
+    'riel con todas las secciones y whitelist oculta por defecto: ' + secciones.join(','));
   for (const s of secciones) {
     await p.click('#c-rail button[data-sec="' + s + '"]');
     const visible = await p.evaluate((s) => { const el = document.querySelector('.ls-section[data-sec="' + s + '"]'); return !!el && el.offsetHeight > 0; }, s);
@@ -244,13 +245,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok(updT && updT.command === 'UPDATE_APP' && updT.route === 'hosted' && updT.packages === 'com.waze', 'Tienda: «Actualizar desde la Tienda» → route=hosted ' + JSON.stringify(updT));
   ok(await p.evaluate(() => document.querySelector('#c-upd-ruta button.on-allow').dataset.ruta === 'auto'), 'la elección de camino de la sección no cambió');
 
-  // ── Filtro: detector de navegadores embebidos ──
-  await p.click('#c-rail button[data-sec="apps"]');
+  // ── Políticas: detector de navegadores embebidos ──
+  await p.click('#c-rail button[data-sec="politicas"]');
   n = await p.evaluate(() => __calls.length);
   await p.click('#c-iab-on');
   await sleep(250);
   await p.evaluate(() => __deviceApplies('dev1', __lastCid, null));
-  ok(await p.evaluate((n) => __calls.slice(n).some(c => c.command === 'ENABLE_IAB_FINDER'), n), 'Filtro: «Encender detector» → ENABLE_IAB_FINDER');
+  ok(await p.evaluate((n) => __calls.slice(n).some(c => c.command === 'ENABLE_IAB_FINDER'), n), 'Políticas: «Encender detector» → ENABLE_IAB_FINDER');
 
   // ── Diagnóstico ──
   await p.click('#c-rail button[data-sec="diag"]');
@@ -269,10 +270,40 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await sleep(200);
   ok(await p.evaluate(() => __fakeDb.getAt('devices/dev1/trustedAdmins/admin1') === null), 'Acciones: «Olvidar la confianza del PIN» borra trustedAdmins/<uid>');
 
-  // ── Teléfono: ninguna sección se sale de la pantalla ──
+  // ── Lista blanca por dispositivo: switch en Resumen → sección oculta hasta activar ──
+  await p.click('#c-rail button[data-sec="resumen"]');
+  await sleep(100);
+  ok(await p.evaluate(() => !!document.getElementById('c-wl-master-sw') && document.getElementById('c-rail-whitelist').classList.contains('hidden')),
+    'Lista blanca: interruptor presente en Resumen y sección oculta cuando está apagada');
+  n = await p.evaluate(() => __calls.length);
+  await p.evaluate(() => { window.__fnMode = 'fcm_new'; });
+  await p.click('label.ls-sw:has(#c-wl-master-sw)');
+  await sleep(200);
+  await p.evaluate(() => __deviceApplies('dev1', __lastCid, 'whitelistEnabled', true));
+  await sleep(300);
+  const wlCmds = await p.evaluate((n) => __calls.slice(n).map(c => c.command), n);
+  ok(wlCmds.includes('ENABLE_WHITELIST_MODE') && await p.evaluate(() => !document.getElementById('c-rail-whitelist').classList.contains('hidden')),
+    'Lista blanca: activar interruptor manda ENABLE_WHITELIST_MODE y muestra la sección en el riel');
+  await p.click('#c-rail button[data-sec="whitelist"]');
+  await sleep(200);
+  const wlAppsCount = await p.evaluate(() => document.querySelectorAll('#wl-apps-grid .ls-wl-card').length);
+  ok(wlAppsCount === 25, 'Lista blanca: precarga 25 apps del catálogo por defecto (' + wlAppsCount + ')');
+  await p.click('#wl-history-btn');
+  await sleep(200);
+  await p.evaluate(() => { window.prompt = () => 'nota test'; });
+  await p.click('#wl-history-manual-save');
+  await sleep(300);
+  const bkCount = await p.evaluate(() => Object.keys(__fakeDb.getAt('deviceWhitelistBackups/dev1') || {}).length);
+  ok(bkCount >= 1, 'Lista blanca: guarda respaldo manual en deviceWhitelistBackups/dev1 (' + bkCount + ')');
+  await p.click('#wl-history-cancel');
+  await sleep(100);
+
+  // ── Teléfono: ninguna sección se sale de la pantalla (incluida Lista blanca) ──
   await p.setViewportSize({ width: 390, height: 844 });
+  const seccionesFinal = await p.evaluate(() => [...document.querySelectorAll('#c-rail button:not(.hidden)')].map(x => x.dataset.sec));
+  ok(seccionesFinal.includes('whitelist'), 'Lista blanca visible para prueba responsive 390 px');
   const anchos = [];
-  for (const s of secciones) {
+  for (const s of seccionesFinal) {
     await p.click('#c-rail button[data-sec="' + s + '"]');
     await sleep(60);
     const w = await p.evaluate(() => document.documentElement.scrollWidth);

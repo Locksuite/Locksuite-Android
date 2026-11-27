@@ -460,6 +460,7 @@ class CommandProcessor(private val context: Context) {
                     }
                     com.ejemplo.locksuite.mdm.PlayStoreManager.releaseWebViewOwnership(context, packagesList.toSet())
                     com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.releaseWebViewOwnership(context, packagesList.toSet())
+                    com.ejemplo.locksuite.mdm.WhitelistManager.releaseNowebOwnership(context, packagesList.toSet())
                     true
                 }
                 "UNBLOCK_WEBVIEW" -> {
@@ -748,8 +749,19 @@ class CommandProcessor(private val context: Context) {
                 // tiene un tope duro de ~4 KB y la Function corta en 3.000 bytes, y una
                 // lista de 25 apps con sus dominios lo pasa sola. Un comando que se
                 // trunca en silencio es peor que un comando que no llega.
-                "ENABLE_WHITELIST_MODE" -> policyManager.setWhitelistModeEnabled(true)
-                "DISABLE_WHITELIST_MODE" -> policyManager.setWhitelistModeEnabled(false)
+                "ENABLE_WHITELIST_MODE" -> {
+                    val ok = policyManager.setWhitelistModeEnabled(true)
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncWhitelistState(applicationContext, force = true)
+                    CoroutineScope(Dispatchers.IO).launch {
+                        com.ejemplo.locksuite.util.FirebaseDeviceSync.pullWhitelistConfig(applicationContext)
+                    }
+                    ok
+                }
+                "DISABLE_WHITELIST_MODE" -> {
+                    val ok = policyManager.setWhitelistModeEnabled(false)
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncWhitelistState(applicationContext, force = true)
+                    ok
+                }
                 "SET_WHITELIST_SIMULATION" -> policyManager.setWhitelistSimulation(true)
                 "SET_WHITELIST_ENFORCE" -> policyManager.setWhitelistSimulation(false)
                 "ENABLE_WHITELIST_SHARED_CDN" -> policyManager.setWhitelistSharedCdnAllowed(true)
@@ -798,7 +810,7 @@ class CommandProcessor(private val context: Context) {
                             .pullWhitelistConfig(applicationContext)
                         sendCommandAck(
                             idToAck, "SYNC_WHITELIST", ok,
-                            if (ok) null else "No se pudo leer globalSettings/whitelist"
+                            if (ok) null else "No se pudo leer deviceWhitelists del dispositivo"
                         )
                     }
                     true

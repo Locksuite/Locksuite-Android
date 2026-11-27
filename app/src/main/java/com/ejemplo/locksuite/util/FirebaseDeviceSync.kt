@@ -44,6 +44,9 @@ object FirebaseDeviceSync {
     @Volatile private var lastExitInfoTimestamp: Long = -1L
     @Volatile private var lastExitInfoMap: Map<String, Any>? = null
     @Volatile private var lastPushedSecretFingerprint: String? = null
+    private val whitelistCallbackExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "LockSuiteWhitelistCb").apply { isDaemon = true }
+    }
 
     fun invalidateAppsSyncCache() {
         lastSyncedAppsHash = null
@@ -1368,69 +1371,108 @@ object FirebaseDeviceSync {
      *
      * @return true si se leyó y se aplicó.
      */
+    /**
+     * Baja la configuración de lista blanca PROPIA de este equipo (`deviceWhitelists/<deviceId>`),
+     * y por compatibilidad con el modo lista negra sigue leyendo `devices/<deviceId>/appPolicy`.
+     * Si se llama desde el hilo principal, deriva a un hilo secundario para evitar ANR.
+     */
     fun pullWhitelistConfig(context: Context): Boolean {
         val ctx = context.applicationContext
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            Thread({ pullWhitelistConfig(ctx) }, "LockSuiteWhitelistPull").start()
+            return true
+        }
         return try {
-            val ref = FirebaseDatabase.getInstance().getReference("globalSettings/whitelist")
+            val id = deviceId(ctx)
+            val deviceWlRef = FirebaseDatabase.getInstance().getReference("deviceWhitelists/$id")
             val latch = java.util.concurrent.CountDownLatch(1)
             var ok = false
-            var globalOrCustomChanged = false
+            var deviceWhitelistChanged = false
+            var hasPerDeviceNode = false
             withAuth {
-                ref.get()
-                    .addOnSuccessListener { snap ->
+                deviceWlRef.get()
+                    .addOnSuccessListener(whitelistCallbackExecutor) { snap ->
                         try {
                             val wl = com.ejemplo.locksuite.mdm.WhitelistManager(ctx)
-
-                            val customJson = org.json.JSONObject()
-                            snap.child("custom").children.forEach { child ->
-                                val pkg = child.child("packageName").getValue(String::class.java)
-                                    ?: child.key?.replace("_", ".") ?: return@forEach
-                                val obj = org.json.JSONObject()
-                                obj.put("label", child.child("label").getValue(String::class.java) ?: pkg)
-                                obj.put("allow", org.json.JSONArray(
-                                    child.child("allow").children.mapNotNull { it.getValue(String::class.java) }
-                                ))
-                                obj.put("block", org.json.JSONArray(
-                                    child.child("block").children.mapNotNull { it.getValue(String::class.java) }
-                                ))
-                                obj.put("unblock", org.json.JSONArray(
-                                    child.child("unblock").children.mapNotNull { it.getValue(String::class.java) }
-                                ))
-                                customJson.put(pkg, obj)
-                            }
-                            if (wl.replaceCustomApps(customJson.toString())) globalOrCustomChanged = true
-
-                            val globalJson = org.json.JSONObject()
-                            snap.child("decisions").children.forEach { child ->
-                                val pkg = child.key?.replace("_", ".") ?: return@forEach
-                                val state = child.getValue(String::class.java) ?: return@forEach
-                                if (state == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_ALLOW ||
-                                    state == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_BLOCK) {
-                                    globalJson.put(pkg, state)
+                            if (snap.exists()) {
+                                hasPerDeviceNode = true
+                                val appsList = mutableListOf<com.ejemplo.locksuite.mdm.WhitelistCatalogIo.WhitelistAppEntry>()
+                                snap.child("apps").children.forEach { child ->
+                                    val pkg = child.child("packageName").getValue(String::class.java)
+                                        ?: child.key?.replace("_", ".") ?: return@forEach
+                                    val label = child.child("label").getValue(String::class.java) ?: pkg
+                                    val status = child.child("status").getValue(String::class.java)
+                                        ?: if (child.child("enabled").getValue(Boolean::class.java) == false) {
+                                            com.ejemplo.locksuite.mdm.WhitelistCatalogIo.STATUS_DISABLED
+                                        } else {
+                                            com.ejemplo.locksuite.mdm.WhitelistCatalogIo.STATUS_ENABLED
+                                        }
+                                    val access = child.child("access").getValue(String::class.java)
+                                        ?: com.ejemplo.locksuite.mdm.WhitelistCatalogIo.ACCESS_DOMAINS
+                                    val allow = child.child("allow").children.mapNotNull { it.getValue(String::class.java) }
+                                    val block = child.child("block").children.mapNotNull { it.getValue(String::class.java) }
+                                    appsList.add(
+                                        com.ejemplo.locksuite.mdm.WhitelistCatalogIo.WhitelistAppEntry(
+                                            packageName = pkg,
+                                            label = label,
+                                            status = com.ejemplo.locksuite.mdm.WhitelistCatalogIo.normalizeStatus(status),
+                                            access = com.ejemplo.locksuite.mdm.WhitelistCatalogIo.normalizeAccess(access),
+                                            allow = allow,
+                                            block = block
+                                        )
+                                    )
                                 }
+                                val globalAllow = snap.child("globalAllow").children.mapNotNull { it.getValue(String::class.java) }
+                                val globalBlock = snap.child("globalBlock").children.mapNotNull { it.getValue(String::class.java) }
+                                val incoming = com.ejemplo.locksuite.mdm.WhitelistCatalogIo.normalizeCatalog(
+                                    com.ejemplo.locksuite.mdm.WhitelistCatalogIo.DeviceWhitelistCatalog(
+                                        apps = appsList,
+                                        globalAllow = globalAllow,
+                                        globalBlock = globalBlock
+                                    )
+                                )
+                                val current = wl.getDeviceCatalog()
+                                if (!wl.hasSavedDeviceCatalog() ||
+                                    com.ejemplo.locksuite.mdm.WhitelistCatalogIo.catalogsDiffer(current, incoming)
+                                ) {
+                                    wl.saveDeviceCatalog(
+                                        catalog = incoming,
+                                        reason = "remote_sync",
+                                        createBackup = wl.hasSavedDeviceCatalog(),
+                                        pushToCloud = false
+                                    )
+                                    deviceWhitelistChanged = true
+                                }
+                            } else {
+                                // Sin nodo propio todavía: el dispositivo conserva `default_whitelist_catalog.txt`.
+                                wl.reload()
                             }
-                            if (wl.replaceGlobalDecisions(globalJson.toString())) globalOrCustomChanged = true
-
                             ok = true
                         } catch (e: Exception) {
-                            android.util.Log.e("FirebaseDeviceSync", "Lista blanca: error aplicando la config: ${e.message}", e)
+                            android.util.Log.e("FirebaseDeviceSync", "Lista blanca: error aplicando deviceWhitelists: ${e.message}", e)
                         } finally {
                             latch.countDown()
                         }
                     }
-                    .addOnFailureListener { e ->
-                        android.util.Log.e("FirebaseDeviceSync", "Lista blanca: no se pudo leer globalSettings/whitelist: ${e.message}", e)
+                    .addOnFailureListener(whitelistCallbackExecutor) { e ->
+                        android.util.Log.e("FirebaseDeviceSync", "Lista blanca: no se pudo leer deviceWhitelists/$id: ${e.message}", e)
                         latch.countDown()
                     }
             }
             latch.await(15, java.util.concurrent.TimeUnit.SECONDS)
-            var deviceChanged = false
+
+            // Mantener compatibilidad con appPolicy de modo lista negra cuando corresponda.
+            var policyChanged = false
             if (ok) {
-                deviceChanged = pullDeviceAppPolicy(ctx)
-                if (globalOrCustomChanged || deviceChanged) {
-                    try { com.ejemplo.locksuite.mdm.WhitelistManager(ctx).reconcileApps() } catch (e: Exception) {
+                policyChanged = pullDeviceAppPolicy(ctx)
+                if (policyChanged && !com.ejemplo.locksuite.mdm.WhitelistManager(ctx).isEnabled()) {
+                    try {
+                        com.ejemplo.locksuite.mdm.WhitelistManager(ctx).reconcileApps()
+                    } catch (e: Exception) {
                         android.util.Log.w("FirebaseDeviceSync", "Lista blanca: reconcile falló: ${e.message}")
                     }
+                }
+                if (deviceWhitelistChanged || policyChanged || hasPerDeviceNode) {
                     syncWhitelistState(ctx, force = true)
                     requestSync(ctx)
                 }
@@ -1440,6 +1482,50 @@ object FirebaseDeviceSync {
             android.util.Log.e("FirebaseDeviceSync", "Lista blanca: pullWhitelistConfig falló: ${e.message}", e)
             false
         }
+    }
+
+    /** Publica el catálogo de lista blanca editado localmente en el celular hacia `deviceWhitelists/<deviceId>`. */
+    fun pushDeviceWhitelist(
+        context: Context,
+        catalog: com.ejemplo.locksuite.mdm.WhitelistCatalogIo.DeviceWhitelistCatalog
+    ) {
+        val ctx = context.applicationContext
+        val norm = com.ejemplo.locksuite.mdm.WhitelistCatalogIo.normalizeCatalog(catalog)
+        Thread({
+            withAuth {
+                try {
+                    val id = deviceId(ctx)
+                    val appsMap = mutableMapOf<String, Any>()
+                    for (app in norm.apps) {
+                        val safeKey = app.packageName.replace(".", "_")
+                        appsMap[safeKey] = mapOf(
+                            "packageName" to app.packageName,
+                            "label" to app.label,
+                            "status" to app.status,
+                            "enabled" to (app.status == com.ejemplo.locksuite.mdm.WhitelistCatalogIo.STATUS_ENABLED),
+                            "access" to app.access,
+                            "allow" to app.allow,
+                            "block" to app.block
+                        )
+                    }
+                    val payload = mapOf(
+                        "apps" to appsMap,
+                        "globalAllow" to norm.globalAllow,
+                        "globalBlock" to norm.globalBlock,
+                        "updatedAt" to ServerValue.TIMESTAMP,
+                        "updatedBy" to "device"
+                    )
+                    FirebaseDatabase.getInstance()
+                        .getReference("deviceWhitelists/$id")
+                        .setValue(payload)
+                        .addOnFailureListener { e ->
+                            android.util.Log.w("FirebaseDeviceSync", "No se pudo subir deviceWhitelists/$id: ${e.message}")
+                        }
+                } catch (e: Exception) {
+                    android.util.Log.w("FirebaseDeviceSync", "Error subiendo deviceWhitelists: ${e.message}")
+                }
+            }
+        }, "LockSuiteWhitelistPush").start()
     }
 
     private fun pullDeviceAppPolicy(context: Context): Boolean {
@@ -1723,8 +1809,8 @@ object FirebaseDeviceSync {
             val audit = com.ejemplo.locksuite.mdm.WhitelistManager.auditSnapshot()
             val signature = "${audit.size}:${audit.sumOf { it.second }}"
             if (!force && signature == lastAuditSignature) {
-                // Nada nuevo que contar: se publican igual los escalares (son cuatro
-                // booleanos y dos enteros) y se saltea el nodo grande.
+                // Nada nuevo que contar: se publican igual los escalares (son booleanos
+                // y conteos chicos) y se saltea el nodo grande.
                 withAuth {
                     writeFields(
                         ctx,
@@ -1733,6 +1819,8 @@ object FirebaseDeviceSync {
                             "whitelistSimulation" to wl.isSimulation(),
                             "whitelistSharedCdn" to wl.isSharedCdnAllowed(),
                             "whitelistDomainCount" to wl.ruleCount(),
+                            "whitelistAppCount" to wl.getDeviceCatalog().apps.size,
+                            "whitelistHasCustomCatalog" to wl.hasSavedDeviceCatalog(),
                             "whitelistAuditCount" to audit.size
                         )
                     )
@@ -1756,6 +1844,8 @@ object FirebaseDeviceSync {
                         "whitelistSimulation" to wl.isSimulation(),
                         "whitelistSharedCdn" to wl.isSharedCdnAllowed(),
                         "whitelistDomainCount" to wl.ruleCount(),
+                        "whitelistAppCount" to wl.getDeviceCatalog().apps.size,
+                        "whitelistHasCustomCatalog" to wl.hasSavedDeviceCatalog(),
                         "whitelistAuditCount" to audit.size,
                         "whitelistAuditDropped" to com.ejemplo.locksuite.mdm.WhitelistManager.auditDropped(),
                         "whitelistDecisions" to decisions

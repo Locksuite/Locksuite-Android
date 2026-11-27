@@ -97,8 +97,6 @@
   const S = {
     device: {},            // devices/<id>
     appPolicy: {},         // devices/<id>/appPolicy      (override de ESTE equipo)
-    globalDecisions: {},   // globalSettings/whitelist/decisions
-    custom: {},            // globalSettings/whitelist/custom
     allowedPackages: [],   // globalSettings/allowedPackages (tienda)
     storeApps: {},         // storeApps
     presets: {},           // presets guardados
@@ -107,12 +105,10 @@
     installed: [],         // apps instaladas reportadas por el equipo (solo paquetes)
     instaladas: {},        // paquete -> datos que reporta el equipo (devices/<id>/apps)
     // Carrito
-    pendApps: {},          // pkg -> "allow"|"block"|"unset"|null(=heredar)
     pendPol: {},           // campo -> boolean
     aplicando: false,
     // Estado de la pantalla (no se pierde al redibujar)
     ui: {
-      domAbiertos: new Set(),   // filas del Filtro con los dominios a la vista
       instAbiertos: new Set(),  // filas de Apps del celular con "Más" abierto
       instFiltro: "usuario",
       rutaUpd: "auto",
@@ -174,19 +170,15 @@
 
   function estadoDe(pkg) {
     const k = LS.pkgKey(pkg);
-    if (Object.prototype.hasOwnProperty.call(S.pendApps, pkg)) {
-      const p = S.pendApps[pkg];
-      return normalizarEstadoApp(p === null ? S.globalDecisions[k] : p);
+    if (campo("whitelistEnabled", false) && window.LSWhitelistUI && window.LSWhitelistUI.working) {
+      const app = window.LSWhitelistUI.working.apps.find((a) => a.packageName === pkg);
+      if (app) {
+        if (app.status === "blocked") return "block";
+        if (app.status === "enabled") return "allow";
+        return "unset";
+      }
     }
-    if (S.appPolicy[k]) return normalizarEstadoApp(S.appPolicy[k]);
-    return normalizarEstadoApp(S.globalDecisions[k]);
-  }
-
-  /** ¿Este equipo tiene decisión propia (o pendiente) para esa app? */
-  function esPropia(pkg) {
-    const k = LS.pkgKey(pkg);
-    if (Object.prototype.hasOwnProperty.call(S.pendApps, pkg)) return S.pendApps[pkg] !== null;
-    return !!S.appPolicy[k];
+    return normalizarEstadoApp(S.appPolicy[k]);
   }
 
   /* ═════════════════════════════════════════════════════════════════════════
@@ -207,6 +199,10 @@
   });
 
   function irA(sec) {
+    if (sec === "apps") sec = "whitelist";
+    if (sec === "whitelist" && Object.keys(S.device || {}).length && !campo("whitelistEnabled", false)) {
+      sec = "resumen";
+    }
     if (!document.querySelector('.ls-section[data-sec="' + sec + '"]')) sec = "resumen";
     document.querySelectorAll("#c-rail button").forEach((x) =>
       x.classList.toggle("active", x.dataset.sec === sec));
@@ -226,15 +222,16 @@
       .some((a) => (a.label || "").toLowerCase().includes(q) || (a.packageName || "").toLowerCase().includes(q));
     const hayPol = (LS.politicas().policies || [])
       .some((p) => p.label.toLowerCase().includes(q) || p.field.toLowerCase().includes(q));
-    const hayApp = todasLasApps()
-      .some((a) => a.label.toLowerCase().includes(q) || a.pkg.toLowerCase().includes(q) ||
-        a.allow.concat(a.block).some((d) => d.d.toLowerCase().includes(q)));
+    const hayWl = window.LSWhitelistUI && window.LSWhitelistUI.matchesQuery(q);
     if (hayInst) {
       $("c-inst-buscar").value = q;
       S.ui.instFiltro = "todas";
       irA("celapps"); pintarInstaladas();
-    } else if (hayApp) { $("c-apps-buscar").value = q; irA("apps"); pintarApps(); }
-    else if (hayPol) { $("c-pol-buscar").value = q; irA("politicas"); pintarPoliticas(); }
+    } else if (hayWl) {
+      $("wl-apps-search").value = q;
+      irA("whitelist");
+      window.LSWhitelistUI.renderApps();
+    } else if (hayPol) { $("c-pol-buscar").value = q; irA("politicas"); pintarPoliticas(); }
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "/" && document.activeElement.tagName !== "INPUT" &&
@@ -248,7 +245,7 @@
    * CARRITO
    * ═══════════════════════════════════════════════════════════════════════ */
   function cuentaCarrito() {
-    return Object.keys(S.pendApps).length + Object.keys(S.pendPol).length;
+    return Object.keys(S.pendPol).length;
   }
 
   function pintarCarrito() {
@@ -256,19 +253,13 @@
     const cart = $("c-cart");
     cart.classList.toggle("show", n > 0);
     if (!n) return;
-    const nApps = Object.keys(S.pendApps).length;
-    const nPol = Object.keys(S.pendPol).length;
     $("c-cart-n").textContent = n === 1 ? "1 cambio sin aplicar" : n + " cambios sin aplicar";
-    const partes = [];
-    if (nApps) partes.push(nApps + (nApps === 1 ? " app" : " apps") + " (van juntas, 1 solo comando)");
-    if (nPol) partes.push(nPol + (nPol === 1 ? " política" : " políticas") + " (1 comando cada una)");
-    $("c-cart-detalle").textContent = partes.join(" · ");
+    $("c-cart-detalle").textContent = n + (n === 1 ? " política" : " políticas") + " (1 comando cada una)";
   }
 
   $("c-cart-descartar").addEventListener("click", () => {
     if (!cuentaCarrito()) return;
     if (!confirm("¿Descartar los cambios sin aplicar?")) return;
-    S.pendApps = {};
     S.pendPol = {};
     pintarTodo();
   });
@@ -301,50 +292,7 @@
     let fallaron = 0;
     let enCola = 0;   // 26/10/2026 (B.95): mandados pero sin confirmar (en el buzón)
 
-    // ── 1. APPS: todo a la base, y UN SOLO comando al final ──────────────
-    const apps = Object.keys(S.pendApps);
-    if (apps.length) {
-      const l = linea("Guardando " + apps.length + " decisiones de apps…");
-      try {
-        const updates = {};
-        for (const pkg of apps) {
-          const v = S.pendApps[pkg];
-          // `null` = "que este equipo vuelva a heredar el catálogo global".
-          updates["devices/" + deviceId + "/appPolicy/" + LS.pkgKey(pkg)] = v;
-        }
-        await LS.db.ref().update(updates);
-        l.textContent = "✓ " + apps.length + " decisiones de apps guardadas";
-        l.className = "ok";
-
-        // El paquete también tiene que poder BAJARSE de la Tienda. Es la parte
-        // "en la tienda" del un-solo-toque de B.53, y la hace el panel porque
-        // `allowedPackages` es global (lo lee LoginActivity al abrir la tienda).
-        await sincronizarAllowedPackages(apps);
-
-        const l2 = linea("Avisándole al celular que relea la configuración…");
-        const r = await LS.sendCommand(deviceId, "SYNC_WHITELIST", null, null,
-          { nombre: nombreDispositivo(), timeoutMs: 25000 });
-        if (r.ok && r.pendiente) {
-          // 26/10/2026 (B.95): no confirmó todavía, pero NO falló — está en el buzón del
-          // celular y se aplica solo. No se cuenta como falla ni se pide reintentar.
-          enCola++;
-          l2.className = "wait";
-          l2.textContent = "⏳ El celular todavía no confirmó: " + r.reason;
-        } else if (r.ok) { l2.textContent = "✓ El celular aplicó la configuración de apps"; l2.className = "ok"; }
-        else {
-          fallaron++;
-          l2.className = "bad";
-          l2.textContent = "✗ El celular no confirmó: " + (r.reason || r.status) +
-            "  ·  La configuración quedó guardada igual; se reintenta con el botón «Sincronizar apps».";
-        }
-      } catch (err) {
-        fallaron++;
-        l.className = "bad";
-        l.textContent = "✗ No se pudieron guardar las decisiones: " + err.message;
-      }
-    }
-
-    // ── 2. POLÍTICAS: un comando cada una, en fila ───────────────────────
+    // ── POLÍTICAS: un comando cada una, en fila ───────────────────────
     const pols = LS.politicas().policies || [];
     for (const campoNombre of Object.keys(S.pendPol)) {
       const def = pols.find((p) => p.field === campoNombre);
@@ -375,18 +323,15 @@
     }
 
     if (!fallaron && enCola) {
-      S.pendApps = {};
       S.pendPol = {};
       linea("⏳ " + enCola + " cambio(s) quedaron en el buzón del celular sin confirmar todavía. " +
         "No hace falta mandarlos de nuevo: se aplican solos cuando el celular los levante.", "wait");
       LS.toast("Mandado. " + enCola + " sin confirmar todavía: quedaron en el buzón del celular.", "warn");
     } else if (!fallaron) {
-      S.pendApps = {};
       S.pendPol = {};
       linea("✓ Listo, todo aplicado.", "ok");
       LS.toast("Cambios aplicados.", "ok");
     } else {
-      S.pendApps = {};
       linea("Quedaron " + fallaron + " sin aplicar. Lo que falló sigue marcado abajo.", "bad");
       LS.toast("Quedaron " + fallaron + " cambios sin aplicar. Mirá la lista de arriba.", "error");
     }
@@ -423,206 +368,23 @@
   }
 
   /* ═════════════════════════════════════════════════════════════════════════
-   * FILTRO DE APPS (catálogo + decisiones de este equipo)
-   * ═══════════════════════════════════════════════════════════════════════ */
-  function todasLasApps() {
-    const cat = LS.catalogo();
-    const vistos = new Set();
-    const out = [];
-
-    for (const a of cat.apps || []) {
-      vistos.add(a.pkg);
-      const d = LS.dominiosDe(a.pkg, S.custom);
-      out.push({ pkg: a.pkg, label: d.label, note: d.note, allow: d.allow, block: d.block,
-        unblocked: d.unblocked, enCatalogo: true });
-    }
-    // Apps que el panel agregó y no están en el catálogo de fábrica.
-    for (const key of Object.keys(S.custom)) {
-      const pkg = LS.keyPkg(key);
-      if (vistos.has(pkg)) continue;
-      vistos.add(pkg);
-      const c = S.custom[key] || {};
-      out.push({
-        pkg: pkg, label: c.label || pkg, note: "",
-        allow: (c.allow || []).map((x) => ({ d: x, origen: "panel" })),
-        block: (c.block || []).map((x) => ({ d: x, origen: "panel" })),
-        unblocked: [], enCatalogo: false
-      });
-    }
-    // Apps que están en la Tienda pero en ninguna lista: si se pueden instalar,
-    // tienen que poder decidirse desde acá.
-    for (const key of Object.keys(S.storeApps)) {
-      const app = S.storeApps[key] || {};
-      const pkg = app.packageName || LS.keyPkg(key);
-      if (!pkg || vistos.has(pkg)) continue;
-      vistos.add(pkg);
-      out.push({ pkg: pkg, label: app.label || app.name || pkg, note: "",
-        allow: [], block: [], unblocked: [], enCatalogo: false });
-    }
-    out.sort((a, b) => a.label.localeCompare(b.label, "es"));
-    return out;
-  }
-
-  function enTienda(pkg) {
-    for (const k of Object.keys(S.storeApps)) {
-      const a = S.storeApps[k] || {};
-      if ((a.packageName || LS.keyPkg(k)) === pkg) return a;
-    }
-    return null;
-  }
-
-  function pintarApps() {
-    const cont = $("c-apps");
-    const q = ($("c-apps-buscar").value || "").trim().toLowerCase();
-    const filtro = $("c-apps-filtro").value;
-    const instaladas = new Set(S.installed);
-
-    if (!cambio("apps", [q, filtro, S.installed, S.appPolicy, S.globalDecisions, S.custom,
-      S.storeApps, S.pendApps, Array.from(S.ui.domAbiertos)])) return;
-
-    let apps = todasLasApps();
-    if (q) {
-      apps = apps.filter((a) =>
-        a.label.toLowerCase().includes(q) ||
-        a.pkg.toLowerCase().includes(q) ||
-        a.allow.concat(a.block).some((x) => x.d.toLowerCase().includes(q)));
-    }
-    if (filtro === "instaladas") apps = apps.filter((a) => instaladas.has(a.pkg));
-    else if (filtro === "propias") apps = apps.filter((a) => esPropia(a.pkg));
-    else if (filtro === "tienda") apps = apps.filter((a) => !!enTienda(a.pkg));
-    else if (filtro !== "todas") apps = apps.filter((a) => estadoDe(a.pkg) === filtro);
-
-    $("cnt-apps").textContent = apps.length;
-
-    if (!apps.length) {
-      cont.innerHTML = '<p class="ls-empty">No hay apps que coincidan.</p>';
-      return;
-    }
-
-    const html = apps.map((a) => {
-      const st = estadoDe(a.pkg);
-      const propia = esPropia(a.pkg);
-      const pend = Object.prototype.hasOwnProperty.call(S.pendApps, a.pkg);
-      const tienda = enTienda(a.pkg);
-      const inst = instaladas.has(a.pkg);
-      const abierta = S.ui.domAbiertos.has(a.pkg);
-
-      const chips = [];
-      if (inst) chips.push('<span class="ls-chip">instalada</span>');
-      if (tienda) {
-        chips.push(tienda.sha256
-          ? '<span class="ls-chip ok">en la Tienda ✓</span>'
-          : '<span class="ls-chip bad">en la Tienda, sin huella</span>');
-      }
-      if (propia) chips.push('<span class="ls-chip warn">propio de este celular</span>');
-      else if (S.globalDecisions[LS.pkgKey(a.pkg)]) chips.push('<span class="ls-chip">del catálogo global</span>');
-      if (pend) chips.push('<span class="ls-chip warn">sin aplicar</span>');
-
-      const dom = (lista, cls) => lista.length
-        ? '<div class="ls-domlist">' + lista.map((x) =>
-            '<span class="ls-dom ' + cls + '">' + esc(x.d) +
-            (x.origen === "panel" ? ' <span title="agregado desde el panel">✎</span>' : "") +
-            "</span>").join("") + "</div>"
-        : '<p class="ls-empty" style="padding:4px 0">—</p>';
-
-      return '' +
-        '<div class="ls-approw st-' + esc(st) + (pend ? " pending" : "") + '" data-pkg="' + esc(a.pkg) + '">' +
-          '<div class="ls-apphead">' +
-            '<div class="ls-appgrow">' +
-              '<div class="ls-appname">' + esc(a.label) + "</div>" +
-              '<div class="ls-apppkg">' + esc(a.pkg) + "</div>" +
-              (chips.length ? '<div style="margin-top:5px; display:flex; gap:5px; flex-wrap:wrap">' + chips.join("") + "</div>" : "") +
-            "</div>" +
-            '<div class="ls-seg">' +
-              '<button data-st="allow" class="' + (st === "allow" ? "on-allow" : "") + '">Permitir</button>' +
-              '<button data-st="unset" class="' + (st === "unset" ? "on-unset" : "") + '">Sin marcar</button>' +
-              '<button data-st="block" class="' + (st === "block" ? "on-block" : "") + '">Prohibir</button>' +
-            "</div>" +
-            '<button class="ls-btn ls-btn-sm" data-toggle="1">Dominios</button>' +
-          "</div>" +
-          '<div class="ls-appbody' + (abierta ? "" : " hidden") + '">' +
-            (a.note ? '<p class="ls-hint" style="margin:10px 0 0">' + esc(a.note) + "</p>" : "") +
-            '<div class="ls-domtitle">Permitidos</div>' + dom(a.allow, "allow") +
-            '<div class="ls-domtitle">No kosher — bloqueados siempre, aunque la app esté permitida</div>' +
-            dom(a.block, "block") +
-            (a.unblocked.length
-              ? '<div class="ls-domtitle">Desbloqueados a mano desde el panel</div>' +
-                '<div class="ls-domlist">' + a.unblocked.map((d) =>
-                  '<span class="ls-dom off">' + esc(d) + "</span>").join("") + "</div>"
-              : "") +
-            (propia
-              ? '<div style="margin-top:12px"><button class="ls-btn ls-btn-sm" data-heredar="1">' +
-                "↩︎ Volver a lo que diga el catálogo global</button></div>"
-              : "") +
-          "</div>" +
-        "</div>";
-    }).join("");
-
-    cont.innerHTML = html;
-  }
-
-  $("c-apps").addEventListener("click", (e) => {
-    const fila = e.target.closest(".ls-approw");
-    if (!fila) return;
-    const pkg = fila.dataset.pkg;
-
-    if (e.target.closest("[data-toggle]")) {
-      const cuerpo = fila.querySelector(".ls-appbody");
-      cuerpo.classList.toggle("hidden");
-      if (cuerpo.classList.contains("hidden")) S.ui.domAbiertos.delete(pkg);
-      else S.ui.domAbiertos.add(pkg);
-      firmas.apps = null;   // el estado de apertura es parte de lo dibujado
-      return;
-    }
-    if (e.target.closest("[data-heredar]")) {
-      S.pendApps[pkg] = null;
-      pintarApps();
-      pintarCarrito();
-      return;
-    }
-    const b = e.target.closest("[data-st]");
-    if (!b) return;
-    const nuevo = b.dataset.st;
-
-    // Volver al estado que ya tenía = sacar del carrito, no encolar un cambio nulo.
-    const k = LS.pkgKey(pkg);
-    const guardado = S.appPolicy[k] || null;
-    if (guardado === nuevo || (!guardado && (S.globalDecisions[k] || "unset") === nuevo)) {
-      delete S.pendApps[pkg];
-    } else {
-      S.pendApps[pkg] = nuevo;
-    }
-    pintarApps();
-    pintarCarrito();
-  });
-
-  $("c-apps-buscar").addEventListener("input", pintarApps);
-  $("c-apps-filtro").addEventListener("change", pintarApps);
-
-  /* ═════════════════════════════════════════════════════════════════════════
-   * MODO DEL FILTRO
-   *
-   * Tres botones en vez de tres interruptores sueltos. El panel viejo tenía
-   * "Activar" y "Bloquear de verdad" separados, y esa combinación tiene un estado
-   * sin sentido (bloquear de verdad con el modo apagado) que igual se podía
-   * marcar. Acá los estados posibles son exactamente tres y no hay forma de
-   * pedir uno inválido.
+   * MODO DEL FILTRO Y SWITCH DE LISTA BLANCA
    * ═══════════════════════════════════════════════════════════════════════ */
   const MODOS = [
     {
       id: "negra",
       titulo: "Lista negra",
-      desc: "Lo normal. Las apps sin marcar funcionan; las prohibidas quedan cerradas y sus dominios no resuelven. Los dominios no kosher de las apps permitidas se bloquean igual."
+      desc: "Lo normal. Solo se bloquean los dominios prohibidos y reglas propias del celular."
     },
     {
       id: "simulacion",
       titulo: "Lista blanca — simulación",
-      desc: "No bloquea nada todavía: anota qué habría bloqueado, para completar las listas mirando el equipo real. Es el paso obligatorio antes del estricto."
+      desc: "No bloquea nada todavía: anota qué habría bloqueado, para completar las listas mirando el equipo real."
     },
     {
       id: "estricta",
       titulo: "Lista blanca — estricta",
-      desc: "Solo resuelven los dominios de las apps permitidas. Lo que no está en la lista, no anda para nadie. Pasar acá sin haber simulado deja el equipo a medio funcionar."
+      desc: "Solo resuelven los dominios permitidos de la lista blanca propia de este celular."
     }
   ];
 
@@ -631,72 +393,54 @@
     return campo("whitelistSimulation", true) ? "simulacion" : "estricta";
   }
 
-  function pintarModos() {
-    const act = modoActual();
-    const cdn = campo("whitelistSharedCdn", true);
-    if (!cambio("modos", [act, cdn])) return;
-    $("c-modos").innerHTML = MODOS.map((m) =>
-      '<button class="ls-mode ' + (m.id === act ? "active" : "") + '" data-modo="' + m.id + '">' +
-      "<b>" + esc(m.titulo) + "</b><small>" + esc(m.desc) + "</small></button>").join("");
+  function pintarSwitchListaBlanca() {
+    const wlOn = campo("whitelistEnabled", false) === true;
+    const isSim = campo("whitelistSimulation", true) !== false;
+    const railBtn = $("c-rail-whitelist");
+    if (railBtn) railBtn.classList.toggle("hidden", !wlOn);
 
-    $("c-cdn").innerHTML =
-      '<div class="ls-polrow" style="border:1px solid var(--navy-border); border-radius:8px">' +
-      '<label for="cdn-sw">Permitir CDN compartidos (CloudFront, Akamai, Fastly…)<br>' +
-      '<small style="color:var(--text-muted)">Varias apps los necesitan, pero permitirlos es permitir una porción grande de internet. Solo tiene efecto con la lista blanca encendida.</small></label>' +
-      '<span class="ls-sw"><input type="checkbox" id="cdn-sw" ' + (cdn ? "checked" : "") +
-      '><span></span></span></div>';
-    $("cdn-sw").addEventListener("change", async function () {
+    if (!wlOn) {
+      const sec = document.querySelector(".ls-section.active");
+      if (sec && sec.dataset.sec === "whitelist") irA("resumen");
+    }
+
+    const cont = $("c-wl-switch-card");
+    if (!cont || !cambio("wl-switch", [wlOn, isSim])) return;
+
+    cont.innerHTML =
+      '<div class="ls-wl-switch-row">' +
+        '<div>' +
+          '<h3 style="margin:0">🛡️ Modo lista blanca</h3>' +
+          '<p class="ls-hint" style="margin:4px 0 0">' +
+            (wlOn
+              ? "Activado en este celular (" + (isSim ? "en Simulación" : "ESTRICTA") + "). Cada dispositivo mantiene su propio catálogo, respaldos y auditoría."
+              : "Desactivado: el celular funciona en modo lista negra normal y la sección Lista blanca permanece oculta.") +
+          '</p>' +
+        '</div>' +
+        '<div style="display:flex; align-items:center; gap:12px">' +
+          (wlOn ? '<button type="button" class="ls-btn ls-btn-sm ls-btn-primary" data-ir="whitelist">Abrir Lista blanca →</button>' : "") +
+          '<label class="ls-sw" title="Activar o desactivar modo lista blanca"><input type="checkbox" id="c-wl-master-sw"' + (wlOn ? " checked" : "") + '><span></span></label>' +
+        '</div>' +
+      '</div>';
+
+    $("c-wl-master-sw").addEventListener("change", async function () {
+      const encender = this.checked;
       this.disabled = true;
-      const r = await LS.sendCommand(deviceId,
-        this.checked ? "ENABLE_WHITELIST_SHARED_CDN" : "DISABLE_WHITELIST_SHARED_CDN",
+      const r = await LS.sendCommand(deviceId, encender ? "ENABLE_WHITELIST_MODE" : "DISABLE_WHITELIST_MODE",
         null, null, { nombre: nombreDispositivo() });
       this.disabled = false;
-      if (!r.ok) { this.checked = !this.checked; LS.toast("No se pudo cambiar: " + (r.reason || r.status), "error"); }
-      else LS.toast(...LS.resultado(r, "Listo."));
-    });
-  }
-
-  $("c-modos").addEventListener("click", async (e) => {
-    const b = e.target.closest("[data-modo]");
-    if (!b) return;
-    const destino = b.dataset.modo;
-    if (destino === modoActual()) return;
-
-    if (destino === "estricta") {
-      const audit = campo("whitelistAuditCount", 0);
-      if (!confirm(
-        "¿Pasar este celular a lista blanca ESTRICTA?\n\n" +
-        "A partir de ahora solo van a resolver los dominios de las apps permitidas. " +
-        "Todo lo demás deja de andar, para todas las apps.\n\n" +
-        (audit ? "La simulación registró " + audit + " dominios que quedarían afuera. " +
-                 "Revisalos en la sección DNS antes de seguir.\n\n"
-               : "⚠️ Este equipo NO tiene registro de simulación. Sin eso estás adivinando " +
-                 "qué necesita esta persona, y lo más probable es que le rompas algo.\n\n") +
-        "¿Seguir igual?"
-      )) return;
-    }
-
-    b.disabled = true;
-    const pasos = [];
-    if (destino === "negra") pasos.push("DISABLE_WHITELIST_MODE");
-    else {
-      pasos.push("ENABLE_WHITELIST_MODE");
-      pasos.push(destino === "simulacion" ? "SET_WHITELIST_SIMULATION" : "SET_WHITELIST_ENFORCE");
-    }
-    let ultimoModo = null;
-    for (const cmd of pasos) {
-      const r = await LS.sendCommand(deviceId, cmd, null, null, { nombre: nombreDispositivo() });
-      // Si alguno quedó pendiente (en el buzón), el aviso final lo dice con ⏳.
-      if (!ultimoModo || !ultimoModo.pendiente) ultimoModo = r;
       if (!r.ok) {
+        this.checked = !encender;
         LS.toast("No se pudo cambiar el modo: " + (r.reason || r.status), "error");
-        b.disabled = false;
         return;
       }
-    }
-    b.disabled = false;
-    LS.toast(...LS.resultado(ultimoModo, "Modo cambiado."));
-  });
+      LS.toast(...LS.resultado(r, encender ? "Modo lista blanca activado." : "Modo lista blanca apagado."));
+      if (encender) {
+        if (railBtn) railBtn.classList.remove("hidden");
+        irA("whitelist");
+      }
+    });
+  }
 
   /* ═════════════════════════════════════════════════════════════════════════
    * DETECTOR DE NAVEGADORES EMBEBIDOS (B.60) — antes solo en la pestaña Lista
@@ -1515,7 +1259,7 @@
     const filtro = S.ui.instFiltro;
     const espera = Object.keys(S.ui.esperando).map((k) => [k, S.ui.esperando[k].quiere, S.ui.esperando[k].buzon]);
     if (!cambio("inst", [q, filtro, S.instaladas, espera, Array.from(S.ui.instAbiertos),
-      S.appPolicy, S.globalDecisions, S.pendApps, S.ui.rutaUpd]) && !forzar) return;
+      S.appPolicy, campo("whitelistEnabled", false), S.ui.rutaUpd]) && !forzar) return;
 
     document.querySelectorAll("#c-inst-filtro button").forEach((b) =>
       b.classList.toggle("on", b.dataset.f === filtro));
@@ -1631,10 +1375,14 @@
     const fa = e.target.closest("[data-filtro-app]");
     if (fa) {
       e.preventDefault();
-      $("c-apps-buscar").value = fa.dataset.filtroApp;
-      $("c-apps-filtro").value = "todas";
-      irA("apps");
-      pintarApps();
+      if (campo("whitelistEnabled", false) && window.LSWhitelistUI) {
+        $("wl-apps-search").value = fa.dataset.filtroApp;
+        $("wl-apps-filter").value = "all";
+        irA("whitelist");
+        window.LSWhitelistUI.renderApps();
+      } else {
+        LS.toast("El modo lista blanca está apagado en este celular.", "info");
+      }
     }
   });
 
@@ -2123,7 +1871,7 @@
    * ═══════════════════════════════════════════════════════════════════════ */
   function pintarTienda() {
     const keys = Object.keys(S.storeApps);
-    if (!cambio("tienda", [S.storeApps, S.appPolicy, S.globalDecisions, S.pendApps,
+    if (!cambio("tienda", [S.storeApps, S.appPolicy, campo("whitelistEnabled", false),
       keys.map((k) => S.instaladas[(S.storeApps[k] || {}).packageName || LS.keyPkg(k)] || null)])) return;
     if (!keys.length) {
       $("c-tienda").innerHTML = '<p class="ls-empty">No hay apps cargadas en la Tienda.</p>';
@@ -2213,13 +1961,16 @@
           resolvedAt: Date.now(),
           notified: false
         });
-      } catch (_) {}
-      S.pendApps[pkg] = "allow";
-      pintarCarrito();
-      irA("apps");
-      $("c-apps-buscar").value = pkg;
-      pintarApps();
-      LS.toast("Quedó marcada como permitida. Aplicá los cambios con el botón de abajo.", "ok");
+        await LS.db.ref("devices/" + deviceId + "/appPolicy/" + LS.pkgKey(pkg)).set("allow");
+        await LS.sendCommand(deviceId, "SYNC_APP_REQUESTS", null, null, { nombre: nombreDispositivo() });
+        if (campo("whitelistEnabled", false)) {
+          await LS.sendCommand(deviceId, "SYNC_WHITELIST", null, null, { nombre: nombreDispositivo() });
+          irA("whitelist");
+        }
+        LS.toast("Pedido aprobado.", "ok");
+      } catch (err) {
+        LS.toast("No se pudo aprobar: " + err.message, "error");
+      }
       return;
     }
     const re = e.target.closest("[data-rechazar]");
@@ -2330,7 +2081,7 @@
     const ps = infoTienda();
     const extras = extrasGuardados();
     if (!cambio("tp-vista", [modo, S.tpGlobal, extras, ps.installedByStore || null, ps.paused || null, S.installed,
-      S.appPolicy, S.globalDecisions])) return;
+      S.appPolicy, campo("whitelistEnabled", false)])) return;
     const cont = $("c-tp-vista");
     if (modo === null) {
       $("cnt-tp").textContent = "";
@@ -2801,6 +2552,8 @@
       await LS.db.ref("deviceSecrets/" + deviceId).remove().catch(() => {});
       await LS.db.ref("deviceDiag/" + deviceId).remove().catch(() => {});
       await LS.db.ref("deviceClaims/" + deviceId).remove().catch(() => {});
+      await LS.db.ref("deviceWhitelists/" + deviceId).remove().catch(() => {});
+      await LS.db.ref("deviceWhitelistBackups/" + deviceId).remove().catch(() => {});
       cerrarFicha("🗑️ «" + n + "» quedó eliminado.");
     } catch (err) {
       S.ui.cerrado = false;
@@ -2811,7 +2564,6 @@
 
   function cerrarFicha(texto) {
     window.onbeforeunload = null;
-    S.pendApps = {};
     S.pendPol = {};
     document.body.innerHTML =
       '<div style="max-width:520px;margin:15vh auto;text-align:center;padding:0 20px">' +
@@ -2954,8 +2706,10 @@
   function pintarTodo() {
     if (S.ui.cerrado) return;
     pintarResumen();
-    pintarModos();
-    pintarApps();
+    pintarSwitchListaBlanca();
+    if (window.LSWhitelistUI) {
+      window.LSWhitelistUI.updateDevice(S.device, S.instaladas, nombreDispositivo());
+    }
     pintarIab();
     pintarPoliticas();
     pintarEspeciales();
@@ -2980,6 +2734,10 @@
   pintarRutaElegida();
 
   LS.requireAuth(function () {
+    if (window.LSWhitelistUI) {
+      window.LSWhitelistUI.init(deviceId, (extra) => Object.assign({ nombre: nombreDispositivo() }, extra || {}));
+    }
+
     LS.db.ref("devices/" + deviceId).on("value", (snap) => {
       if (S.ui.cerrado) return;
       const v = snap.val();
@@ -2997,17 +2755,9 @@
       LS.toast("No se pudo leer el celular: " + err.message, "error");
     });
 
-    LS.db.ref("globalSettings/whitelist/decisions").on("value", (snap) => {
-      S.globalDecisions = snap.val() || {};
-      pintarApps(); pintarResumen(); pintarInstaladas();
-    });
-    LS.db.ref("globalSettings/whitelist/custom").on("value", (snap) => {
-      S.custom = snap.val() || {};
-      pintarApps();
-    });
     LS.db.ref("storeApps").on("value", (snap) => {
       S.storeApps = snap.val() || {};
-      pintarApps(); pintarTienda(); pintarListaActualizar();
+      pintarTienda(); pintarListaActualizar();
     });
     LS.db.ref("presets").on("value", (snap) => {
       S.presets = snap.val() || {};

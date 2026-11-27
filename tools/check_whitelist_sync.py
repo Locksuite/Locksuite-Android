@@ -40,7 +40,8 @@ import sys
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KT = os.path.join(RAIZ, "app", "src", "main", "java", "com", "ejemplo",
                   "locksuite", "mdm", "WhitelistCatalog.kt")
-JS = os.path.join(RAIZ, "admin-backend", "public", "app.js")
+ASSET = os.path.join(RAIZ, "app", "src", "main", "assets", "default_whitelist_catalog.txt")
+DEFAULT_JS = os.path.join(RAIZ, "admin-backend", "public", "default_whitelist_catalog.js")
 
 
 def sin_comentarios(texto):
@@ -81,50 +82,39 @@ def leer_catalogo_kotlin():
     return apps
 
 
-def leer_catalogo_panel():
-    src = io.open(JS, encoding="utf-8").read()
-    ini = src.index("const WHITELIST_BUILTIN = [")
-    bloque = src[ini:src.index("];", ini)]
-    apps = {}
-    for m in re.finditer(
-        r'\{\s*pkg:\s*"([^"]+)",\s*label:\s*"([^"]*)",\s*allow:\s*(\d+),\s*block:\s*(\d+)\s*\}',
-        bloque,
-    ):
-        apps[m.group(1)] = {
-            "label": m.group(2),
-            "allow": int(m.group(3)),
-            "block": int(m.group(4)),
-        }
-    return apps
+def verificar_catalogo_por_defecto():
+    """Verifica que default_whitelist_catalog.txt (Android) y default_whitelist_catalog.js (web) coincidan."""
+    problemas = []
+    if not os.path.exists(ASSET):
+        return 0, ["FALTA el archivo por defecto en Android: %s" % ASSET]
+    raw_txt = io.open(ASSET, encoding="utf-8").read().replace("\r\n", "\n").replace("\r", "\n")
+    apps = re.findall(r"^\[APP:\s*([^\]]+)\]", raw_txt, re.MULTILINE)
+    if "lockfox-dominios-v1" not in raw_txt:
+        problemas.append("default_whitelist_catalog.txt no tiene cabecera lockfox-dominios-v1")
+    if len(apps) < 20:
+        problemas.append("default_whitelist_catalog.txt tiene muy pocas apps: %d" % len(apps))
+    if "[GLOBAL: PERMITIDOS]" not in raw_txt or "[GLOBAL: PROHIBIDOS]" not in raw_txt:
+        problemas.append("default_whitelist_catalog.txt no tiene secciones [GLOBAL: PERMITIDOS] / [GLOBAL: PROHIBIDOS]")
+
+    if not os.path.exists(DEFAULT_JS):
+        problemas.append("FALTA %s — corré python tools/gen_default_whitelist_js.py" % DEFAULT_JS)
+        return len(apps), problemas
+
+    js_src = io.open(DEFAULT_JS, encoding="utf-8").read()
+    m = re.search(r"window\.LOCKSUITE_DEFAULT_WHITELIST_TXT\s*=\s*(\".*\");", js_src, re.S)
+    if not m:
+        problemas.append("No se pudo leer LOCKSUITE_DEFAULT_WHITELIST_TXT en %s" % DEFAULT_JS)
+        return len(apps), problemas
+
+    js_txt = json.loads(m.group(1))
+    if js_txt != raw_txt:
+        problemas.append("default_whitelist_catalog.js difiere de default_whitelist_catalog.txt — corré gen_default_whitelist_js.py")
+    return len(apps), problemas
 
 
 def main():
     kt = leer_catalogo_kotlin()
-    js = leer_catalogo_panel()
-    problemas = []
-
-    for pkg, datos in kt.items():
-        if pkg not in js:
-            problemas.append(
-                "FALTA en el panel: %s (%s). El panel no lo va a poder marcar." % (pkg, datos["label"])
-            )
-            continue
-        p = js[pkg]
-        if p["label"] != datos["label"]:
-            problemas.append(
-                'ETIQUETA distinta en %s: kotlin="%s" panel="%s"' % (pkg, datos["label"], p["label"])
-            )
-        if p["allow"] != len(datos["allow"]) or p["block"] != len(datos["block"]):
-            problemas.append(
-                "CANTIDADES distintas en %s: kotlin allow=%d block=%d | panel allow=%d block=%d"
-                % (pkg, len(datos["allow"]), len(datos["block"]), p["allow"], p["block"])
-            )
-
-    for pkg in js:
-        if pkg not in kt:
-            problemas.append(
-                "SOBRA en el panel: %s. El panel lo ofrece y ningún equipo lo conoce." % pkg
-            )
+    default_apps_count, problemas = verificar_catalogo_por_defecto()
 
     # Un dominio permitido y prohibido a la vez dentro de la MISMA app es casi
     # siempre un dedazo: el Trie lo resuelve (gana el bloqueo, que se escribe
@@ -149,9 +139,9 @@ def main():
                 % (pkg, ", ".join(sorted(redundantes)))
             )
 
-    print("Catálogo Kotlin: %d apps · panel: %d apps" % (len(kt), len(js)))
+    print("Catálogo Kotlin: %d apps · Catálogo por defecto lista blanca (Android + web): %d apps" % (len(kt), default_apps_count))
     if not problemas:
-        print("OK — los dos catálogos dicen lo mismo.")
+        print("OK — catálogos válidos y sincronizados.")
         return 0
     for p in problemas:
         print("  " + p)

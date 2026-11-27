@@ -377,27 +377,6 @@ window.LOCKSUITE_POLICIES = {
       "off": "ENABLE_IAB_SIMULATION"
     },
     {
-      "field": "whitelistEnabled",
-      "label": "Activar el filtro de lista blanca",
-      "group": "🛡️ Modo lista blanca",
-      "on": "ENABLE_WHITELIST_MODE",
-      "off": "DISABLE_WHITELIST_MODE"
-    },
-    {
-      "field": "whitelistEnforce",
-      "label": "↳ Bloquear de verdad (apagado = solo simular)",
-      "group": "🛡️ Modo lista blanca",
-      "on": "SET_WHITELIST_ENFORCE",
-      "off": "SET_WHITELIST_SIMULATION"
-    },
-    {
-      "field": "whitelistSharedCdn",
-      "label": "↳ Permitir CDN compartidos (CloudFront, Akamai, Fastly)",
-      "group": "🛡️ Modo lista blanca",
-      "on": "ENABLE_WHITELIST_SHARED_CDN",
-      "off": "DISABLE_WHITELIST_SHARED_CDN"
-    },
-    {
       "field": "bootGateEnabled",
       "label": "Arranque protegido (cerrar la red hasta que el filtro esté listo)",
       "group": "Arranque protegido",
@@ -562,7 +541,10 @@ window.LOCKSUITE_POLICIES = {
   "handledSeparately": [
     "kioskLockTaskEnabled",
     "locksuiteSuspended",
-    "nokiaTouchEnabled"
+    "nokiaTouchEnabled",
+    "whitelistEnabled",
+    "whitelistEnforce",
+    "whitelistSharedCdn"
   ],
   "switchesWithoutCommand": [],
   "commandsWithoutSwitch": [

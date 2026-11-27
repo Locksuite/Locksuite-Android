@@ -199,6 +199,23 @@ await check("B.132: auroraStore SÍ lo lee admin", get(ref(adm, "auroraStore/pac
 await check("B.132: auroraStore NO lo escribe admin (solo Functions)", set(ref(adm, "auroraStore/packages/com_waze"), { evil: true }), false);
 await check("B.132: auroraStore NO lo escribe celular", set(ref(dev, "auroraStore/packages/com_waze"), { evil: true }), false);
 
+// ── B.135: lista blanca por dispositivo (deviceWhitelists / deviceWhitelistBackups) ──
+await check("B.135: admin lee y escribe deviceWhitelists/D1", set(ref(adm, "deviceWhitelists/D1"), { globalAllow: ["waze.com"], globalBlock: [], updatedAt: 1 }), true);
+await check("B.135: admin lee deviceWhitelists/D1", get(ref(adm, "deviceWhitelists/D1")), true);
+await check("B.135: cel dueño lee su deviceWhitelists/D1", get(ref(dev, "deviceWhitelists/D1")), true);
+await check("B.135: cel dueño escribe su deviceWhitelists/D1", set(ref(dev, "deviceWhitelists/D1"), { globalAllow: ["waze.com"], globalBlock: [], updatedAt: 2 }), true);
+await check("B.135: cel dueño NO puede borrar raíz deviceWhitelists/D1", remove(ref(dev, "deviceWhitelists/D1")), false);
+await check("B.135: cel dueño NO lee deviceWhitelists/D4", get(ref(dev, "deviceWhitelists/D4")), false);
+await check("B.135: cel dueño NO escribe deviceWhitelists/D4", set(ref(dev, "deviceWhitelists/D4"), { evil: true }), false);
+await check("B.135: ajeno NO lee ni escribe deviceWhitelists/D1", get(ref(evil, "deviceWhitelists/D1")), false);
+await check("B.135: ajeno NO escribe deviceWhitelists/D1", set(ref(evil, "deviceWhitelists/D1"), { evil: true }), false);
+await check("B.135: anon NO lee deviceWhitelists/D1", get(ref(anon, "deviceWhitelists/D1")), false);
+await check("B.135: admin escribe y borra deviceWhitelistBackups/D1", set(ref(adm, "deviceWhitelistBackups/D1/b1"), { createdAt: 1, text: "x" }), true);
+await check("B.135: cel dueño lee y escribe deviceWhitelistBackups/D1", set(ref(dev, "deviceWhitelistBackups/D1/b2"), { createdAt: 2, text: "y" }), true);
+await check("B.135: ajeno NO lee deviceWhitelistBackups/D1", get(ref(evil, "deviceWhitelistBackups/D1")), false);
+await check("B.135: admin borra deviceWhitelists/D1 y backups al eliminar equipo", remove(ref(adm, "deviceWhitelists/D1")), true);
+await check("B.135: admin borra deviceWhitelistBackups/D1", remove(ref(adm, "deviceWhitelistBackups/D1")), true);
+
 console.table(results);
 console.log(rojos === 0 ? "TODAS VERDES (" + results.length + ")" : "ROJAS: " + rojos);
 await env.cleanup();

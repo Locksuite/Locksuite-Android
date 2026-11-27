@@ -1,0 +1,833 @@
+# Lockfox — Catálogo completo de dominios
+# Formato: lockfox-dominios-v1
+# Fecha: 2026-11-26T19:20:50.268Z
+# Apps: 25 | Permitidos app: 163 | Prohibidos app: 211 | Globales permitidos: 16 | Globales prohibidos: 242
+# Motivo: Copia manual desde el panel
+# Podés editar este archivo y subirlo desde el panel («Subir Catálogo de Dominios»).
+# En Permitidos/Prohibidos vale uno por línea o separados por coma; líneas con # se ignoran.
+
+[APP: com.beatmobile.ak]
+Nombre: Ajdut Kosher
+Estado: habilitada
+Acceso: domains
+Permitidos:
+beatmobile.com.ar
+kosher.org.ar
+Prohibidos:
+# (ninguno)
+
+[APP: com.brubank]
+Nombre: Brubank
+Estado: habilitada
+Acceso: domains
+Permitidos:
+acas.acuant.net
+brubank.com
+brubank.com.ar
+coelsa.com.ar
+frm.acuant.net
+mapi.dbp.thalescloud.io
+medicscan.acuant.net
+ozone.acuant.net
+payway.com.ar
+prismamediosdepago.com
+saas-api.incodesmile.com
+servicios.renaper.gob.ar
+us.acas.acuant.net
+us.assureid.acuant.net
+us.passlive.acuant.net
+Prohibidos:
+blog.brubank.com
+empresas.brubank.com
+help.brubank.com
+invite.brubank.com
+www.brubank.com
+www.brubank.com.ar
+
+[APP: com.lockfox.search]
+Nombre: buscador
+Estado: habilitada
+Acceso: noweb
+Permitidos:
+# (ninguno)
+Prohibidos:
+# (ninguno)
+
+[APP: com.lionscribe.hebdate]
+Nombre: Calendario
+Estado: habilitada
+Acceso: domains
+Permitidos:
+api.smartlistlocal.com
+Prohibidos:
+imasdk.googleapis.com
+
+[APP: com.duokan.phone.remotecontroller]
+Nombre: Control Xiaomi
+Estado: habilitada
+Acceso: domains
+Permitidos:
+io.mi.com
+partners-ir.peel-prod.com
+sdk.irdatabase.com
+sdk2.kookong.com
+Prohibidos:
+# (ninguno)
+
+[APP: com.didiglobal.passenger]
+Nombre: DiDi
+Estado: habilitada
+Acceso: noweb
+Permitidos:
+didiglobal.com
+didistatic.com
+diditaxi.com.cn
+udache.com
+xiaojukeji.com
+Prohibidos:
+ad.xiaojukeji.com
+ads.didiglobal.com
+adtrack.xiaojukeji.com
+apm.didiglobal.com
+apm.xiaojukeji.com
+blog.didiglobal.com
+credit.didiglobal.com
+didifinance.com
+drama.didiglobal.com
+finanzas.didiglobal.com
+game.diditaxi.com.cn
+game.xiaojukeji.com
+h5.didiglobal.com
+help.didiglobal.com
+help.xiaojukeji.com
+imall.diditaxi.com.cn
+live.didiglobal.com
+live.xiaojukeji.com
+minigame.didiglobal.com
+minigame.xiaojukeji.com
+page.didiglobal.com
+page.udache.com
+passport.didiglobal.com
+play.didiglobal.com
+play.xiaojukeji.com
+short.didiglobal.com
+support.didiglobal.com
+video.didiglobal.com
+webapp.didiglobal.com
+webapp.didistatic.com
+webcast.didiglobal.com
+www.xiaojukeji.com
+zdassets.com
+zendesk.com
+
+[APP: com.lockfox.verificador]
+Nombre: fox auth
+Estado: habilitada
+Acceso: domains
+Permitidos:
+accounts.google.com
+bancar.com.ar
+cognito-idp.us-east-1.amazonaws.com
+gstatic.com
+mail.google.com
+modo.com.ar
+personal.com.ar
+personalpay.com.ar
+personalpay.dev
+personalpay.go.link
+playdigital.com.ar
+prex.com.ar
+prexcard.com
+telecom.com.ar
+uala-arg-bank-app-prod.us.auth0.com
+uala.com.ar
+Prohibidos:
+ayuda.modo.com.ar
+ayuda.personalpay.com.ar
+blog.uala.com.ar
+myaccount.google.com
+policies.google.com
+support.google.com
+tienda.personal.com.ar
+www.google.com
+www.modo.com.ar
+www.personal.com.ar
+www.personalpay.com.ar
+www.prexcard.com
+www.telecom.com.ar
+www.uala.com.ar
+youtube.com
+
+[APP: com.google.android.inputmethod.latin]
+Nombre: Gboard (teclado)
+Estado: habilitada
+Acceso: domains
+Permitidos:
+# (ninguno)
+Prohibidos:
+bitmoji.com
+gboard-stickers.googleapis.com
+giphy.com
+sc-cdn.net
+sticker-pa.googleapis.com
+tenor.co
+tenor.com
+tenor.googleapis.com
+
+[APP: com.google.android.keep]
+Nombre: Google Keep
+Estado: habilitada
+Acceso: domains
+Permitidos:
+keep.google.com
+Prohibidos:
+# (ninguno)
+
+[APP: com.google.android.apps.tachyon]
+Nombre: Google Meet
+Estado: habilitada
+Acceso: domains
+Permitidos:
+accounts.duo.com
+duo.google.com
+meet.google.com
+meet.turns.goog
+stun.l.google.com
+stun1.l.google.com
+stun2.l.google.com
+stun3.l.google.com
+stun4.l.google.com
+tachyon.googleapis.com
+workspace.turns.goog
+Prohibidos:
+youtubeembeddedplayer.googleapis.com
+
+[APP: com.lockfox.messages.debug]
+Nombre: Mensajes
+Estado: habilitada
+Acceso: domains
+Permitidos:
+# (ninguno)
+Prohibidos:
+# (ninguno)
+
+[APP: com.lockfox.messages]
+Nombre: Mensajes Wifi
+Estado: habilitada
+Acceso: domains
+Permitidos:
+conversations.im
+stun.l.google.com
+stun1.l.google.com
+turn.conversations.im
+Prohibidos:
+help.conversations.im
+
+[APP: com.lockfox.messagespro]
+Nombre: Mensajes Wifi
+Estado: habilitada
+Acceso: domains
+Permitidos:
+conversations.im
+stun.l.google.com
+stun1.l.google.com
+turn.conversations.im
+Prohibidos:
+help.conversations.im
+
+[APP: com.mercadopago.wallet]
+Nombre: Mercado Pago
+Estado: habilitada
+Acceso: domains
+Permitidos:
+api.facetec.com
+api.mercadolibre.com
+api.mercadopago.com
+arkoselabs.com
+auth.mercadolibre.com
+challenges.cloudflare.com
+coelsa.com.ar
+funcaptcha.com
+hcaptcha.com
+liveness.mercadolibre.com.ar
+login-mobile.mercadolibre.com
+mapi.dbp.thalescloud.io
+mercadopago.com
+mercadopago.com.ar
+mlstatic.com
+mobile.mercadolibre.com
+mobile.mercadolibre.com.ar
+mpago.la
+mpago.li
+payway.com.ar
+prismamediosdepago.com
+providersml.com
+recaptcha.net
+www.mercadolibre.com
+www.mercadolibre.com.ar
+Prohibidos:
+ads-events.mercadolibre.com
+articulo.mercadolibre.com
+articulo.mercadolibre.com.ar
+ayuda.mercadolibre.com
+ayuda.mercadolibre.com.ar
+ayuda.mercadopago.com
+ayuda.mercadopago.com.ar
+beneficios.mercadopago.com
+beneficios.mercadopago.com.ar
+blog.mercadopago.com.ar
+click1.mercadolibre.com
+click1.mercadolibre.com.ar
+deals.mercadopago.com
+deals.mercadopago.com.ar
+descuentos.mercadopago.com
+descuentos.mercadopago.com.ar
+discounts-center.mercadopago.com
+envios.mercadolibre.com.ar
+events.mercadolibre.com
+help.mercadolibre.com
+help.mercadopago.com
+help.mercadopago.com.ar
+listado.mercadolibre.com
+listado.mercadolibre.com.ar
+loyalty.mercadopago.com
+loyalty.mercadopago.com.ar
+matt.mercadolibre.com
+matt.mercadopago.com
+matt.mercadopago.com.ar
+ofertas.mercadolibre.com
+ofertas.mercadolibre.com.ar
+ofertas.mercadopago.com
+ofertas.mercadopago.com.ar
+perfil.mercadolibre.com.ar
+play.mercadolibre.com
+play.mercadolibre.com.ar
+promociones.mercadopago.com
+promociones.mercadopago.com.ar
+snoopy.mercadolibre.com
+snoopy.mercadolibre.com.ar
+static.hotjar.com
+tendencias.mercadolibre.com
+tendencias.mercadolibre.com.ar
+tienda.mercadolibre.com
+tienda.mercadolibre.com.ar
+zndt5k9btrfzowevl-mercadolibre.siteintercept.qualtrics.com
+
+[APP: com.gitlab.mudlej.MjPdfReader]
+Nombre: MJ PDF (lector sin anuncios)
+Estado: habilitada
+Acceso: domains
+Permitidos:
+# (ninguno)
+Prohibidos:
+# (ninguno)
+
+[APP: com.playdigital.modo]
+Nombre: MODO
+Estado: habilitada
+Acceso: domains
+Permitidos:
+api.getmati.com
+api.metamap.com
+api.prismamp.com
+cdn.auth0.com
+coelsa.com.ar
+cognito-idp.us-east-1.amazonaws.com
+cx-bancos.us.auth0.com
+modo-images.s3.amazonaws.com
+modo.app
+modo.com.ar
+payway.com.ar
+playdigital.com.ar
+prismamediosdepago.com
+qcegpk.us.auth0.com.pivot.prod.auth0edge.com
+servicios.renaper.gob.ar
+vusecurity.com
+Prohibidos:
+ayuda.modo.com.ar
+blog.modo.com.ar
+doubleclick.net
+modocx.my.site.com
+static.hotjar.com
+www.googletagmanager.com
+www.modo.com.ar
+
+[APP: ar.com.personalpay]
+Nombre: personal pay
+Estado: habilitada
+Acceso: domains
+Permitidos:
+client-api.d1.thalescloud.io
+coelsa.com.ar
+facetec.com
+hapi.dbp.thalescloud.io
+jumio.ai
+paygilant.com
+payway.com.ar
+personal.com.ar
+personalpay.com.ar
+personalpay.dev
+personalpay.go.link
+prismamediosdepago.com
+servicios.renaper.gob.ar
+telecom.com.ar
+vusecurity.com
+Prohibidos:
+ayuda.personal.com.ar
+ayuda.personalpay.com.ar
+ayuda.telecom.com.ar
+blog.personalpay.com.ar
+metrics.ppay.observabilidad.personal.com.ar
+otel-prod.ppay.observabilidad.personal.com.ar
+solcon.telecom.com.ar
+tienda.personal.com.ar
+webview.survey.prod.personalpay.dev
+www.personal.com.ar
+www.personalpay.com.ar
+www.telecom.com.ar
+
+[APP: com.google.android.gms]
+Nombre: Servicios de google play
+Estado: habilitada
+Acceso: domains
+Permitidos:
+# (ninguno)
+Prohibidos:
+# (ninguno)
+
+[APP: tfilon.tfilon]
+Nombre: Sidur
+Estado: habilitada
+Acceso: domains
+Permitidos:
+# (ninguno)
+Prohibidos:
+# (ninguno)
+
+[APP: com.google.android.apps.translate]
+Nombre: Traductor de Google
+Estado: habilitada
+Acceso: domains
+Permitidos:
+translate-pa.googleapis.com
+translate.googleapis.com
+Prohibidos:
+translate.goog
+translate.google.com
+translate.googleusercontent.com
+
+[APP: com.thetransitapp.droid]
+Nombre: Transit
+Estado: habilitada
+Acceso: domains
+Permitidos:
+api.mapbox.com
+thetransitapp.com
+tiles.mapbox.com
+transitapp-data.com
+transitapp.com
+Prohibidos:
+aide.transitapp.com
+blog.transitapp.com
+events.mapbox.com
+help.transitapp.com
+stats.transitapp.com
+
+[APP: ar.com.bancar.uala]
+Nombre: Ualá
+Estado: habilitada
+Acceso: domains
+Permitidos:
+api.facetec.com
+bancar.com.ar
+bff-public-bucket.s3.amazonaws.com
+cdn.auth0.com
+client-api.d1.thalescloud.io
+coelsa.com.ar
+cognito-idp.us-east-1.amazonaws.com
+hapi.dbp.thalescloud.io
+prd.vusecurity.com
+prismamediosdepago.com
+public-logo.prod.tapila.cloud
+saas-api.incodesmile.com
+servicios.renaper.gob.ar
+ua.la
+uala-arg-app-prod-cd-s7pvw8z5mho0f8qi.edge.tenants.us.auth0.com
+uala-arg-app-prod.us.auth0.com
+uala-arg-bank-app-prod.us.auth0.com
+uala-icons-prod.s3.amazonaws.com
+uala.ar
+uala.com.ar
+uala.io
+ualabis.com.ar
+ualafondos.com.ar
+ualainversiones.com.ar
+ualintec.com.ar
+ualintecinversiones.com.ar
+uilo.com.ar
+wilobank.com
+Prohibidos:
+api-tracking.credit-card.ar.wilobank.com
+blog.uala.com.ar
+connect.facebook.net
+consent.uala.com.ar
+prestamos.uala.com.ar
+promocionesuala.bonda.com
+seguros.uala.com.ar
+www.googletagmanager.com
+www.uala.com.ar
+www.ualabis.com.ar
+www.ualainversiones.com.ar
+www.uilo.com.ar
+www.wilobank.com
+
+[APP: com.ubercab]
+Nombre: Uber
+Estado: habilitada
+Acceso: domains
+Permitidos:
+d1a3f4spazzrp4.cloudfront.net
+d1w2poirtb3as9.cloudfront.net
+uber-assets.com
+uber.com
+ubercab.com
+uberinternal.com
+Prohibidos:
+advertising.uber.com
+biz-eats.uber.com
+blog.uber.com
+careers.uber.com
+chat-support.uber.com
+developer.uber.com
+eats.uber.com
+facebook.com
+fbcdn.net
+gifts.uber.com
+help.uber.com
+hotels.uber.com
+instagram.com
+investor.uber.com
+m.uber.com
+myprivacy.uber.com
+newsroom.uber.com
+privacy.uber.com
+riders.uber.com
+rides.sng.link
+support.uber.com
+survey.uber.com
+sustainability.uber.com
+t.co
+tiktok.com
+travel.uber.com
+twitter.com
+ubereats.com
+x.com
+youtube.com
+zendesk.com
+
+[APP: com.waze]
+Nombre: Waze
+Estado: habilitada
+Acceso: noweb
+Permitidos:
+waze.com
+Prohibidos:
+ads-resources-legacy.waze.com
+ads-resources.waze.com
+ads.waze.com
+adsassets-ipv6.waze.com
+adsassets.waze.com
+audible.com
+audiobooks.com
+blog.waze.com
+careers.waze.com
+deezer.com
+editor.waze.com
+embed.waze.com
+forum.waze.com
+help.waze.com
+iheart.com
+livemap.waze.com
+mobile-web.waze.com
+music.youtube.com
+pandora.com
+scdn.co
+sdk.waze.com
+soundcloud.com
+spotify.com
+spotifycdn.com
+status.waze.com
+support.waze.com
+tunein.com
+
+[APP: net.sf.times]
+Nombre: זמנים
+Estado: habilitada
+Acceso: domains
+Permitidos:
+dev.virtualearth.net
+secure.geonames.org
+Prohibidos:
+# (ninguno)
+
+[GLOBAL: PERMITIDOS]
+apis.google.com
+certificates.godaddy.com
+crl.comodoca.com
+crl.godaddy.com
+crl.starfieldtech.com
+crl.usertrust.com
+crt.usertrust.com
+dl-ssl.google.com
+ocsp.comodoca.com
+ocsp.godaddy.com
+ocsp.starfieldtech.com
+ocsp.usertrust.com
+repodownload.mediatek.com
+rgepodownload.mediatek.com
+supl.google.com
+supl.mediatek.com
+
+[GLOBAL: PROHIBIDOS]
+12ft.io
+1dot1dot1dot1.cloudflare-dns.com
+ad.xiaojukeji.com
+adblock.dns.mullvad.net
+adfuture.cn
+admob.com
+ads-resources-legacy.waze.com
+ads-resources.waze.com
+ads.didiglobal.com
+ads.waze.com
+adsassets-ipv6.waze.com
+adsassets.waze.com
+adssettings.google.com
+adsunflower.com
+adtrack.xiaojukeji.com
+adups.cn
+adups.com
+advertising.uber.com
+advmob.cn
+aiplatform.googleapis.com
+all.dns.mullvad.net
+ampproject.org
+archive.is
+archive.ph
+archive.today
+articulo.mercadolibre.com
+articulo.mercadolibre.com.ar
+audible.com
+audiobooks.com
+base.dns.mullvad.net
+beneficios.galicia.ar
+beneficios.mercadopago.com
+beneficios.mercadopago.com.ar
+bing.com
+bitmoji.com
+blog.didiglobal.com
+blog.mercadopago.com.ar
+blog.modo.com.ar
+blog.transitapp.com
+blog.uala.com.ar
+blog.uber.com
+blog.waze.com
+blogger.googleapis.com
+books.googleapis.com
+careers.uber.com
+careers.waze.com
+catalogodepromociones.galicia.ar
+cdn.ampproject.org
+chrome.cloudflare-dns.com
+click1.mercadolibre.com
+click1.mercadolibre.com.ar
+cloudflare-dns.com
+cloudflareclient.com
+common.dot.dns.yandex.net
+commondatastorage.googleapis.com
+connect.facebook.net
+credit.didiglobal.com
+customsearch.googleapis.com
+deals.mercadopago.com
+deals.mercadopago.com.ar
+deezer.com
+descuentos.mercadopago.com
+descuentos.mercadopago.com.ar
+developer.uber.com
+didifinance.com
+discounts-center.mercadopago.com
+discover.google.com
+dns.adguard-dns.com
+dns.adguard.com
+dns.alidns.com
+dns.cloudflare.com
+dns.digitale-gesellschaft.ch
+dns.google
+dns.mullvad.net
+dns.nextdns.io
+dns.opendns.com
+dns.quad9.net
+dns.sb
+dns.switch.ch
+dns.twnic.tw
+dns.yandex.net
+dns10.quad9.net
+dns11.quad9.net
+dns12.quad9.net
+dns9.quad9.net
+doh.applied-privacy.net
+doh.cleanbrowsing.org
+doh.dns.sb
+doh.ffmuc.net
+doh.libredns.gr
+doh.mullvad.net
+doh.opendns.com
+doh.pub
+dot.pub
+doubleclick.net
+drama.didiglobal.com
+duckduckgo.com
+eats.uber.com
+editor.waze.com
+ekr.zdassets.com
+embed.waze.com
+encrypted-tbn0.gstatic.com
+encrypted-tbn1.gstatic.com
+encrypted-tbn2.gstatic.com
+encrypted-tbn3.gstatic.com
+envios.mercadolibre.com.ar
+events.mapbox.com
+extended.dns.mullvad.net
+facebook.com
+facebook.net
+family.adguard-dns.com
+family.cloudflare-dns.com
+familyshield.opendns.com
+fbcdn.net
+finanzas.didiglobal.com
+finanzasamano.galicia.ar
+firebasestorage.googleapis.com
+forum.waze.com
+freedns.controld.com
+freshdesk.com
+game.diditaxi.com.cn
+game.xiaojukeji.com
+gboard-stickers.googleapis.com
+generativelanguage.googleapis.com
+giphy.com
+googleadservices.com
+googlesyndication.com
+googlevideo.com
+help.didiglobal.com
+help.transitapp.com
+help.uber.com
+help.waze.com
+history.google.com
+iheart.com
+images.google.com
+instagram.com
+intercom.io
+investor.uber.com
+listado.mercadolibre.com
+listado.mercadolibre.com.ar
+live.didiglobal.com
+live.xiaojukeji.com
+livemap.waze.com
+loyalty.mercadopago.com
+loyalty.mercadopago.com.ar
+mask-h2.icloud.com
+mask.icloud.com
+matt.mercadopago.com
+matt.mercadopago.com.ar
+minigame.didiglobal.com
+minigame.xiaojukeji.com
+mozilla.cloudflare-dns.com
+music.youtube.com
+myactivity.google.com
+news.google.com
+newsroom.uber.com
+odoh.cloudflare-dns.com
+ofertas.mercadolibre.com
+ofertas.mercadolibre.com.ar
+ofertas.mercadopago.com
+ofertas.mercadopago.com.ar
+one.one.one.one
+pandora.com
+photos.google.com
+photoslibrary.googleapis.com
+play.didiglobal.com
+play.mercadolibre.com
+play.mercadolibre.com.ar
+play.xiaojukeji.com
+policies.google.com
+privacy.uber.com
+promociones.mercadopago.com
+promociones.mercadopago.com.ar
+quiero.com.ar
+sc-cdn.net
+scdn.co
+script.google.com
+script.googleusercontent.com
+search.google.com
+security.cloudflare-dns.com
+short.didiglobal.com
+sites.google.com
+snoopy.mercadolibre.com
+snoopy.mercadolibre.com.ar
+soundcloud.com
+spotify.com
+spotifycdn.com
+static.hotjar.com
+status.waze.com
+sticker-pa.googleapis.com
+storage.googleapis.com
+suggestqueries.google.com
+support.didiglobal.com
+support.google.com
+support.uber.com
+support.waze.com
+t.co
+t0.gstatic.com
+t1.gstatic.com
+t2.gstatic.com
+t3.gstatic.com
+takeout.google.com
+tendencias.mercadolibre.com
+tendencias.mercadolibre.com.ar
+tenor.co
+tenor.com
+tenor.googleapis.com
+tienda.galicia.ar
+tienda.mercadolibre.com
+tienda.mercadolibre.com.ar
+tiktok.com
+timeline.google.com
+translate.goog
+translate.google.com
+translate.googleusercontent.com
+tunein.com
+twitter.com
+ubereats.com
+unfiltered.adguard-dns.com
+use-application-dns.net
+video.didiglobal.com
+vimeo.com
+web.archive.org
+webcache.googleusercontent.com
+webcast.didiglobal.com
+wikimedia-dns.org
+wikipedia.org
+www.googletagmanager.com
+www.quiero.com.ar
+x.com
+yahoo.com
+youtu.be
+youtube.com
+youtube.googleapis.com
+youtubeanalytics.googleapis.com
+youtubeembeddedplayer.googleapis.com
+youtubei.googleapis.com
+youtubereporting.googleapis.com
+ytimg.com
+zdassets.com
+zendesk.com
+zndt5k9btrfzowevl-mercadolibre.siteintercept.qualtrics.com

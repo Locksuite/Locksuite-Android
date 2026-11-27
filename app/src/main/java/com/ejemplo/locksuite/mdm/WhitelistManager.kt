@@ -2,8 +2,10 @@ package com.ejemplo.locksuite.mdm
 
 import android.content.Context
 import com.ejemplo.locksuite.dns.DomainRuleTrie
+import com.ejemplo.locksuite.dns.DomainSafety
 import com.ejemplo.locksuite.dns.RuleType
 import com.ejemplo.locksuite.dns.normalizeDomain
+import com.ejemplo.locksuite.util.FirebaseDeviceSync
 import com.ejemplo.locksuite.util.PrefsHelper
 import org.json.JSONArray
 import org.json.JSONObject
@@ -94,6 +96,14 @@ class WhitelistManager(private val context: Context) {
         const val KEY_CUSTOM = "whitelist_custom_apps"
         /** Paquetes ocultos/suspendidos específicamente por la lista blanca (para destaparlos al quitarlos sin tocar bloqueos manuales). */
         const val KEY_WHITELIST_HIDDEN_PKGS = "whitelist_hidden_pkgs"
+        /** Catálogo de lista blanca propio de ESTE dispositivo (`WhitelistCatalogIo.toJson`). Si falta, se usa `default_whitelist_catalog.txt`. */
+        const val KEY_DEVICE_WHITELIST_JSON = "whitelist_device_catalog_json"
+        const val KEY_DEVICE_WHITELIST_UPDATED_AT = "whitelist_device_catalog_updated_at"
+        /** Paquetes a los que el modo lista blanca les activó «Sin web» (para soltar solo lo propio al apagar o editar). */
+        const val KEY_WHITELIST_NOWEB_OWNED = "whitelist_noweb_owned_pkgs"
+        private const val DEFAULT_CATALOG_ASSET = "default_whitelist_catalog.txt"
+
+        @Volatile private var cachedDefaultCatalog: WhitelistCatalogIo.DeviceWhitelistCatalog? = null
 
         const val STATE_ALLOW = "allow"
         const val STATE_BLOCK = "block"
@@ -345,6 +355,114 @@ class WhitelistManager(private val context: Context) {
 
             return rules
         }
+
+        /**
+         * Reglas DNS del modo Lista Blanca por dispositivo (estilo Lockfox).
+         *
+         * Precedencia (de menor a mayor prioridad en el mapa + resolución del Trie):
+         *  1. CDN compartidos (ALLOW, si `includeSharedCdn == true`)
+         *  2. Dominios `allow` de cada app habilitada (no `noweb`), validados con `DomainSafety`
+         *  3. `extraAllowDomains` (ej. aportes de Tienda Play), validados con `DomainSafety`
+         *  4. `catalog.globalAllow` (Permitidos para todo el celular), validados con `DomainSafety`
+         *  5. `WhitelistCatalog.INFRASTRUCTURE` (FORCE_ALLOW: FCM, Firebase, Play, NTP, OCSP, portal cautivo)
+         *  6. Dominios no kosher fijos de fábrica de `WhitelistCatalog.APPS` (`block`) → FORCE_BLOCK
+         *  7. `extraBlockDomains` → FORCE_BLOCK
+         *  8. Dominios `block` de TODA app en `catalog.apps` → FORCE_BLOCK
+         *  9. `catalog.globalBlock` (Prohibidos para todo el celular) → FORCE_BLOCK
+         * 10. `WhitelistCatalog.BLOCK_ALWAYS` → FORCE_BLOCK
+         */
+        fun buildWhitelistModeRules(
+            catalog: WhitelistCatalogIo.DeviceWhitelistCatalog,
+            includeSharedCdn: Boolean,
+            extraAllowDomains: Collection<String> = emptyList(),
+            extraBlockDomains: Collection<String> = emptyList(),
+            rejected: MutableList<String>? = null
+        ): Map<String, RuleType> {
+            val rules = mutableMapOf<String, RuleType>()
+
+            if (includeSharedCdn) {
+                for (d in WhitelistCatalog.SHARED_CDN) {
+                    val norm = normalizeDomain(d)
+                    if (norm.isNotEmpty()) rules[norm] = RuleType.ALLOW
+                }
+            }
+
+            fun putSafeAllow(raw: String) {
+                val (clean, why) = DomainSafety.cleanAndValidateAllow(raw)
+                if (clean == null) {
+                    if (why != null) rejected?.add("$raw ($why)")
+                    return
+                }
+                rules[clean] = RuleType.ALLOW
+            }
+
+            for (app in catalog.apps) {
+                if (app.status != WhitelistCatalogIo.STATUS_ENABLED) continue
+                if (app.access == WhitelistCatalogIo.ACCESS_NOWEB) continue
+                for (d in app.allow) putSafeAllow(d)
+            }
+
+            for (d in extraAllowDomains) putSafeAllow(d)
+            for (d in catalog.globalAllow) putSafeAllow(d)
+
+            for (d in WhitelistCatalog.INFRASTRUCTURE) {
+                val norm = normalizeDomain(d)
+                if (norm.isNotEmpty()) rules[norm] = RuleType.FORCE_ALLOW
+            }
+
+            // Los dominios no kosher de fábrica siguen cerrados incluso sobre INFRASTRUCTURE padre.
+            for (entry in WhitelistCatalog.APPS) {
+                for (d in entry.block) {
+                    val norm = normalizeDomain(d)
+                    if (norm.isNotEmpty()) rules[norm] = RuleType.FORCE_BLOCK
+                }
+            }
+            for (d in extraBlockDomains) {
+                val norm = normalizeDomain(d)
+                if (norm.isNotEmpty()) rules[norm] = RuleType.FORCE_BLOCK
+            }
+            for (app in catalog.apps) {
+                for (d in app.block) {
+                    val norm = normalizeDomain(d)
+                    if (norm.isNotEmpty()) rules[norm] = RuleType.FORCE_BLOCK
+                }
+            }
+            for (d in catalog.globalBlock) {
+                val norm = normalizeDomain(d)
+                if (norm.isNotEmpty()) rules[norm] = RuleType.FORCE_BLOCK
+            }
+            for (d in WhitelistCatalog.BLOCK_ALWAYS) {
+                val norm = normalizeDomain(d)
+                if (norm.isNotEmpty()) rules[norm] = RuleType.FORCE_BLOCK
+            }
+
+            return rules
+        }
+
+        fun loadDefaultCatalog(context: Context): WhitelistCatalogIo.DeviceWhitelistCatalog {
+            cachedDefaultCatalog?.let { return it }
+            return try {
+                val raw = context.applicationContext.assets.open(DEFAULT_CATALOG_ASSET)
+                    .bufferedReader(Charsets.UTF_8)
+                    .use { it.readText() }
+                val parsed = WhitelistCatalogIo.parseCatalogText(raw)
+                val cat = if (parsed.ok && parsed.catalog != null) parsed.catalog else WhitelistCatalogIo.DeviceWhitelistCatalog()
+                cachedDefaultCatalog = cat
+                cat
+            } catch (e: Exception) {
+                android.util.Log.e("WhitelistManager", "No se pudo leer $DEFAULT_CATALOG_ASSET: ${e.message}", e)
+                WhitelistCatalogIo.DeviceWhitelistCatalog()
+            }
+        }
+
+        fun releaseNowebOwnership(context: Context, packages: Set<String>) {
+            if (packages.isEmpty()) return
+            val p = PrefsHelper.getMdmPrefs(context.applicationContext)
+            val owned = p.getStringSet(KEY_WHITELIST_NOWEB_OWNED, emptySet()) ?: emptySet()
+            if (owned.any { it in packages }) {
+                p.edit().putStringSet(KEY_WHITELIST_NOWEB_OWNED, owned - packages).apply()
+            }
+        }
     }
 
     private fun prefs() = PrefsHelper.getMdmPrefs(context)
@@ -365,9 +483,103 @@ class WhitelistManager(private val context: Context) {
         // Al apagarlo se limpia la auditoría: los datos viejos describen otra
         // configuración y confunden más de lo que ayudan.
         if (!enabled) clearAudit()
+        reconcileWhitelistNoweb()
         reload()
         if (enabled) {
             com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CATÁLOGO DE LISTA BLANCA POR DISPOSITIVO (ESTILO LOCKFOX)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fun hasSavedDeviceCatalog(): Boolean =
+        !prefs().getString(KEY_DEVICE_WHITELIST_JSON, null).isNullOrBlank()
+
+    fun getDeviceCatalog(): WhitelistCatalogIo.DeviceWhitelistCatalog {
+        val raw = prefs().getString(KEY_DEVICE_WHITELIST_JSON, null)
+        val parsed = WhitelistCatalogIo.fromJson(raw)
+        return parsed ?: loadDefaultCatalog(context)
+    }
+
+    fun saveDeviceCatalog(
+        catalog: WhitelistCatalogIo.DeviceWhitelistCatalog,
+        reason: String = "manual_edit",
+        createBackup: Boolean = true,
+        pushToCloud: Boolean = false
+    ): Boolean {
+        val normalized = WhitelistCatalogIo.normalizeCatalog(catalog)
+        val previous = getDeviceCatalog()
+        if (createBackup && WhitelistCatalogIo.catalogsDiffer(previous, normalized)) {
+            try {
+                val deviceLabel = prefs().getString("device_name", "") ?: ""
+                WhitelistBackupStore(context).saveSnapshot(
+                    catalog = previous,
+                    reason = reason,
+                    deviceLabel = deviceLabel
+                )
+            } catch (e: Exception) {
+                android.util.Log.w("WhitelistManager", "No se pudo guardar respaldo automático: ${e.message}")
+            }
+        }
+        prefs().edit()
+            .putString(KEY_DEVICE_WHITELIST_JSON, WhitelistCatalogIo.toJson(normalized))
+            .putLong(KEY_DEVICE_WHITELIST_UPDATED_AT, System.currentTimeMillis())
+            .apply()
+        reconcileWhitelistNoweb()
+        reload()
+        if (pushToCloud) {
+            FirebaseDeviceSync.pushDeviceWhitelist(context, normalized)
+        }
+        return true
+    }
+
+    fun resetDeviceCatalogToDefault(pushToCloud: Boolean = false): Boolean {
+        return saveDeviceCatalog(
+            catalog = loadDefaultCatalog(context),
+            reason = "reset_default",
+            createBackup = true,
+            pushToCloud = pushToCloud
+        )
+    }
+
+    fun reconcileWhitelistNoweb() {
+        try {
+            val policyManager = PolicyManager(context)
+            if (policyManager.isLockSuiteSuspended()) return
+
+            val ownedSaved = (prefs().getStringSet(KEY_WHITELIST_NOWEB_OWNED, emptySet()) ?: emptySet()).toMutableSet()
+            val desired = if (isEnabled()) {
+                getDeviceCatalog().apps
+                    .filter { it.status == WhitelistCatalogIo.STATUS_ENABLED && it.access == WhitelistCatalogIo.ACCESS_NOWEB }
+                    .map { it.packageName }
+                    .toSet()
+            } else {
+                emptySet()
+            }
+
+            val currentlyBlocked = WebViewBlockManager.getBlockedPackages(context)
+            var changedOwned = false
+
+            for (pkg in desired) {
+                if (pkg !in currentlyBlocked) {
+                    WebViewBlockManager.setBlocked(context, pkg, true)
+                    if (ownedSaved.add(pkg)) changedOwned = true
+                }
+            }
+            val toRelease = ownedSaved.filter { it !in desired }.toList()
+            for (pkg in toRelease) {
+                if (pkg !in WebViewBlockManager.DEFAULT_PROFILE_BLOCKED_PACKAGES) {
+                    WebViewBlockManager.setBlocked(context, pkg, false)
+                }
+                if (ownedSaved.remove(pkg)) changedOwned = true
+            }
+            if (changedOwned) {
+                prefs().edit().putStringSet(KEY_WHITELIST_NOWEB_OWNED, HashSet(ownedSaved)).apply()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("WhitelistManager", "reconcileWhitelistNoweb falló: ${e.message}")
         }
     }
 
@@ -856,16 +1068,57 @@ class WhitelistManager(private val context: Context) {
      * personalizada puede abrir por accidente algo que BLOCK_ALWAYS cierra.
      */
     fun reload() {
-        publish(DomainRuleTrie.build(currentRules()), isEnabled(), isSimulation())
+        val rejected = mutableListOf<String>()
+        val rules = currentRules(rejected)
+        if (rejected.isNotEmpty()) {
+            android.util.Log.w(
+                "WhitelistManager",
+                "Dominios descartados por DomainSafety (${rejected.size}): ${rejected.take(15)}"
+            )
+        }
+        publish(DomainRuleTrie.build(rules), isEnabled(), isSimulation())
     }
 
     /**
-     * Las reglas que rigen AHORA: decisiones (global + este equipo) y apps personalizadas
-     * del panel, más lo que aporta la Tienda Play (B.101). Es el ÚNICO lugar que arma esa
-     * entrada, y lo usan `reload()` y `ruleCount()`: antes eran dos cuentas en paralelo y
-     * ya se habían desincronizado una vez (ver `ruleCount`).
+     * Las reglas que rigen AHORA:
+     * - Si el modo lista blanca está ENCENDIDO: usa el catálogo propio de ESTE dispositivo
+     *   (precargado con `default_whitelist_catalog.txt` si aún no se editó) + aportes de Tienda Play.
+     * - Si el modo lista blanca está APAGADO (modo lista negra normal): conserva intacta la lógica
+     *   clásica (`buildRules`) sin aplicar bloqueos/listas de Lockfox.
      */
-    private fun currentRules(): Map<String, RuleType> {
+    private fun currentRules(rejected: MutableList<String>? = null): Map<String, RuleType> {
+        if (isEnabled()) {
+            val catalog = getDeviceCatalog()
+            val catalogByPkg = catalog.apps.associateBy { it.packageName }
+            val extraAllow = mutableListOf<String>()
+            val extraBlock = mutableListOf<String>()
+            try {
+                val contribution = PlayStoreManager.whitelistContribution(context)
+                for (pkg in contribution.allowedPackages) {
+                    val catEntry = catalogByPkg[pkg]
+                    if (catEntry == null || (catEntry.status == WhitelistCatalogIo.STATUS_ENABLED &&
+                                catEntry.access != WhitelistCatalogIo.ACCESS_NOWEB)
+                    ) {
+                        WhitelistCatalog.entryFor(pkg)?.allow?.let { extraAllow.addAll(it) }
+                    }
+                    if (catEntry?.status != WhitelistCatalogIo.STATUS_BLOCKED) {
+                        contribution.domainLists[pkg]?.let { dl ->
+                            extraAllow.addAll(dl.allow)
+                            extraBlock.addAll(dl.block)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("WhitelistManager", "Tienda Play: no se pudo leer su aporte: ${e.message}")
+            }
+            return buildWhitelistModeRules(
+                catalog = catalog,
+                includeSharedCdn = isSharedCdnAllowed(),
+                extraAllowDomains = extraAllow,
+                extraBlockDomains = extraBlock,
+                rejected = rejected
+            )
+        }
         val (decisions, custom) = withPlayStore(allDecisions(), customApps().associateBy { it.packageName })
         return buildRules(decisions, custom, isSharedCdnAllowed())
     }

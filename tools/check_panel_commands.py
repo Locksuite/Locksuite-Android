@@ -57,6 +57,7 @@ POLICY_SPEC = os.path.join(RAIZ, "app", "src", "main", "java", "com", "ejemplo",
 PANTALLAS = [
     os.path.join(RAIZ, "admin-backend", "public", "celular.js"),
     os.path.join(RAIZ, "admin-backend", "public", "dominios.js"),
+    os.path.join(RAIZ, "admin-backend", "public", "whitelist_device_ui.js"),
     # 6/11/2026 (B.110): el registro de errores de la ficha manda COLLECT_DIAGNOSTICS y SET_DIAGNOSTICS_UPLOAD.
     os.path.join(RAIZ, "admin-backend", "public", "diag_remoto.js"),
 ]
@@ -130,8 +131,8 @@ def manda_el_panel():
             continue
         s = open(ruta, encoding="utf-8").read()
         base = os.path.basename(ruta)
-        # LS.sendCommand(deviceId, "CMD", …)
-        for m in re.finditer(r'sendCommand\(\s*[A-Za-z_$][\w$]*\s*,\s*"([A-Z][A-Z0-9_]+)"', s):
+        # LS.sendCommand(deviceId, "CMD", …) — acepta this.deviceId o WL.deviceId
+        for m in re.finditer(r'sendCommand\(\s*[A-Za-z_$][\w$.]*\s*,\s*"([A-Z][A-Z0-9_]+)"', s):
             anotar(m.group(1), base)
         # tablas: ["CMD", "texto", …]  y  { on: "CMD", off: "CMD" }
         for m in re.finditer(r'\[\s*"([A-Z][A-Z0-9_]{3,})"\s*,\s*"', s):
