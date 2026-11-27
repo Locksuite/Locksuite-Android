@@ -24,7 +24,9 @@ object SplitApkBundle {
     const val MAX_SPLIT_ENTRIES = 128
     const val MAX_MANIFEST_BYTES = 4 * 1024 * 1024
     const val MAX_TOTAL_UNCOMPRESSED_BYTES = 1024L * 1024L * 1024L
-    const val MAX_INNER_ZIP_ENTRIES = 16384
+    // Apps grandes reales (ej. DiDi Rider base.apk con 17.612 entradas) superan 16.384;
+    // la defensa anti zip-bomb sigue cubierta por MAX_TOTAL_UNCOMPRESSED_BYTES y SHA-256 previo.
+    const val MAX_INNER_ZIP_ENTRIES = 65536
     private const val MAX_OUTER_ZIP_ENTRIES = 4096
 
     data class SplitEntryInfo(

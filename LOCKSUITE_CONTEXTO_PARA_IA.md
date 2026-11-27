@@ -3274,22 +3274,43 @@ Resumen técnico completo del diagnóstico y correcciones en [`AUDITORIA_INTEGRA
 - **Qué falta confirmar en equipo real antes de tachar B.137:**
   1. En un celular en `0.7.5` (`168`), probar desde `celular.html` → **Apps del celular** → **Instalar app en este celular (remoto)** la instalación silenciosa de `com.kiloo.subwaysurf` (verificando progreso en vivo en `devices/<id>/remoteInstall`, limpieza de `hide_`/`suspend_` previos y conservación del bloqueo de internet).
 
+### B.138 — Ampliación de entradas ZIP en Split APKs (`65536`), timeout de descarga (`60 s`) y `DiagLog` en Tienda silenciosa (`0.7.6` / `169`, 27/11/2026) — implementado, pendiente de prueba en equipo real
+
+- **Causa raíz verificada en dispositivo real (`89df415c8949c8fc`, `S22 Arctic X1`, `v0.7.2`, Android 11) + artefacto real en GCS:**
+  - El paquete de DiDi Rider `v7.7.12` (`1407071204`) en GCS (`1407071204_armeabi_v7a.apks`, `392.5 MB`, y también `1407071204_arm64_v8a.apks`, `422.2 MB`) contiene un `base.apk` legítimo con **`17.612` entradas ZIP**.
+  - `SplitApkBundle.MAX_INNER_ZIP_ENTRIES` estaba fijado en **`16384`** (hecho en `B.131` como freno anti *zip-bomb* antes de existir Tienda Aurora/DiDi), por lo que `inspectInnerApkStream` rechazaba determinísticamente el bundle con `"El APK interno base.apk supera el límite de 16384 entradas."` tras descargarlo por completo, empujando el flujo al diálogo de fallback hacia Google Play.
+- **Correcciones aplicadas (solo primera tienda / descarga silenciosa multi-fuente):**
+  1. **`SplitApkBundle.kt`:** `MAX_INNER_ZIP_ENTRIES` subido de `16384` a **`65536`** (manteniendo intactos `MAX_TOTAL_UNCOMPRESSED_BYTES = 1 GB`, `MAX_SPLIT_ENTRIES = 128`, `MAX_MANIFEST_BYTES = 4 MB` y verificación `SHA-256` obligatoria previa en `SelfUpdater`/`ApkChecksum`). Nuevo test en `SplitApkBundleTest.kt` (`inspectBundleZip_acceptsLargeLegitApkAbove16384Entries` con `18.000` entradas).
+  2. **`SelfUpdater.kt`:** `openDownloadConnection` amplía `readTimeout` de `20_000` ms a **`60_000` ms** para tolerar micro-pausas sobre datos móviles en bundles grandes (~370–450 MB).
+  3. **`StoreInstallManager.kt` y `PackageInstallStatusReceiver.kt`:** agregado registro `DiagLog` (`tag = "store"`) al iniciar, fallar o enviar a `PackageInstaller` una instalación/actualización silenciosa de la tienda (`installStoreApp`, `installAuroraApp`, `installAuroraBatch`) y al recibir el resultado asíncrono del sistema (`STATUS_SUCCESS` o rechazo).
+
+### B.139 — PENDIENTE (no corregido aún): bloqueo en Google Play v53+ con hoja `"cerrar hoja @36px!"` trabado por candidato posicional `sin texto` (`89df415c8949c8fc`, 27/11/2026)
+
+- **Incidente observado en `devices/89df415c8949c8fc/updateFlow` + `updateFlowSteps` (27/11/2026, `16:04:57` – `16:06:13`, `v0.7.2`, Google Play `v53.8.11-29`, instalando `com.didiglobal.passenger`):**
+  1. Tocó `«Instalar»` (`intento 2 de 6: texto='instalar'`), apareció la barra de progreso (*«Google Play está preparando la descarga»*) y el espacio libre bajó de `7247 MB` a `6633 MB` (luego recuperado a `7079 MB` a las `18:20:32`).
+  2. `0,77 s` después desapareció la barra de progreso (`progresoDeDescarga = false`) y Play Store mostró una hoja superpuesta con botón **`cerrar hoja @36px!`** (`scan.dismissals` no vacío, fuera de `bandTop`).
+  3. En `LockSuiteAccessibilityService.kt` (paso **4b**), el cierre automático de `scan.dismissals` **exige `scan.actions.isEmpty()`**. Como un contenedor clickeable sin texto en **`top=120`** entró en `scan.actions` como candidato posicional (`SCORE_POSITION = 40`), el paso **4b nunca se ejecutó**; el flujo quemó los intentos `3..6` tocando `«sin texto» (posicion top=120)` y cerró a los 75 s con `ERROR: Estancado 75s tras probar 6 candidatos`.
+- **Por qué se dejó pendiente a propósito (no tocado en `0.7.6`):**
+  - El `debugLabels` no guarda los textos informativos (`notices`) de la hoja emergente (no sabemos si esa hoja era promocional o un aviso obligatorio de Play Store), y flexibilizar el paso `4b` con palabras amplias de `DISMISS_WORDS` (`"cerrar"`, `"omitir"`) tiene riesgo de regresión funcional en otros modelos/idiomas de Play Store (como ya ocurrió en `B.110`) si cae un botón real solo por posición.
+- **Dirección recomendada para resolverlo después con pruebas en equipo real:**
+  - En el paso `4b` de `LockSuiteAccessibilityService.kt`, evaluar si conviene priorizar cierres explícitos de hoja (`"cerrar hoja"` / `"close sheet"`) cuando `!hasDefiniteUpdate && scan.dialogs.isEmpty()` —ignorando únicamente candidatos posicionales `score < SCORE_WORD`—, y evitar quemar múltiples clics `sin texto` cuando `scan.dismissals.isNotEmpty()`, validándolo físicamente en Play Store v53+ (pantalla chica tipo S22 Flip y pantalla normal).
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**27/11 — Antigravity: fix universal de des-ocultamiento (`B.136`) y comando remoto seguro `INSTALL_APP` (`B.137` + fix falso «oculta» en `0.7.5`).**
+**27/11 — Antigravity: diagnóstico en `89df415c8949c8fc`, fix de Split APKs grandes y `DiagLog` en Tienda silenciosa (`B.138`, `0.7.6` / `169`), y registro del pendiente de Google Play (`B.139`).**
 
 - **Qué se hizo:**
-  - **`B.136` (`0.7.3` / `166`):** diagnóstico en `19325a1143f44ba4` (`DuoQin F21 Pro`) y protección universal contra auto-desinstalación/re-bloqueo al des-ocultar apps (`AppUnhideGuard.kt`, `AppController.kt`, `PackageReceiver.kt`, 9 sitios en `PolicyManager`/`AndroidAutoStubs`/`AndroidAutoStubInstaller`/`UpdateFlowManager`, `AppUnhideGuardTest.kt`).
-  - **`B.137` (`0.7.4` → `0.7.5` / `168`):** agregado comando remoto `INSTALL_APP` con PIN obligatorio, HMAC 24 h, super-admin allowlist opcional (`serverSecrets/remoteInstallAllowedUids`), validación fail-closed de origen oficial + SHA-256 (`RemoteInstallPolicy.kt`, `RemoteAppInstaller.kt`, `StoreInstallManager.installRemoteAdminApp`, `FirebaseDeviceSync.fetchRemoteInstallMeta`, `SelfUpdater`/`SplitApkInstaller` con `silent = quiet`, `PackageInstallStatusReceiver`, `CommandProcessor.kt`, `functions/index.js`) y tarjeta en `celular.html` / `celular.js?v=20`. Tras prueba real en `7073099b55af5fd6` (Android 13), corregido falso rechazo «ya está instalada pero oculta» cuando el paquete no existía (`dpm.isApplicationHidden` devuelve `true` sin `FLAG_INSTALLED`) mediante `RemoteInstallPolicy.isPackageInstalled` / `isInstalledButHidden` y tests en `RemoteInstallPolicyTest.kt`.
+  - **`B.138` (`0.7.5` → `0.7.6` / `169`):** tras diagnosticar el fallo instalando `com.didiglobal.passenger` (`v7.7.12`, `base.apk` con `17.612` entradas en GCS) en `89df415c8949c8fc` (`S22 Arctic X1`, `v0.7.2`), se subió `SplitApkBundle.MAX_INNER_ZIP_ENTRIES` de `16384` a `65536` (+ test `inspectBundleZip_acceptsLargeLegitApkAbove16384Entries`), se amplió `readTimeout` en `SelfUpdater.openDownloadConnection` de `20_000` ms a `60_000` ms, y se agregó `DiagLog` (`tag = "store"`) en `StoreInstallManager` y `PackageInstallStatusReceiver`.
+  - **`B.139` (pendiente documentado, sin tocar):** documentado el bloqueo posterior en Google Play `v53.8.11-29` (`debugLabels: "cerrar hoja @36px!"`) donde `LockSuiteAccessibilityService` paso **4b** queda inhibido por candidatos posicionales `sin texto` en `top=120`.
 - **Verificado en PC antes de desplegar:**
-  - `.\gradlew.bat testDebugUnitTest --no-daemon`: `BUILD SUCCESSFUL` (incluyendo `AppUnhideGuardTest` y `RemoteInstallPolicyTest`).
-  - `node tools/test_functions_index.js`: `OK (35 pruebas)` (previo al último ajuste solo Kotlin/test JVM).
+  - `.\gradlew.bat testDebugUnitTest --no-daemon`: `BUILD SUCCESSFUL` (`51` suites, `533` tests, `0` fallos, `0` omitidos; `SplitApkBundleTest`: `9` tests en verde).
   - 6/6 scripts Python de sincronía en verde (`check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `check_store_sync.py`, `check_diag_sync.py`).
-  - Falta confirmación completa en equipo real (`B.136` y `B.137`).
+  - Pruebas JS de tienda en verde (`test_store_sources.js`: `7` pruebas; `test_aurora_gplay.js`: `6` pruebas).
+  - Falta probar instalación silenciosa real de DiDi Rider en `89df415c8949c8fc` tras actualizar a `0.7.6` (`169`), además de la confirmación en equipo real de `B.136` y `B.137`.
 
 
 

@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
+import com.ejemplo.locksuite.diag.DiagLog
 import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -81,6 +82,14 @@ object StoreInstallManager {
         }
     }
 
+    private fun logStoreResult(kind: String, packageName: String, err: String?) {
+        if (err != null) {
+            DiagLog.w("store", "Fallo $kind ($packageName): $err")
+        } else {
+            DiagLog.i("store", "Sesión $kind enviada al sistema ($packageName)")
+        }
+    }
+
     /** Instala una app de la tienda clásica. false si ya hay una instalación en curso. */
     fun installStoreApp(
         context: Context,
@@ -92,6 +101,7 @@ object StoreInstallManager {
         blockInternet: Boolean
     ): Boolean {
         val app = context.applicationContext ?: context
+        DiagLog.i("store", "Iniciando descarga clásica ($packageName)")
         return core.start(
             key = packageName,
             work = { report ->
@@ -102,6 +112,7 @@ object StoreInstallManager {
             },
             onFinished = { err ->
                 clearProgress(app)
+                logStoreResult("clásica", packageName, err)
                 if (err != null) {
                     toast(app, err)
                 } else {
@@ -159,6 +170,8 @@ object StoreInstallManager {
         isUpdate: Boolean
     ): Boolean {
         val app = context.applicationContext ?: context
+        val modeLabel = if (isUpdate) "actualización" else "instalación"
+        DiagLog.i("store", "Iniciando $modeLabel silenciosa ($packageName)")
         return core.start(
             key = packageName,
             work = { report ->
@@ -178,6 +191,7 @@ object StoreInstallManager {
             },
             onFinished = { err ->
                 clearProgress(app)
+                logStoreResult("silenciosa", packageName, err)
                 if (err != null) {
                     com.ejemplo.locksuite.mdm.AuroraStoreManager.clearPendingClaim(app, packageName)
                     _lastFailure.value = InstallFailure(
@@ -207,6 +221,7 @@ object StoreInstallManager {
             val one = items[0]
             return installAuroraApp(app, one.apkUrl, one.packageName, one.label, one.sha256, one.isUpdate)
         }
+        DiagLog.i("store", "Iniciando lote silencioso (${items.size} apps)")
         scope.launch {
             for (item in items) {
                 var guard = 0
@@ -216,6 +231,7 @@ object StoreInstallManager {
                 }
                 if (core.isBusy()) break
                 val latch = java.util.concurrent.CountDownLatch(1)
+                DiagLog.i("store", "Lote silencioso: iniciando ${item.packageName}")
                 val started = core.start(
                     key = item.packageName,
                     work = { report ->
@@ -235,6 +251,7 @@ object StoreInstallManager {
                     },
                     onFinished = { err ->
                         clearProgress(app)
+                        logStoreResult("lote silencioso", item.packageName, err)
                         if (err != null) toast(app, "${item.label}: $err")
                         latch.countDown()
                     }

@@ -83,11 +83,19 @@ class PackageInstallStatusReceiver : BroadcastReceiver() {
 
             if (status == PackageInstaller.STATUS_SUCCESS) {
                 Log.i("PackageInstallStatus", "Instalación exitosa de $packageName")
+                com.ejemplo.locksuite.diag.DiagLog.i(
+                    "store",
+                    "Sistema confirmó instalación de ${packageName ?: "?"}"
+                )
                 if (!silent) {
                     Toast.makeText(context, "Instalación completada con éxito", Toast.LENGTH_LONG).show()
                 }
             } else {
                 Log.e("PackageInstallStatus", "Error al instalar $packageName: $message (status=$status)")
+                com.ejemplo.locksuite.diag.DiagLog.w(
+                    "store",
+                    "Sistema rechazó instalación de ${packageName ?: "?"} (status=$status): ${message ?: "sin detalle"}"
+                )
                 if (!silent) {
                     Toast.makeText(context, "Fallo al instalar: ${message ?: "Restricciones de usuario o paquete inválido"}", Toast.LENGTH_LONG).show()
                 }

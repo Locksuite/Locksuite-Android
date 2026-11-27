@@ -593,7 +593,8 @@ object SelfUpdater {
         while (redirects < 7) {
             val conn = URL(currentUrl).openConnection() as HttpURLConnection
             conn.connectTimeout = 20_000
-            conn.readTimeout = 20_000
+            // 60 s para tolerar micro-cortes en datos móviles al bajar bundles grandes (~370–450 MB).
+            conn.readTimeout = 60_000
             conn.instanceFollowRedirects = false
             conn.setRequestProperty("User-Agent", "LockSuite-Updater/1.0")
             try {

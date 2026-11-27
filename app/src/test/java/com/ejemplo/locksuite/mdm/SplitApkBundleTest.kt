@@ -469,6 +469,48 @@ class SplitApkBundleTest {
     }
 
     @Test
+    fun inspectBundleZip_acceptsLargeLegitApkAbove16384Entries() {
+        val innerApk = ByteArrayOutputStream().use { bos ->
+            ZipOutputStream(bos).use { zos ->
+                zos.setLevel(java.util.zip.Deflater.NO_COMPRESSION)
+                val manifestBytes = buildAxml(
+                    attrs = listOf(
+                        AxmlAttr(0, "package", 0x03, strValue = "com.example.largelegit"),
+                        AxmlAttr(0x0101021b, "versionCode", 0x10, intValue = 10),
+                        AxmlAttr(0x0101021c, "versionName", 0x03, strValue = "7.7.12")
+                    ),
+                    minSdk = 24
+                )
+                zos.putNextEntry(ZipEntry("AndroidManifest.xml"))
+                zos.write(manifestBytes)
+                zos.closeEntry()
+
+                for (i in 0 until 18_000) {
+                    zos.putNextEntry(ZipEntry("res/raw/e_$i.txt"))
+                    zos.closeEntry()
+                }
+            }
+            bos.toByteArray()
+        }
+
+        val bundleFile = writeZipFile(
+            File(tempFolder.root, "large_legit.apks"),
+            listOf("base.apk" to innerApk)
+        )
+        val res = SplitApkBundle.inspectBundleZip(bundleFile, tempFolder.root)
+        assertTrue("Expected SplitBundle for 18k-entry APK, got $res", res is InspectResult.SplitBundle)
+        val sel = SplitApkBundle.selectSplits(
+            entries = (res as InspectResult.SplitBundle).entries,
+            expectedPackageName = "com.example.largelegit",
+            deviceAbis = listOf("armeabi-v7a"),
+            deviceDensityDpi = 320,
+            deviceLocales = listOf("es"),
+            deviceSdk = 30
+        )
+        assertTrue("Expected Selected for 18k-entry APK, got $sel", sel is SelectionResult.Selected)
+    }
+
+    @Test
     fun inspectBundleZip_rejectsInnerApkWithTooManyEntries() {
         val innerApk = ByteArrayOutputStream().use { bos ->
             ZipOutputStream(bos).use { zos ->
