@@ -269,6 +269,7 @@ object CommandMailbox {
     @Volatile private var liveListener: ValueEventListener? = null
     @Volatile private var liveRetryAtMs = 0L
     @Volatile private var liveBackoffMs = LIVE_RETRY_AFTER_ERROR_MS
+    @Volatile private var livePausedForSleep = false
 
     /** ¿Hay un listener en vivo puesto en este proceso? */
     val isLive: Boolean get() = liveListener != null
@@ -293,14 +294,46 @@ object CommandMailbox {
     fun ensureLiveChannel(context: Context) {
         val ctx = context.applicationContext
         if (shouldListenLive(ctx)) {
-            attachLive(ctx)
-        } else if (liveListener != null) {
+            if (!livePausedForSleep) attachLive(ctx)
+        } else if (liveListener != null || livePausedForSleep) {
             stopLiveChannel(ctx, if (FirebaseDeviceSync.fcmAvailable(ctx) == true) "tiene FCM" else "no hace falta")
         }
     }
 
+    /**
+     * Pausa el listener en vivo cuando la pantalla se apaga en batería (B.133) para permitir
+     * Deep Doze sin keep-alives RTDB cada 45 s; `WatchdogWorker` sigue drenando en ventanas
+     * de mantenimiento y [resumeLiveChannelIfNeeded] re-engancha al instante al encender pantalla.
+     */
+    fun pauseLiveChannelForSleep(context: Context) {
+        val ctx = context.applicationContext
+        if (!shouldListenLive(ctx)) return
+        val (ref, listener) = synchronized(liveLock) {
+            val par = liveRef to liveListener
+            liveRef = null
+            liveListener = null
+            livePausedForSleep = true
+            par
+        }
+        if (ref != null && listener != null) {
+            try {
+                ref.removeEventListener(listener)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "No se pudo pausar la escucha en vivo: ${e.message}")
+            }
+        }
+    }
+
+    fun resumeLiveChannelIfNeeded(context: Context) {
+        val ctx = context.applicationContext
+        if (!livePausedForSleep) return
+        livePausedForSleep = false
+        ensureLiveChannel(ctx)
+    }
+
     private fun attachLive(ctx: Context) {
         synchronized(liveLock) {
+            livePausedForSleep = false
             if (liveListener != null) return
             val ahora = SystemClock.elapsedRealtime()
             if (ahora < liveRetryAtMs) return
@@ -359,6 +392,7 @@ object CommandMailbox {
             val par = liveRef to liveListener
             liveRef = null
             liveListener = null
+            livePausedForSleep = false
             par
         }
         if (ref != null && listener != null) {
@@ -388,7 +422,7 @@ object CommandMailbox {
         val previo = ultimoInformado
         val desde = ahora - ultimoInformadoAt
         if (resultado == RESULTADO_VACIO && previo != null) {
-            if (previo == RESULTADO_VACIO && desde < 14 * 60_000L) return
+            if (previo == RESULTADO_VACIO && desde < 2 * 60 * 60_000L) return
             if (previo.startsWith("aplicó") && desde < 10 * 60_000L) return
         }
         ultimoInformado = resultado

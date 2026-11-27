@@ -41,7 +41,15 @@ class ReviveReceiver : BroadcastReceiver() {
             }
             DiagLog.firstEntry("alarma de rescate")
             com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(context, "alarma de rescate")
-            if (!WatchdogForegroundService.isRunning()) {
+            val watchdogAlive = WatchdogForegroundService.isRunning()
+            if (watchdogAlive &&
+                (com.ejemplo.locksuite.service.KosherVpnService.isTunnelRunning ||
+                    !BootReceiver.shouldVpnBeRunning(context))
+            ) {
+                ProcessHealth.scheduleRescueIfDue(context, force = true)
+                return@guard
+            }
+            if (!watchdogAlive) {
                 try {
                     val watchdog = Intent(context, WatchdogForegroundService::class.java)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

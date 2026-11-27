@@ -50,12 +50,15 @@ object AuroraStoreManager {
         val p = prefs(ctx)
         val before = p.getString(KEY_PACKAGES_JSON, null)
         val normalized = json ?: "{}"
+        if (before == normalized) {
+            return false
+        }
         p.edit()
             .putString(KEY_PACKAGES_JSON, normalized)
             .putLong(KEY_UPDATED_AT, System.currentTimeMillis())
             .apply()
         cache = Cached(normalized, parsed)
-        return before != normalized
+        return true
     }
 
     fun deviceAbis(): List<String> = Build.SUPPORTED_ABIS?.toList().orEmpty()

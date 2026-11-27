@@ -490,9 +490,22 @@ class WhitelistManager(private val context: Context) {
      * fusionar hace imposible QUITAR un override desde el panel. El panel siempre manda
      * el mapa completo del equipo.
      */
+    private fun jsonMapsEqual(existingRaw: String?, incoming: JSONObject): Boolean {
+        val existing = try { JSONObject(existingRaw ?: "{}") } catch (_: Exception) { return false }
+        if (existing.length() != incoming.length()) return false
+        for (k in incoming.keys()) {
+            if (!existing.has(k)) return false
+            if (existing.optString(k, "") != incoming.optString(k, "")) return false
+        }
+        return true
+    }
+
     fun replaceDeviceDecisions(json: String): Boolean {
         return try {
             val parsed = JSONObject(json)
+            if (jsonMapsEqual(prefs().getString(KEY_DEVICE_DECISIONS, "{}"), parsed)) {
+                return false
+            }
             prefs().edit().putString(KEY_DEVICE_DECISIONS, parsed.toString()).apply()
             reload()
             true
@@ -516,6 +529,9 @@ class WhitelistManager(private val context: Context) {
     fun replaceGlobalDecisions(json: String): Boolean {
         return try {
             val parsed = JSONObject(json)
+            if (jsonMapsEqual(prefs().getString(KEY_DECISIONS, "{}"), parsed)) {
+                return false
+            }
             prefs().edit().putString(KEY_DECISIONS, parsed.toString()).apply()
             reload()
             true
@@ -799,7 +815,11 @@ class WhitelistManager(private val context: Context) {
     fun replaceCustomApps(json: String): Boolean {
         return try {
             val parsed = JSONObject(json) // valida antes de guardar
-            prefs().edit().putString(KEY_CUSTOM, parsed.toString()).apply()
+            val encoded = parsed.toString()
+            if (prefs().getString(KEY_CUSTOM, null) == encoded) {
+                return false
+            }
+            prefs().edit().putString(KEY_CUSTOM, encoded).apply()
             reload()
             true
         } catch (e: Exception) {

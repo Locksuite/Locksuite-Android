@@ -39,8 +39,9 @@ object ProcessHealth {
     private const val REQ_SENTINEL = 7125
     private const val REQ_REVIVE = 7126
     private const val SENTINEL_DELAY_MS = 365L * 24 * 3600_000L
-    private const val RESCUE_DELAY_MS = 20 * 60_000L
-    private const val RESCUE_REARM_EVERY_MS = 5 * 60_000L
+    // B.133 (batería): 120 min / 30 min para no romper Doze nocturno cada 20 min mientras Watchdog sigue vivo.
+    private const val RESCUE_DELAY_MS = 120 * 60_000L
+    private const val RESCUE_REARM_EVERY_MS = 30 * 60_000L
     private const val KEY_BOOT_COUNT = "boot_count"
 
     @Volatile private var rescueArmedAt = 0L

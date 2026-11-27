@@ -2,6 +2,8 @@ package com.ejemplo.locksuite.worker
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import androidx.work.Worker
 import androidx.work.WorkerParameters
@@ -30,28 +32,14 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
         // Y la alarma de rescate: otro mecanismo distinto de WorkManager (ver util/ProcessHealth).
         com.ejemplo.locksuite.util.ProcessHealth.scheduleRescueIfDue(applicationContext)
 
-        // LATIDO PRIMERO, Y BARATO (2/9/2026) — "a veces los celulares no quedan en línea".
-        //
-        // El único latido que había en la práctica era el del servicio de primer plano:
-        // `syncLastSeenOnly()` cada 90 s, dentro de un `Handler.postDelayed(20_000)`. Y
-        // `postDelayed` cuenta con `SystemClock.uptimeMillis()`, que NO AVANZA mientras el
-        // equipo está en sueño profundo. Un celular con la pantalla apagada un rato deja
-        // de latir; el panel considera "En línea" solo los últimos minutos, así que el
-        // equipo aparece "Desconectado" aunque esté perfecto y reciba comandos sin
-        // problema (FCM de alta prioridad despierta el equipo igual).
-        //
-        // Este Worker es lo único que WorkManager garantiza que corre aunque el proceso
-        // haya muerto y aunque el equipo esté en Doze (en la ventana de mantenimiento).
-        // Antes sincronizaba, sí — pero al FINAL, con `syncDeviceInfo()`, que es la
-        // sincronización pesada (pide el token de FCM, enumera políticas, escribe ~40
-        // campos) y encima quedaba después de `reapplyAllRestrictions()`, o sea que si esa
-        // parte tardaba o el proceso se moría antes, el latido no salía nunca.
-        //
-        // Escribir solo `lastSeen` es una escritura de dos campos y va PRIMERO.
-        try {
-            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(applicationContext)
-        } catch (e: Exception) {
-            e.printStackTrace()
+        val networkAvailable = hasUsableNetwork(applicationContext)
+
+        if (networkAvailable) {
+            try {
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         // ARRANQUE PROTEGIDO — red de seguridad de último recurso (21/8/2026).
@@ -168,79 +156,68 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
             .getInt("watchdog_worker_tick", 0)
         PrefsHelper.getMdmPrefs(applicationContext).edit()
             .putInt("watchdog_worker_tick", (vuelta + 1) % 4).apply()
-        if (vuelta == 0) {
+        if (networkAvailable) {
+            if (vuelta == 0) {
+                try {
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.pullWhitelistConfig(applicationContext)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                try {
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.pullPlayStoreConfig(applicationContext)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                try {
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(applicationContext)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
             try {
-                com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(applicationContext)
+                com.ejemplo.locksuite.util.CommandMailbox.drainNow(applicationContext, "WatchdogWorker")
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-            // 22/9/2026 — RELEER LA CONFIGURACIÓN DE APPS, ~1 VEZ POR HORA.
-            //
-            // La lista blanca/negra (catálogo global + la ficha de ESTE equipo) solo se
-            // leía cuando llegaba un FCM `SYNC_WHITELIST`. Si ese mensaje se perdía, el
-            // equipo se quedaba con la configuración vieja PARA SIEMPRE, y el panel
-            // mostrando la nueva. Es estado, no un comando: releerlo es idempotente
-            // (reemplaza los mapas enteros y reconcilia solo lo que difiere), así que
-            // hacerlo una vez por hora cierra ese hueco sin costo visible.
+
             try {
-                com.ejemplo.locksuite.util.FirebaseDeviceSync.pullWhitelistConfig(applicationContext)
+                if (com.ejemplo.locksuite.mdm.WhitelistManager(applicationContext).isEnabled()) {
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncWhitelistState(applicationContext)
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-            // 29/10/2026 (B.101) — LO MISMO PARA LA TIENDA PLAY. Su catálogo (global y de
-            // este equipo) también es estado que solo llegaba por un FCM `SYNC_PLAY_STORE`:
-            // si se perdía, el usuario seguía viendo la tienda vieja hasta el próximo
-            // cambio. Releerlo es idempotente (reemplaza los mapas y reconcilia).
+
             try {
-                com.ejemplo.locksuite.util.FirebaseDeviceSync.pullPlayStoreConfig(applicationContext)
+                if (com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
+                        .isEmbeddedBrowserFinderEnabled()
+                ) {
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync
+                        .syncEmbeddedBrowserState(applicationContext)
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-        }
-
-        // 22/9/2026 — BUZÓN DE COMANDOS, en TODAS las vueltas.
-        //
-        // Si un comando del panel no llegó por FCM (equipo apagado más de un día, FCM que
-        // descartó mensajes, token viejo), acá se aplica igual: la Function deja una copia
-        // firmada en `devices/<id>/pendingCommands`. Con el buzón vacío —el caso normal—
-        // es una lectura chica. Ver util/CommandMailbox.kt.
-        try {
-            com.ejemplo.locksuite.util.CommandMailbox.drainNow(applicationContext, "WatchdogWorker")
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // Auditoría de la lista blanca (8/9/2026). Va en TODAS las vueltas, no una de
-        // cada cuatro, y no contradice lo de arriba: cuando no cambió nada,
-        // syncWhitelistState() se da cuenta por la firma y escribe seis campos en vez
-        // del nodo grande. Va seguido porque es lo que el administrador está mirando
-        // mientras corre la simulación, y esperar una hora para ver qué se bloqueó
-        // convierte diez minutos de trabajo en una tarde.
-        try {
-            if (com.ejemplo.locksuite.mdm.WhitelistManager(applicationContext).isEnabled()) {
-                com.ejemplo.locksuite.util.FirebaseDeviceSync.syncWhitelistState(applicationContext)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // Auditoría del detector de navegadores embebidos (10/9/2026, B.60). Mismo
-        // criterio exacto que la de arriba, y por el mismo motivo: mientras el
-        // detector corre en SIMULACIÓN, esta lista es lo único que el administrador
-        // tiene para decidir si se puede apagar la simulación sin romper el equipo.
-        // Si no cambió nada, syncEmbeddedBrowserState() lo ve por la firma y escribe
-        // cuatro campos en vez del nodo grande.
-        try {
-            if (com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
-                    .isEmbeddedBrowserFinderEnabled()
-            ) {
-                com.ejemplo.locksuite.util.FirebaseDeviceSync
-                    .syncEmbeddedBrowserState(applicationContext)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
 
         return Result.success()
+    }
+
+    private fun hasUsableNetwork(ctx: Context): Boolean {
+        return try {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return true
+            @Suppress("DEPRECATION")
+            val nets = cm.allNetworks
+            for (net in nets) {
+                val caps = cm.getNetworkCapabilities(net) ?: continue
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return true
+            }
+            false
+        } catch (_: Throwable) {
+            true
+        }
     }
 }

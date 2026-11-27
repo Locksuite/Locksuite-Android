@@ -65,8 +65,9 @@ object AccessibilityZombieHealer {
 
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
-    fun tick(context: Context) {
-        Safe.guard("ZombieHealer.tick") { tickInternal(context.applicationContext) }
+    @JvmOverloads
+    fun tick(context: Context, serviceRunningHint: Boolean? = null) {
+        Safe.guard("ZombieHealer.tick") { tickInternal(context.applicationContext, serviceRunningHint) }
     }
 
     fun onProcessStart(context: Context) {
@@ -82,10 +83,19 @@ object AccessibilityZombieHealer {
         }
     }
 
-    private fun tickInternal(ctx: Context) {
+    private fun tickInternal(ctx: Context, serviceRunningHint: Boolean? = null) {
         val prefs = PrefsHelper.getMdmPrefs(ctx)
         if (!toggleRestoreScheduled && prefs.contains(KEY_TOGGLE_RESTORE)) {
             restoreAfterToggle(ctx, "red de seguridad del ciclo")
+        }
+
+        if (serviceRunningHint == true && !toggleRestoreScheduled && !prefs.contains(KEY_TOGGLE_RESTORE)) {
+            if (zombieSinceElapsed != null) {
+                DiagLog.i(DIAG, "La accesibilidad volvió a estar enlazada (fin del zombi)")
+            }
+            zombieSinceElapsed = null
+            reportPendingReinstallOutcome(ctx, recovered = true)
+            return
         }
 
         val now = SystemClock.elapsedRealtime()

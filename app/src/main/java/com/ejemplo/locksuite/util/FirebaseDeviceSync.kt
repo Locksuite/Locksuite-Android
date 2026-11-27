@@ -36,6 +36,19 @@ import java.security.SecureRandom
 object FirebaseDeviceSync {
 
     private const val COMMAND_SECRET_KEY = "command_auth_secret"
+    private const val APPS_SYNC_FORCE_MS = 12 * 60 * 60_000L
+
+    @Volatile private var consecutiveFcmFailures = 0
+    @Volatile private var lastSyncedAppsHash: String? = null
+    @Volatile private var lastSyncedAppsAtMs: Long = 0L
+    @Volatile private var lastExitInfoTimestamp: Long = -1L
+    @Volatile private var lastExitInfoMap: Map<String, Any>? = null
+    @Volatile private var lastPushedSecretFingerprint: String? = null
+
+    fun invalidateAppsSyncCache() {
+        lastSyncedAppsHash = null
+        lastSyncedAppsAtMs = 0L
+    }
 
     /**
      * Credencial aleatoria por dispositivo para autenticar comandos FCM. No se
@@ -682,13 +695,18 @@ object FirebaseDeviceSync {
      * sincronización del equipo lo vuelva a escribir con `!data.exists()`.
      */
     fun pushCommandSecret(context: Context) {
+        val id = deviceId(context)
+        val secret = getOrCreateCommandSecret(context)
+        val fp = "$id:$secret"
+        if (fp == lastPushedSecretFingerprint) return
         withAuth {
-            val id = deviceId(context)
-            val secret = getOrCreateCommandSecret(context)
             FirebaseDatabase.getInstance()
                 .getReference("deviceSecrets/$id/commandSecret")
                 .setValue(secret)
-                .addOnSuccessListener { markCommandSecretMismatch(context, false) }
+                .addOnSuccessListener {
+                    lastPushedSecretFingerprint = fp
+                    markCommandSecretMismatch(context, false)
+                }
                 .addOnFailureListener { e ->
                     e.printStackTrace()
                     markCommandSecretMismatch(context, true)
@@ -796,24 +814,26 @@ object FirebaseDeviceSync {
             com.google.firebase.messaging.FirebaseMessaging.getInstance().token
                 .addOnCompleteListener { task ->
                     if (task.isSuccessful && !task.result.isNullOrBlank()) {
+                        consecutiveFcmFailures = 0
                         syncToken(context, task.result!!)
+                        com.ejemplo.locksuite.util.CommandMailbox.ensureLiveChannel(context)
                     } else {
                         // FIX #1: ver nota al principio del archivo.
                         val reason = task.exception?.message ?: "FCM no devolvió ningún token"
-                        // 19/11/2026 (B.125, T5): antes esto hacía `printStackTrace()` en CADA
-                        // intento (cada hora): ~60 de los 400 renglones del registro en 29 h, que
-                        // por eso no llegaba más atrás del 11/11. Ahora se anota UNA vez por
-                        // cambio de estado (bien → mal); el motivo queda en `fcmTokenError` del
-                        // panel y los comandos siguen llegando por el buzón en vivo (B.95).
+                        val failures = ++consecutiveFcmFailures
                         val estabaMal = fcmAvailable(context) == false
-                        // 26/10/2026 (B.95): sin FCM, el buzón pasa a escucharse en vivo.
-                        markFcmState(context, false, reason)
-                        if (!estabaMal) {
-                            com.ejemplo.locksuite.diag.DiagLog.w(
-                                "fcm",
-                                "No se pudo obtener el token FCM: ${reason.take(160)} " +
-                                    "(los comandos siguen llegando por el buzón en vivo)"
-                            )
+                        // Exigir 3 fallos seguidos (salvo si ya estaba en false) para evitar que un
+                        // error transitorio de red/Play Services dispare la escucha RTDB en vivo.
+                        if (estabaMal || failures >= 3) {
+                            markFcmState(context, false, reason)
+                            if (!estabaMal) {
+                                com.ejemplo.locksuite.diag.DiagLog.w(
+                                    "fcm",
+                                    "No se pudo obtener el token FCM ($failures intentos): ${reason.take(160)} " +
+                                        "(los comandos siguen llegando por el buzón en vivo)"
+                                )
+                            }
+                            com.ejemplo.locksuite.util.CommandMailbox.ensureLiveChannel(context)
                         }
                         withAuth {
                             val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
@@ -828,7 +848,10 @@ object FirebaseDeviceSync {
                 }
         } catch (e: Exception) {
             // Sin Play Services, FirebaseMessaging puede ni siquiera inicializarse.
-            markFcmState(context, false, e.message ?: e.javaClass.simpleName)
+            consecutiveFcmFailures++
+            if (fcmAvailable(context) == false || consecutiveFcmFailures >= 3) {
+                markFcmState(context, false, e.message ?: e.javaClass.simpleName)
+            }
             e.printStackTrace()
         }
 
@@ -1129,14 +1152,15 @@ object FirebaseDeviceSync {
                 }
                 appsMap[safePackageName] = datos
             }
-            // 2/9/2026 — Va DENTRO de withAuth y reafirmando `ownerUid` en la misma
-            // escritura. Antes eran dos setValue() sueltos, sin autenticar y sin ownerUid:
-            // la regla de `devices/$id` solo los aceptaba por la rama
-            // `data.child('ownerUid').val() === auth.uid`, o sea que después de que el uid
-            // anónimo rotara (reinstalar la app, limpiar datos) esta escritura quedaba
-            // rechazada hasta que corriera antes un writeFields() —que sí reafirma el
-            // ownerUid—. Resultado visible: la lista de apps del panel se quedaba
-            // congelada en la de la instalación anterior, sin ningún error a la vista.
+            val appsHash = computeAppsMapHash(appsMap)
+            val nowElapsed = android.os.SystemClock.elapsedRealtime()
+            if (appsHash != null &&
+                appsHash == lastSyncedAppsHash &&
+                lastSyncedAppsAtMs != 0L &&
+                nowElapsed - lastSyncedAppsAtMs < APPS_SYNC_FORCE_MS
+            ) {
+                return
+            }
             withAuth {
                 val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
                 val id = deviceId(context)
@@ -1151,11 +1175,39 @@ object FirebaseDeviceSync {
                 FirebaseDatabase.getInstance()
                     .getReference("devices/$id")
                     .updateChildren(payload)
+                    .addOnSuccessListener {
+                        if (appsHash != null) {
+                            lastSyncedAppsHash = appsHash
+                            lastSyncedAppsAtMs = android.os.SystemClock.elapsedRealtime()
+                        }
+                    }
                     .addOnFailureListener { it.printStackTrace() }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    private fun computeAppsMapHash(appsMap: Map<String, Any>): String? = try {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val sb = StringBuilder()
+        for (k in appsMap.keys.sorted()) {
+            val v = appsMap[k] as? Map<*, *> ?: continue
+            sb.append(k).append('=')
+                .append(v["packageName"]).append('|')
+                .append(v["label"]).append('|')
+                .append(v["isHidden"]).append('|')
+                .append(v["isSuspended"]).append('|')
+                .append(v["isWebViewBlocked"]).append('|')
+                .append(v["isInternetBlocked"]).append('|')
+                .append(v["appType"]).append('|')
+                .append(v["isCritical"]).append('|')
+                .append(v["versionName"]).append('|')
+                .append(v["versionCode"]).append('\n')
+        }
+        Base64.encodeToString(digest.digest(sb.toString().toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
+    } catch (_: Exception) {
+        null
     }
 
     /** paquete → (versionName, versionCode) de todo lo instalado, en una sola llamada. */
@@ -1196,6 +1248,9 @@ object FirebaseDeviceSync {
         val exits = am.getHistoricalProcessExitReasons(context.packageName, 0, 1)
         if (exits.isNullOrEmpty()) return emptyMap()
         val exit = exits[0]
+        if (exit.timestamp == lastExitInfoTimestamp) {
+            lastExitInfoMap?.let { return it }
+        }
         val reasonStr = when (exit.reason) {
             android.app.ApplicationExitInfo.REASON_ANR -> "ANR"
             android.app.ApplicationExitInfo.REASON_CRASH -> "CRASH"
@@ -1277,6 +1332,8 @@ object FirebaseDeviceSync {
                 maxTraceChars
             )
         }
+        lastExitInfoTimestamp = exit.timestamp
+        lastExitInfoMap = res
         return res
     }
 
@@ -1317,17 +1374,13 @@ object FirebaseDeviceSync {
             val ref = FirebaseDatabase.getInstance().getReference("globalSettings/whitelist")
             val latch = java.util.concurrent.CountDownLatch(1)
             var ok = false
+            var globalOrCustomChanged = false
             withAuth {
                 ref.get()
                     .addOnSuccessListener { snap ->
                         try {
                             val wl = com.ejemplo.locksuite.mdm.WhitelistManager(ctx)
 
-                            // Catálogo personalizado primero: si una app nueva viene con
-                            // decisión "allow", sus dominios tienen que existir ANTES de
-                            // que se recargue el Trie por la decisión. Al revés quedaría
-                            // permitida sin un solo dominio abierto, o sea sin internet,
-                            // que es justo lo contrario de lo que se pidió.
                             val customJson = org.json.JSONObject()
                             snap.child("custom").children.forEach { child ->
                                 val pkg = child.child("packageName").getValue(String::class.java)
@@ -1340,22 +1393,13 @@ object FirebaseDeviceSync {
                                 obj.put("block", org.json.JSONArray(
                                     child.child("block").children.mapNotNull { it.getValue(String::class.java) }
                                 ))
-                                // 10/9/2026: dominios del catálogo DE FÁBRICA que el panel
-                                // desbloqueó a mano. Es la única forma de corregir una
-                                // decisión del catálogo sin recompilar la app — ver
-                                // WhitelistManager.blockedDomainsOf().
                                 obj.put("unblock", org.json.JSONArray(
                                     child.child("unblock").children.mapNotNull { it.getValue(String::class.java) }
                                 ))
                                 customJson.put(pkg, obj)
                             }
-                            wl.replaceCustomApps(customJson.toString())
+                            if (wl.replaceCustomApps(customJson.toString())) globalOrCustomChanged = true
 
-                            // ── CATÁLOGO GLOBAL ──
-                            // Se reemplaza el mapa ENTERO en vez de recorrer paquete por
-                            // paquete. Ver replaceGlobalDecisions(): recorrer solo lo que
-                            // viene en el nodo dejaba a una app borrada del catálogo con
-                            // su decisión vieja pegada al equipo para siempre.
                             val globalJson = org.json.JSONObject()
                             snap.child("decisions").children.forEach { child ->
                                 val pkg = child.key?.replace("_", ".") ?: return@forEach
@@ -1365,7 +1409,7 @@ object FirebaseDeviceSync {
                                     globalJson.put(pkg, state)
                                 }
                             }
-                            wl.replaceGlobalDecisions(globalJson.toString())
+                            if (wl.replaceGlobalDecisions(globalJson.toString())) globalOrCustomChanged = true
 
                             ok = true
                         } catch (e: Exception) {
@@ -1379,25 +1423,17 @@ object FirebaseDeviceSync {
                         latch.countDown()
                     }
             }
-            // Tope alto pero finito: esto corre en un hilo de IO lanzado por el propio
-            // comando FCM, nunca en el hilo principal ni en el lector del túnel.
-            latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
-            // ── OVERRIDES DE ESTE EQUIPO ──
-            // Va DESPUÉS del catálogo global, secuencialmente y en ESTE hilo, no anidado
-            // dentro del listener de arriba: ese listener corre en el hilo principal, y
-            // un `latch.await()` adentro lo congelaría hasta que Firebase conteste.
+            latch.await(15, java.util.concurrent.TimeUnit.SECONDS)
+            var deviceChanged = false
             if (ok) {
-                pullDeviceAppPolicy(ctx)
-                // Comparar y corregir en vez de ordenar (B.15 punto 3). Recién acá está
-                // el estado efectivo completo —global + override—, así que este es el
-                // único momento en que se puede saber qué apps ocultar y cuáles destapar.
-                try { com.ejemplo.locksuite.mdm.WhitelistManager(ctx).reconcileApps() } catch (e: Exception) {
-                    android.util.Log.w("FirebaseDeviceSync", "Lista blanca: reconcile falló: ${e.message}")
+                deviceChanged = pullDeviceAppPolicy(ctx)
+                if (globalOrCustomChanged || deviceChanged) {
+                    try { com.ejemplo.locksuite.mdm.WhitelistManager(ctx).reconcileApps() } catch (e: Exception) {
+                        android.util.Log.w("FirebaseDeviceSync", "Lista blanca: reconcile falló: ${e.message}")
+                    }
+                    syncWhitelistState(ctx, force = true)
+                    requestSync(ctx)
                 }
-            }
-            if (ok) {
-                syncWhitelistState(ctx, force = true)
-                requestSync(ctx)
             }
             ok
         } catch (e: Exception) {
@@ -1406,30 +1442,12 @@ object FirebaseDeviceSync {
         }
     }
 
-    /**
-     * Lee `devices/<id>/appPolicy` — las decisiones de apps PROPIAS DE ESTE EQUIPO, que
-     * le ganan al catálogo global.
-     *
-     * ★ 10/9/2026. Cierra el pendiente que B.53 dejó anotado textual: *"el catálogo se
-     * aplica igual a todos los equipos; el lugar natural es un
-     * `devices/<id>/whitelistOverrides` que se lea después del global"*. Se llama
-     * `appPolicy` y no `whitelistOverrides` porque ya no es solo de la lista blanca: es
-     * la decisión de permitir/prohibir esa app en este equipo, que rige también con el
-     * filtro estricto apagado (cierra sus dominios, la oculta y la suspende).
-     *
-     * **Falla ABIERTO a propósito, y hay que saberlo:** si el nodo no se puede leer, el
-     * equipo se queda con el catálogo global en vez de quedarse sin ninguna
-     * configuración. Un error de red no puede ser lo que le devuelva a un usuario las
-     * apps que el administrador le cerró; y al revés, tampoco puede dejar un equipo con
-     * todo cerrado por un timeout. El mapa anterior sigue en preferencias hasta que una
-     * lectura buena lo reemplace.
-     */
     private fun pullDeviceAppPolicy(context: Context): Boolean {
         val ctx = context.applicationContext
         return try {
             val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(ctx)}/appPolicy")
             val latch = java.util.concurrent.CountDownLatch(1)
-            var ok = false
+            var changed = false
             withAuth {
                 ref.get()
                     .addOnSuccessListener { snap ->
@@ -1444,9 +1462,8 @@ object FirebaseDeviceSync {
                                     json.put(pkg, state)
                                 }
                             }
-                            com.ejemplo.locksuite.mdm.WhitelistManager(ctx)
+                            changed = com.ejemplo.locksuite.mdm.WhitelistManager(ctx)
                                 .replaceDeviceDecisions(json.toString())
-                            ok = true
                         } catch (e: Exception) {
                             android.util.Log.e("FirebaseDeviceSync", "appPolicy: error aplicando: ${e.message}", e)
                         } finally {
@@ -1458,8 +1475,8 @@ object FirebaseDeviceSync {
                         latch.countDown()
                     }
             }
-            latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
-            ok
+            latch.await(15, java.util.concurrent.TimeUnit.SECONDS)
+            changed
         } catch (e: Exception) {
             android.util.Log.e("FirebaseDeviceSync", "appPolicy: pullDeviceAppPolicy falló: ${e.message}", e)
             false
@@ -1569,15 +1586,15 @@ object FirebaseDeviceSync {
             }
             // Tope alto pero finito: corre en un hilo de IO lanzado por el propio comando
             // FCM, nunca en el hilo principal ni en el lector del túnel.
-            latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
-            val changed = com.ejemplo.locksuite.mdm.PlayStoreManager.replaceConfig(ctx, globalJson, extrasJson)
+            latch.await(15, java.util.concurrent.TimeUnit.SECONDS)
+            com.ejemplo.locksuite.mdm.PlayStoreManager.replaceConfig(ctx, globalJson, extrasJson)
             if (classicWv != null && classicNet != null) {
                 com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.replaceConfig(ctx, classicWv!!, classicNet!!)
             }
             if (auroraJson != null) {
                 com.ejemplo.locksuite.mdm.AuroraStoreManager.replacePackages(ctx, auroraJson)
             }
-            changed
+            globalJson != null || extrasJson != null || auroraJson != null
         } catch (e: Exception) {
             android.util.Log.e("FirebaseDeviceSync", "Tienda Play: pullPlayStoreConfig falló: ${e.message}", e)
             false

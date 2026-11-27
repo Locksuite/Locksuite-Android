@@ -248,7 +248,20 @@ object WhitelistCatalog {
         "doh.dns.apple.com",
         "use-application-dns.net",
         "mask.icloud.com",
-        "mask-h2.icloud.com"
+        "mask-h2.icloud.com",
+        // Enlaces externos, donaciones y redes de anuncios / SDKs no kosher de Irlox (bloqueados en toda la flota).
+        "parodebondis.com.ar",
+        "torrezm.dev",
+        "itunes.apple.com",
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "imasdk.googleapis.com",
+        "fundingchoicesmessages.google.com",
+        "mediation.goog",
+        "admob-gmats.uc.r.appspot.com",
+        "unityads.unity3d.com",
+        "unity3dusercontent.com"
     )
 
     /**
@@ -577,6 +590,45 @@ object WhitelistCatalog {
             packageName = "com.google.android.calendar",
             label = "Calendario de Google",
             allow = listOf("calendar.google.com")
+        ),
+
+        Entry(
+            packageName = "net.osmand",
+            label = "OsmAnd",
+            allow = listOf("osmand.net", "openstreetmap.org", "cdn.proj.org"),
+            block = listOf("facebook.com", "twitter.com", "x.com", "youtube.com", "vk.com"),
+            note = "Mapas vectoriales offline de OpenStreetMap, sin anuncios ni dependencia de Google Maps SDK ni Play Store."
+        ),
+
+        Entry(
+            packageName = "com.irlox",
+            label = "Irlox",
+            allow = listOf(
+                "api.irlox.com",
+                "tile.openstreetmap.org",
+                "torrezmartin-9c34d.firebasestorage.app"
+            ),
+            block = listOf(
+                "parodebondis.com.ar",
+                "torrezm.dev",
+                "itunes.apple.com",
+                "apps.apple.com",
+                "doubleclick.net",
+                "googlesyndication.com",
+                "googleadservices.com",
+                "imasdk.googleapis.com",
+                "fundingchoicesmessages.google.com",
+                "mediation.goog",
+                "admob-gmats.uc.r.appspot.com",
+                "unityads.unity3d.com",
+                "unity3dusercontent.com",
+                "revenuecat.com",
+                "rev.cat",
+                "revenue.cat",
+                "8-lives-cat.io",
+                "rc-backup.com"
+            ),
+            note = "Requiere Play Store habilitado por PairIP/Play Integrity y usa Google Maps SDK en Android; anuncios, WebViews y enlaces externos (parodebondis, torrezm.dev, Unity Ads, AdMob) bloqueados globalmente."
         )
     )
 

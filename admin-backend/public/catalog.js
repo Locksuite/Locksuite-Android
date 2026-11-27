@@ -372,6 +372,53 @@ window.LOCKSUITE_CATALOG = {
       ],
       "block": [],
       "note": ""
+    },
+    {
+      "pkg": "net.osmand",
+      "label": "OsmAnd",
+      "allow": [
+        "osmand.net",
+        "openstreetmap.org",
+        "cdn.proj.org"
+      ],
+      "block": [
+        "facebook.com",
+        "twitter.com",
+        "x.com",
+        "youtube.com",
+        "vk.com"
+      ],
+      "note": "Mapas vectoriales offline de OpenStreetMap, sin anuncios ni dependencia de Google Maps SDK ni Play Store."
+    },
+    {
+      "pkg": "com.irlox",
+      "label": "Irlox",
+      "allow": [
+        "api.irlox.com",
+        "tile.openstreetmap.org",
+        "torrezmartin-9c34d.firebasestorage.app"
+      ],
+      "block": [
+        "parodebondis.com.ar",
+        "torrezm.dev",
+        "itunes.apple.com",
+        "apps.apple.com",
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "imasdk.googleapis.com",
+        "fundingchoicesmessages.google.com",
+        "mediation.goog",
+        "admob-gmats.uc.r.appspot.com",
+        "unityads.unity3d.com",
+        "unity3dusercontent.com",
+        "revenuecat.com",
+        "rev.cat",
+        "revenue.cat",
+        "8-lives-cat.io",
+        "rc-backup.com"
+      ],
+      "note": "Requiere Play Store habilitado por PairIP/Play Integrity y usa Google Maps SDK en Android; anuncios, WebViews y enlaces externos (parodebondis, torrezm.dev, Unity Ads, AdMob) bloqueados globalmente."
     }
   ],
   "infrastructure": [
@@ -492,7 +539,19 @@ window.LOCKSUITE_CATALOG = {
     "doh.dns.apple.com",
     "use-application-dns.net",
     "mask.icloud.com",
-    "mask-h2.icloud.com"
+    "mask-h2.icloud.com",
+    "parodebondis.com.ar",
+    "torrezm.dev",
+    "itunes.apple.com",
+    "doubleclick.net",
+    "googlesyndication.com",
+    "googleadservices.com",
+    "imasdk.googleapis.com",
+    "fundingchoicesmessages.google.com",
+    "mediation.goog",
+    "admob-gmats.uc.r.appspot.com",
+    "unityads.unity3d.com",
+    "unity3dusercontent.com"
   ],
   "sharedCdn": [
     "cloudfront.net",

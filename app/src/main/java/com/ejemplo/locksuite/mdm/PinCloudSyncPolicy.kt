@@ -28,7 +28,7 @@ object PinCloudSyncPolicy {
     /** Tope de la espera entre intentos fallidos. */
     const val MAX_BACKOFF_MS = 5 * 60_000L
     /** Cada cuánto se mira la bandera pública cuando todo figura confirmado (una lectura de una hoja, mínima). */
-    const val CLOUD_CHECK_EVERY_MS = 5 * 60_000L
+    const val CLOUD_CHECK_EVERY_MS = 6 * 60 * 60_000L
     /**
      * Una publicación sin respuesta tras este tiempo se da por colgada y se permite otra. Es largo
      * a propósito: sin internet la escritura queda en cola y contesta recién al reconectar, y no

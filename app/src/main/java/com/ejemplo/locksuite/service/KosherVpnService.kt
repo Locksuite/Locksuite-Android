@@ -236,9 +236,17 @@ class KosherVpnService : VpnService() {
          */
         @Volatile
         private var perAppBlockedPackagesCache: Set<String>? = null
+        private val installedAppsEpoch = java.util.concurrent.atomic.AtomicLong(0L)
 
         @JvmStatic
         fun invalidatePerAppInternetCache() {
+            perAppBlockedPackagesCache = null
+            installedAppsEpoch.incrementAndGet()
+        }
+
+        @JvmStatic
+        fun invalidateInstalledAppsCache() {
+            installedAppsEpoch.incrementAndGet()
             perAppBlockedPackagesCache = null
         }
 
@@ -441,12 +449,39 @@ class KosherVpnService : VpnService() {
 
         @JvmStatic
         fun healIfBroken(context: android.content.Context) {
-            var health = tunnelHealth(context)
-            if (health != HEALTH_OK) {
+            if (!isTunnelRunning) {
                 windowStartAtMs = 0L
-            } else if (windowedUpstreamBroken()) {
+                return
+            }
+            val nowFast = android.os.SystemClock.elapsedRealtime()
+            val readyAt = tunnelReadyAtMs
+            if (readyAt == 0L || nowFast - readyAt < CAPTURE_GRACE_MS) {
+                windowStartAtMs = 0L
+                return
+            }
+            val pktIn = tunnelPacketsIn.get()
+            val fwdIn = tunnelForwardedQueriesIn.get()
+            val upOut = tunnelUpstreamResponsesOut.get()
+            // Camino rápido sin IPC: si ya capturó paquetes y el upstream no está en cero,
+            // solo comprobamos la ventana deslizante (y si falla, confirmamos pantalla/red con tunnelHealth).
+            var health: String
+            if (pktIn > 0L && (fwdIn == 0L || upOut > 0L)) {
+                if (!windowedUpstreamBroken()) return
+                health = tunnelHealth(context)
+                if (health != HEALTH_OK) {
+                    windowStartAtMs = 0L
+                    return
+                }
                 health = HEALTH_NO_UPSTREAM
                 windowStartAtMs = 0L
+            } else {
+                health = tunnelHealth(context)
+                if (health != HEALTH_OK) {
+                    windowStartAtMs = 0L
+                } else if (windowedUpstreamBroken()) {
+                    health = HEALTH_NO_UPSTREAM
+                    windowStartAtMs = 0L
+                }
             }
             if (health != HEALTH_NO_CAPTURE && health != HEALTH_NO_UPSTREAM) return
 
@@ -658,14 +693,62 @@ class KosherVpnService : VpnService() {
      */
     @Volatile private var needsUidLookup = false
     @Volatile private var needsUidLookupAt = 0L
+    @Volatile private var needsUidLookupEpoch = -1L
+    @Volatile private var perAppCacheEpoch = -1L
+
+    @Volatile private var cachedAdBlocking = false
+    @Volatile private var cachedGifsBlocked = false
+    @Volatile private var cachedGoogleAccountWebBlocked = true
+    @Volatile private var cachedGoogleAccountStrict = false
+    @Volatile private var cachedMpOffersVpn = false
+    private val validatedByNetworkHandle = java.util.concurrent.ConcurrentHashMap<Long, Boolean>()
+    private var hotPrefsListenerRegistered = false
+    private val hotPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == null ||
+            key == "global_ad_blocking" ||
+            key == "block_gifs" ||
+            key == "block_google_account_web" ||
+            key == com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.KEY_MODE ||
+            key == "mercadopago_block_offers_vpn" ||
+            key == "locksuite_suspended"
+        ) {
+            refreshHotPolicyCache()
+        }
+    }
+
+    private fun refreshHotPolicyCache() {
+        try {
+            cachedAdBlocking = mdmPrefs.getBoolean("global_ad_blocking", false)
+            cachedGifsBlocked = mdmPrefs.getBoolean("block_gifs", false)
+            cachedGoogleAccountWebBlocked = mdmPrefs.getBoolean("block_google_account_web", true)
+            cachedGoogleAccountStrict = com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.isStrict(
+                mdmPrefs.getString(
+                    com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.KEY_MODE,
+                    com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.MODE_NORMAL
+                )
+            )
+            cachedMpOffersVpn = policyManager.isMercadoPagoBlockOffersVpnEnabled()
+        } catch (_: Exception) { }
+    }
+
+    private fun isPackageInstalled(pkg: String): Boolean = try {
+        packageManager.getApplicationInfo(pkg, 0)
+        true
+    } catch (_: Exception) {
+        false
+    }
 
     private fun activePerAppInternetBlocked(): Set<String> {
-        perAppBlockedPackagesCache?.let { return it }
+        val curEpoch = installedAppsEpoch.get()
+        val cached = perAppBlockedPackagesCache
+        if (cached != null && perAppCacheEpoch == curEpoch) return cached
         val fresh = try {
             policyManager.getPerAppInternetBlockedPackages()
+                .filterTo(LinkedHashSet()) { isPackageInstalled(it) }
         } catch (e: Exception) {
             emptySet()
         }
+        perAppCacheEpoch = curEpoch
         perAppBlockedPackagesCache = fresh
         return fresh
     }
@@ -676,6 +759,13 @@ class KosherVpnService : VpnService() {
         // proceso nació bloqueado, completar la inicialización. Ver LockSuiteApplication.
         com.ejemplo.locksuite.LockSuiteApplication.ensureUnlockedInit(this, "VPN creada")
         connectivityManager = getSystemService(ConnectivityManager::class.java)
+        refreshHotPolicyCache()
+        if (!hotPrefsListenerRegistered) {
+            try {
+                mdmPrefs.registerOnSharedPreferenceChangeListener(hotPrefsListener)
+                hotPrefsListenerRegistered = true
+            } catch (_: Exception) { }
+        }
         // Cargar la lista de bloqueo de anuncios de forma asíncrona al iniciar
         AdBlocker.loadAsync(applicationContext)
         // Detectar cambios de red (Wi-Fi <-> datos moviles) para reestablecer
@@ -750,6 +840,7 @@ class KosherVpnService : VpnService() {
                     com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.loadRules()
                     com.ejemplo.locksuite.mdm.WhitelistManager(applicationContext).reload()
                     invalidatePerAppInternetCache()
+                    refreshHotPolicyCache()
                     AdBlocker.loadAsync(applicationContext)
                     android.util.Log.i("KosherVPN", "Reglas DNS recargadas en caliente (sin rehacer el tunel).")
                 } catch (e: Exception) {
@@ -824,6 +915,7 @@ class KosherVpnService : VpnService() {
                 com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.loadRules()
                 com.ejemplo.locksuite.mdm.WhitelistManager(applicationContext).reload()
                 invalidatePerAppInternetCache()
+                refreshHotPolicyCache()
                 AdBlocker.loadAsync(applicationContext)
             } catch (e: Exception) {
                 android.util.Log.w("KosherVPN", "No se pudieron recargar reglas DNS: ${e.message}")
@@ -1261,8 +1353,7 @@ class KosherVpnService : VpnService() {
         }
 
         // 1. Bloqueo global de anuncios (AdBlocker) si la opción está activa por el administrador
-        val isAdBlockerActive = mdmPrefs.getBoolean("global_ad_blocking", false)
-        if (isAdBlockerActive) {
+        if (cachedAdBlocking) {
             if (!AdBlocker.isReady) {
                 AdBlocker.loadAsync(applicationContext)
             } else if (AdBlocker.isBlocked(queriedDomain)) {
@@ -1274,8 +1365,7 @@ class KosherVpnService : VpnService() {
         }
 
         // 2. Bloqueo global de GIFs/Tenor si la opción está activa por el administrador
-        val isGifsBlocked = mdmPrefs.getBoolean("block_gifs", false)
-        if (isGifsBlocked) {
+        if (cachedGifsBlocked) {
             val labels = queriedDomain.split(".")
             val isTenorOrGiphy = GIF_TOKENS.any { token ->
                 labels.any { label -> label == token || label.split("-").contains(token) }
@@ -1290,15 +1380,8 @@ class KosherVpnService : VpnService() {
 
         // 3. Ajustes/actividad de la cuenta de Google  (4/9/2026, interruptor por
         //    defecto ENCENDIDO — ver mdm/GoogleAccountWebPolicy.kt).
-        val isGoogleAccountWebBlocked = mdmPrefs.getBoolean("block_google_account_web", true)
-        val googleAccountStrict = com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.isStrict(
-            mdmPrefs.getString(
-                com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.KEY_MODE,
-                com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.MODE_NORMAL
-            )
-        )
-        if (isGoogleAccountWebBlocked &&
-            com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.isBlockedHost(queriedDomain, googleAccountStrict)
+        if (cachedGoogleAccountWebBlocked &&
+            com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.isBlockedHost(queriedDomain, cachedGoogleAccountStrict)
         ) {
             android.util.Log.i("KosherVPN", "🚫 BLOQUEADO CUENTA/ACTIVIDAD GOOGLE: $queriedDomain")
             com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
@@ -1307,7 +1390,7 @@ class KosherVpnService : VpnService() {
         }
 
         // 4. Bloqueo global de ofertas de Mercado Pago si está activo
-        if (policyManager.isMercadoPagoBlockOffersVpnEnabled() && WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
+        if (cachedMpOffersVpn && WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
             android.util.Log.i("KosherVPN", "🚫 BLOQUEADO OFERTAS MERCADO PAGO: $queriedDomain")
             com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
             NetworkForwarder.sendBlockedDnsResponse(packet, output)
@@ -1445,13 +1528,18 @@ class KosherVpnService : VpnService() {
      */
     private fun needsUidLookup(): Boolean {
         val now = android.os.SystemClock.elapsedRealtime()
-        if (needsUidLookupAt != 0L && now - needsUidLookupAt < 10_000L) return needsUidLookup
+        val curEpoch = installedAppsEpoch.get()
+        if (needsUidLookupAt != 0L && needsUidLookupEpoch == curEpoch && now - needsUidLookupAt < 10_000L) {
+            return needsUidLookup
+        }
         val fresh = try {
-            WebViewBlockManager.getBlockedPackages(applicationContext).isNotEmpty()
+            WebViewBlockManager.getBlockedPackages(applicationContext)
+                .any { isPackageInstalled(it) }
         } catch (e: Exception) {
             true // ante la duda, resolver: es más lento pero no cambia el resultado
         }
         needsUidLookup = fresh
+        needsUidLookupEpoch = curEpoch
         needsUidLookupAt = now
         return fresh
     }
@@ -1686,7 +1774,14 @@ class KosherVpnService : VpnService() {
 
                 override fun onCapabilitiesChanged(network: Network, networkCapabilities: android.net.NetworkCapabilities) {
                     if (networkCapabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) return
-                    if (networkCapabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    val handle = try { network.networkHandle } catch (_: Exception) { 0L }
+                    val isValidated = networkCapabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    if (handle != 0L) {
+                        val prev = validatedByNetworkHandle.put(handle, isValidated)
+                        if (prev != isValidated) {
+                            NetworkForwarder.invalidateUpstreamCache()
+                        }
+                    } else if (isValidated) {
                         NetworkForwarder.invalidateUpstreamCache()
                     }
                 }
@@ -1703,6 +1798,7 @@ class KosherVpnService : VpnService() {
                     // No borramos lastNetworkHandle para que un onLost/onAvailable espúreo de la misma
                     // red (mismo handle) durante establish() no simule un cambio de red en bucle.
                     val lostHandle = try { network.networkHandle } catch (e: Exception) { 0L }
+                    if (lostHandle != 0L) validatedByNetworkHandle.remove(lostHandle)
                     if (lostHandle == 0L || lostHandle == lastNetworkHandle) {
                         NetworkForwarder.invalidateUpstreamCache()
                     }
@@ -1793,6 +1889,11 @@ class KosherVpnService : VpnService() {
         restartHandler.removeCallbacksAndMessages(null)
         pendingNetworkHandle = 0L
         restartPendingUntilMs = 0L
+        validatedByNetworkHandle.clear()
+        if (hotPrefsListenerRegistered) {
+            try { mdmPrefs.unregisterOnSharedPreferenceChangeListener(hotPrefsListener) } catch (_: Exception) { }
+            hotPrefsListenerRegistered = false
+        }
         unregisterNetworkWatcher()
         stopVpn()
         super.onDestroy()

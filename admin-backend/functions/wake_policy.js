@@ -18,11 +18,13 @@
  *    ninguna acción del panel por recibirlo.
  */
 
+// B.133 (batería): 180 min de silencio, mínimo 60 min entre wakes y tope 8/día
+// para no despertar equipos en Doze nocturno cada 15 min si no tienen red/están en reposo.
 const WAKE = Object.freeze({
-  SILENCE_MS: 25 * 60 * 1000,
+  SILENCE_MS: 180 * 60 * 1000,
   MAX_AGE_MS: 7 * 24 * 3600 * 1000,
-  MIN_GAP_MS: 15 * 60 * 1000,
-  MAX_PER_DAY: 24,
+  MIN_GAP_MS: 60 * 60 * 1000,
+  MAX_PER_DAY: 8,
   DAY_MS: 24 * 3600 * 1000,
 });
 

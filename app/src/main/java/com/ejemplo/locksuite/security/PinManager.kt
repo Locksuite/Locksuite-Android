@@ -10,6 +10,11 @@ import java.security.SecureRandom
 
 object PinManager {
 
+    @Volatile private var cachedCredentials: PublishableCredentials? = null
+    @Volatile private var credentialsLoaded = false
+    @Volatile private var cachedCloudAcked: String? = null
+    @Volatile private var cloudAckedLoaded = false
+
     private fun generateSalt(): ByteArray {
         val salt = ByteArray(16)
         SecureRandom().nextBytes(salt)
@@ -35,6 +40,8 @@ object PinManager {
         PrefsHelper.getMdmPrefs(context).edit()
             .putBoolean("pin_configured_mirror", true)
             .apply()
+        credentialsLoaded = false
+        cachedCredentials = null
 
         // Generar (si todavía no existe) el código de recuperación de emergencia
         // por dispositivo y sincronizarlo al panel web. La configuración del PIN
@@ -71,23 +78,37 @@ object PinManager {
      * PIN (en ese caso no hay nada que publicar: publicar vacío borraría un verificador bueno).
      */
     fun credentialsForSync(context: Context): PublishableCredentials? {
+        if (credentialsLoaded) return cachedCredentials
         val prefs = PrefsHelper.getEncryptedPrefs(context)
         val hash = prefs.getString(Constants.KEY_PIN_HASH, null)
         val salt = prefs.getString(Constants.KEY_PIN_SALT, null)
-        if (hash.isNullOrEmpty() || salt.isNullOrEmpty()) return null
-        val recovery = prefs.getString(Constants.KEY_RECOVERY_PLAINTEXT_CACHE, null)?.takeIf { it.isNotEmpty() }
-        return PublishableCredentials(hash, salt, recovery)
+        val out = if (hash.isNullOrEmpty() || salt.isNullOrEmpty()) {
+            null
+        } else {
+            val recovery = prefs.getString(Constants.KEY_RECOVERY_PLAINTEXT_CACHE, null)?.takeIf { it.isNotEmpty() }
+            PublishableCredentials(hash, salt, recovery)
+        }
+        cachedCredentials = out
+        credentialsLoaded = true
+        return out
     }
 
     /** Clave de las credenciales cuya publicación confirmó el servidor la última vez; `null` si nunca. */
-    fun cloudAckedKey(context: Context): String? =
-        PrefsHelper.getEncryptedPrefs(context).getString(Constants.KEY_PIN_CLOUD_ACKED, null)
+    fun cloudAckedKey(context: Context): String? {
+        if (cloudAckedLoaded) return cachedCloudAcked
+        val acked = PrefsHelper.getEncryptedPrefs(context).getString(Constants.KEY_PIN_CLOUD_ACKED, null)
+        cachedCloudAcked = acked
+        cloudAckedLoaded = true
+        return acked
+    }
 
     /** Anota que el servidor confirmó haber recibido [credentialsKey]. Solo lo llama quien vio la confirmación. */
     fun markPublishedToCloud(context: Context, credentialsKey: String) {
         PrefsHelper.getEncryptedPrefs(context).edit()
             .putString(Constants.KEY_PIN_CLOUD_ACKED, credentialsKey)
             .commit()
+        cachedCloudAcked = credentialsKey
+        cloudAckedLoaded = true
     }
 
     fun isPinConfigured(context: Context): Boolean {
@@ -146,6 +167,8 @@ object PinManager {
             .putString(Constants.KEY_RECOVERY_SALT, saltStr)
             .putString(Constants.KEY_RECOVERY_PLAINTEXT_CACHE, code)
             .commit()
+        credentialsLoaded = false
+        cachedCredentials = null
 
         try {
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncRecoveryCode(context, code)

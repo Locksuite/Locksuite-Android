@@ -37,6 +37,14 @@ object WebViewPolicy {
             "mapbox.com",
             "googleapis.com",
             "gstatic.com"
+        ),
+        "com.irlox" to setOf(
+            "api.irlox.com",
+            "tile.openstreetmap.org",
+            "torrezmartin-9c34d.firebaseio.com",
+            "torrezmartin-9c34d.firebasestorage.app",
+            "googleapis.com",
+            "gstatic.com"
         )
     )
 
@@ -134,7 +142,19 @@ object WebViewPolicy {
         "doh.dns.apple.com",
         "use-application-dns.net",
         "mask.icloud.com",
-        "mask-h2.icloud.com"
+        "mask-h2.icloud.com",
+
+        // Enlaces externos, donaciones y redes de anuncios / SDKs no kosher de Irlox
+        "parodebondis.com.ar",
+        "torrezm.dev",
+        "itunes.apple.com",
+        "googlesyndication.com",
+        "imasdk.googleapis.com",
+        "fundingchoicesmessages.google.com",
+        "mediation.goog",
+        "admob-gmats.uc.r.appspot.com",
+        "unityads.unity3d.com",
+        "unity3dusercontent.com"
     )
 
     // Subdominios específicos de apps de Google (Gmail, Drive, Meet, Chat, Messages, Wallet,

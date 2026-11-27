@@ -4,10 +4,15 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
-import android.content.ComponentName
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.work.Constraints
@@ -36,8 +41,11 @@ class WatchdogForegroundService : Service() {
         /** Cada cuánto vuelve a aparecer el aviso. El dueño pidió 15-20 s. */
         private const val NAG_INTERVAL_MS = 18_000L
 
-        /** Ritmo de la vigilancia de accesibilidad cuando todo está bien. */
+        /** Ritmo de la vigilancia de accesibilidad cuando todo está bien (pantalla prendida / apagada). */
         private const val ENFORCER_IDLE_MS = 60_000L
+        private const val ENFORCER_SLEEP_MS = 180_000L
+        private const val CHECK_ACTIVE_MS = 20_000L
+        private const val CHECK_SLEEP_MS = 60_000L
 
         /**
          * Ritmo mientras la accesibilidad está caída. Más seguido porque es el momento
@@ -56,7 +64,7 @@ class WatchdogForegroundService : Service() {
          * un espejo booleano no puede ver. El caso común —el servicio se murió— lo detecta
          * el espejo al instante, porque se reinicia junto con el proceso.
          */
-        private const val FORCE_RESTART_MS = 5 * 60_000L
+        private const val FORCE_RESTART_MS = 30 * 60_000L
 
         // ── Claves de los interruptores de "Protecciones de Accesibilidad" ──
         const val KEY_ACC_BOUNCE_SETTINGS = "acc_protect_bounce_settings"
@@ -101,6 +109,7 @@ class WatchdogForegroundService : Service() {
     private var lastBlockLaunchTime = 0L
     private var lastSyncTime = 0L
     private var lastPrivateDnsEnforceTime = 0L
+    private var lastPrivateDnsCheckAt = 0L
 
     /**
      * Último reintento FORZADO de arrancar VPN + marca de agua, ignorando los espejos de
@@ -110,9 +119,12 @@ class WatchdogForegroundService : Service() {
     private var lastNagAt = 0L
     /** ¿El ciclo del aviso ya está encolado? Evita duplicar el ritmo al re-armarlo. */
     private var nagArmed = false
+    @Volatile private var nagNotificationPosted = true
     /** Cuántos avisos van en esta racha. Solo para que el texto cambie en cada uno. */
     private var nagCount = 0
     @Volatile private var workManagerScheduled = false
+    @Volatile private var isScreenInteractive = true
+    private var screenReceiverRegistered = false
     private var accessibilityObserver: android.database.ContentObserver? = null
     private val bgLock = Any()
     private var bgThread: android.os.HandlerThread? = null
@@ -197,19 +209,95 @@ class WatchdogForegroundService : Service() {
      * pasa de hasta 20 s a hasta 60 s — y en cuanto detecta, el ciclo se acelera solo a 5 s.
      * A cambio se ahorran 2.880 consultas al AccessibilityManager por día.
      */
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent?) {
+            com.ejemplo.locksuite.util.Safe.guard("Watchdog.screenReceiver") {
+                val action = intent?.action ?: return
+                when (action) {
+                    Intent.ACTION_SCREEN_ON -> {
+                        isScreenInteractive = true
+                        postBg {
+                            com.ejemplo.locksuite.util.Safe.guard("Watchdog.screenOn") {
+                                com.ejemplo.locksuite.util.CommandMailbox.resumeLiveChannelIfNeeded(applicationContext)
+                                val nowEl = android.os.SystemClock.elapsedRealtime()
+                                if (nowEl - lastSyncTime > 180_000L) {
+                                    lastSyncTime = nowEl
+                                    try {
+                                        com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(applicationContext)
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }
+                                bgHandler?.let { h ->
+                                    h.removeCallbacks(checkRunnable)
+                                    h.post(checkRunnable)
+                                }
+                            }
+                        }
+                    }
+                    Intent.ACTION_SCREEN_OFF -> {
+                        isScreenInteractive = false
+                        postBg {
+                            com.ejemplo.locksuite.util.Safe.guard("Watchdog.screenOff") {
+                                if (!isDeviceCharging(applicationContext)) {
+                                    com.ejemplo.locksuite.util.CommandMailbox.pauseLiveChannelForSleep(applicationContext)
+                                }
+                            }
+                        }
+                    }
+                    Intent.ACTION_POWER_CONNECTED -> {
+                        postBg {
+                            com.ejemplo.locksuite.util.Safe.guard("Watchdog.powerConnected") {
+                                com.ejemplo.locksuite.util.CommandMailbox.resumeLiveChannelIfNeeded(applicationContext)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun isDeviceCharging(ctx: Context): Boolean = try {
+        val batt = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val plugged = batt?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        plugged != 0
+    } catch (_: Throwable) {
+        false
+    }
+
+    private fun nextCheckDelayMs(): Long {
+        if (isScreenInteractive) return CHECK_ACTIVE_MS
+        val ctx = applicationContext
+        val urgente = try {
+            com.ejemplo.locksuite.util.BootGate.isActive(ctx) ||
+                com.ejemplo.locksuite.mdm.TempInstallWindowManager.isActive(ctx) ||
+                com.ejemplo.locksuite.mdm.GracePeriodManager.isActive(ctx)
+        } catch (_: Throwable) {
+            true
+        }
+        return if (urgente) CHECK_ACTIVE_MS else CHECK_SLEEP_MS
+    }
+
     private val enforcerRunnable = object : Runnable {
         override fun run() {
+            var verdict: com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict? = null
             try {
-                checkAccessibilityStatus()
+                verdict = checkAccessibilityStatus()
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+            val effectiveVerdict = verdict ?: com.ejemplo.locksuite.util.AccessibilityEnforcer.lastVerdict
+            val runningHint = if (effectiveVerdict == com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.OK) true else null
             // 7/11/2026 (B.112) — Autorreparación del zombi (habilitada en Ajustes pero sin enlazar).
-            // Con la accesibilidad bien es una consulta al AccessibilityManager. Nunca lanza.
-            com.ejemplo.locksuite.util.AccessibilityZombieHealer.tick(applicationContext)
-            val violada = com.ejemplo.locksuite.util.AccessibilityEnforcer.lastVerdict ==
-                com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.VIOLATED
-            postBgDelayed(this, if (violada) ENFORCER_FAST_MS else ENFORCER_IDLE_MS)
+            // Con la accesibilidad OK salta IPC extra usando runningHint; nunca lanza.
+            com.ejemplo.locksuite.util.AccessibilityZombieHealer.tick(applicationContext, runningHint)
+            val violada = effectiveVerdict == com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.VIOLATED
+            val delay = when {
+                violada -> ENFORCER_FAST_MS
+                isScreenInteractive -> ENFORCER_IDLE_MS
+                else -> ENFORCER_SLEEP_MS
+            }
+            postBgDelayed(this, delay)
         }
     }
 
@@ -225,7 +313,7 @@ class WatchdogForegroundService : Service() {
             } catch (t: Throwable) {
                 com.ejemplo.locksuite.util.Safe.report("Watchdog.checkRunnable", t)
             } finally {
-                postBgDelayed(this, 20000L)
+                postBgDelayed(this, nextCheckDelayMs())
             }
         }
 
@@ -299,9 +387,9 @@ class WatchdogForegroundService : Service() {
                 e.printStackTrace()
             }
 
-            // Garantizar que la marca de agua flotante siga ejecutándose si el launcher está activo
+            // Garantizar que la marca de agua flotante siga ejecutándose si el launcher está activo (solo con pantalla encendida)
             try {
-                if (forceServiceRestart || !WatermarkService.isRunning) {
+                if (isScreenInteractive && (forceServiceRestart || !WatermarkService.isRunning)) {
                     val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
                     if (!policyManager.isLockSuiteSuspended() &&
                         policyManager.isKosherLauncherEnabled() && Settings.canDrawOverlays(applicationContext)) {
@@ -318,31 +406,12 @@ class WatchdogForegroundService : Service() {
             }
 
 
-            // Re-imponer "DNS Privado = Desactivado" cada 60s mientras la VPN deba
-            // seguir activa. disablePrivateDns() solo se aplicaba una vez al arrancar
-            // el servicio VPN: si el usuario lo reactivaba después a mano desde
-            // Ajustes, quedaba encendido indefinidamente (hasta el próximo reinicio
-            // del servicio VPN) y el filtro dejaba de ver el tráfico DNS por completo.
-            //
-            // ── BATERÍA (2/9/2026): el intervalo ahora depende de si hace falta ──
-            //
-            // Reimponer el ajuste cada 60 s es un parche por no tener la restricción real.
-            // Desde el 2/9 existe el interruptor "Bloquear DNS privado"
-            // (`DISALLOW_CONFIG_PRIVATE_DNS`, API 29+, ver mdm/PolicySpec.kt): con ese
-            // interruptor encendido **el usuario directamente no puede tocar el ajuste**, y
-            // reimponerlo cada minuto no protege de nada — es una llamada al
-            // DevicePolicyManager cada 60 s durante todo el día, para nada.
-            //
-            // Así que: con la restricción activa y efectiva, se pasa a cada 30 minutos (se
-            // conserva un ritmo lento y no cero, porque el ajuste global lo pueden mover
-            // otras cosas: una restauración, un OEM, otra app de sistema). Sin ella, sigue
-            // cada 60 s como antes, porque ahí sí es la única defensa.
-            // La comprobación entra como mucho una vez por minuto (no en cada ciclo de 20 s),
-            // y recién ahí se construye el PolicyManager. Entre el minuto y los 30 minutos
-            // el costo es una construcción y dos lecturas de preferencias — mucho más
-            // barato que la escritura de ajuste global que se ahorra.
+            // Re-imponer "DNS Privado = Desactivado" cada 60s (o 30 min si DISALLOW_CONFIG_PRIVATE_DNS está cubierto).
+            // B.133: separar `lastPrivateDnsCheckAt` (chequeo de 60 s) de `lastPrivateDnsEnforceTime` (30 min),
+            // para no reevaluar `shouldVpnBeRunning()` cada 20 s durante 29 min cuando `cubierto == true`.
             val nowElapsed = android.os.SystemClock.elapsedRealtime()
-            if (nowElapsed - lastPrivateDnsEnforceTime > 60_000L) {
+            if (nowElapsed - lastPrivateDnsCheckAt > 60_000L) {
+                lastPrivateDnsCheckAt = nowElapsed
                 if (com.ejemplo.locksuite.receiver.BootReceiver.shouldVpnBeRunning(applicationContext)) {
                     try {
                         val pm = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
@@ -358,22 +427,14 @@ class WatchdogForegroundService : Service() {
                         e.printStackTrace()
                     }
                 } else {
-                    // Sin VPN que proteger no hay nada que reimponer: se corre el reloj para
-                    // no reevaluar cada minuto mientras el filtro esté apagado.
                     lastPrivateDnsEnforceTime = nowElapsed
                 }
             }
 
-            // Latido para el estado "En línea" del panel.
-            //
-            // 22/9/2026 (batería): cada 3 min en vez de 90 s. El SDK de Realtime Database
-            // cierra la conexión tras ~60 s sin actividad, así que cada latido es una
-            // reconexión TLS completa con la radio encendida. El panel llama "en línea"
-            // a menos de 5 min (ficha) y de 20 min (lista), así que 3 min alcanza con
-            // margen, y la mitad de reconexiones. Un comando del panel igual despierta al
-            // equipo y lo marca en línea en el acto (CommandProcessor).
+            // Latido para el estado "En línea" del panel (cada 3 min con pantalla encendida; con pantalla
+            // apagada lo mantiene WatchdogWorker en ventanas Doze y al encender pantalla recupera al instante).
             val now = android.os.SystemClock.elapsedRealtime()
-            if (now - lastSyncTime > 180_000L) {
+            if (isScreenInteractive && now - lastSyncTime > 180_000L) {
                 lastSyncTime = now
                 try {
                     com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(applicationContext)
@@ -445,6 +506,28 @@ class WatchdogForegroundService : Service() {
             running = false
             stopSelf()
             return
+        }
+
+        isScreenInteractive = try {
+            (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive ?: true
+        } catch (_: Throwable) {
+            true
+        }
+        if (!screenReceiverRegistered) {
+            try {
+                val filter = IntentFilter().apply {
+                    addAction(Intent.ACTION_SCREEN_ON)
+                    addAction(Intent.ACTION_SCREEN_OFF)
+                    addAction(Intent.ACTION_POWER_CONNECTED)
+                    addAction(Intent.ACTION_POWER_DISCONNECTED)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(screenReceiver, filter, Context.RECEIVER_EXPORTED)
+                } else {
+                    registerReceiver(screenReceiver, filter)
+                }
+                screenReceiverRegistered = true
+            } catch (_: Exception) { }
         }
 
         val thread = android.os.HandlerThread("WatchdogBg").apply { start() }
@@ -543,20 +626,26 @@ class WatchdogForegroundService : Service() {
      * la misma pregunta mal respondida, y encima se recordaba "ya lo hice" en una
      * variable que otros mecanismos invalidaban por atrás.
      */
-    private fun checkAccessibilityStatus() {
+    private fun checkAccessibilityStatus(): com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict? {
         val context = applicationContext
         val now = android.os.SystemClock.elapsedRealtime()
 
-        // Si se cuenta con WRITE_SECURE_SETTINGS y la accesibilidad fue apagada, reencenderla de inmediato
-        // y darle a Android ~1,5 s para re-enlazar antes de disparar pantalla roja o suspender apps.
-        if (com.ejemplo.locksuite.util.AccessibilityZombieHealer.reEnableIfPermitted(context)) {
-            com.ejemplo.locksuite.util.AccessibilityEnforcer.resetDebounce()
-            return
-        }
-
         // null = lectura todavía sin confirmar (antirrebote). No tocar nada: actuar
         // sobre estados de transición era exactamente lo que producía el vaivén.
-        val verdict = com.ejemplo.locksuite.util.AccessibilityEnforcer.evaluate(context) ?: return
+        val verdict = com.ejemplo.locksuite.util.AccessibilityEnforcer.evaluate(context)
+        if (verdict == null) {
+            if (com.ejemplo.locksuite.util.AccessibilityZombieHealer.reEnableIfPermitted(context)) {
+                com.ejemplo.locksuite.util.AccessibilityEnforcer.resetDebounce()
+            }
+            return null
+        }
+
+        if (verdict == com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.VIOLATED &&
+            com.ejemplo.locksuite.util.AccessibilityZombieHealer.reEnableIfPermitted(context)
+        ) {
+            com.ejemplo.locksuite.util.AccessibilityEnforcer.resetDebounce()
+            return verdict
+        }
 
         // Las apps se reconcilian SIEMPRE, con cualquier veredicto: es lo que hace que
         // se auto-repare si otro mecanismo las liberó por atrás.
@@ -578,7 +667,7 @@ class WatchdogForegroundService : Service() {
                 }
             }
             cancelNag()
-            return
+            return verdict
         }
 
         // ── La accesibilidad está APAGADA (confirmado) ──
@@ -609,6 +698,7 @@ class WatchdogForegroundService : Service() {
             }
             context.startActivity(blockIntent)
         }
+        return verdict
     }
 
     // ──────────────────────────────────────────────
@@ -642,6 +732,8 @@ class WatchdogForegroundService : Service() {
         nagCount = 0
         bgHandler?.removeCallbacks(nagRunnable)
         lastNagAt = 0L
+        if (!nagNotificationPosted) return
+        nagNotificationPosted = false
         try {
             getSystemService(NotificationManager::class.java)?.cancel(NAG_NOTIFICATION_ID)
         } catch (e: Exception) {
@@ -740,6 +832,7 @@ class WatchdogForegroundService : Service() {
             // existente y no vuelve a alertar. Es el arreglo del "avisa una sola vez".
             manager.cancel(NAG_NOTIFICATION_ID)
             manager.notify(NAG_NOTIFICATION_ID, notification)
+            nagNotificationPosted = true
         } catch (e: Exception) {
             android.util.Log.w("LockSuite_Watchdog", "No se pudo mostrar el aviso de accesibilidad: ${e.message}")
         }
@@ -850,6 +943,10 @@ class WatchdogForegroundService : Service() {
             try { contentResolver.unregisterContentObserver(it) } catch (e: Exception) { }
         }
         accessibilityObserver = null
+        if (screenReceiverRegistered) {
+            try { unregisterReceiver(screenReceiver) } catch (_: Exception) { }
+            screenReceiverRegistered = false
+        }
         super.onDestroy()
     }
 

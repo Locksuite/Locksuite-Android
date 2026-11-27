@@ -68,10 +68,17 @@ object ClassicStorePolicyManager {
         internetBlockedPkgs: Set<String>
     ) {
         val ctx = context.applicationContext
-        val filteredNet = PerAppInternetBlockPolicy.filterSupported(internetBlockedPkgs)
-        prefs(ctx).edit()
-            .putStringSet(KEY_WV_DESIRED, LinkedHashSet(webViewBlockedPkgs))
-            .putStringSet(KEY_NET_DESIRED, LinkedHashSet(filteredNet))
+        val p = prefs(ctx)
+        val newWv = LinkedHashSet(webViewBlockedPkgs)
+        val filteredNet = LinkedHashSet(PerAppInternetBlockPolicy.filterSupported(internetBlockedPkgs))
+        val curWv = p.getStringSet(KEY_WV_DESIRED, emptySet()) ?: emptySet()
+        val curNet = p.getStringSet(KEY_NET_DESIRED, emptySet()) ?: emptySet()
+        if (curWv == newWv && curNet == filteredNet) {
+            return
+        }
+        p.edit()
+            .putStringSet(KEY_WV_DESIRED, newWv)
+            .putStringSet(KEY_NET_DESIRED, filteredNet)
             .commit()
         reconcile(ctx)
     }

@@ -2535,7 +2535,9 @@ const WHITELIST_BUILTIN = [
     { pkg: "com.google.android.apps.translate", label: "Traductor de Google", allow: 1, block: 1 },
     { pkg: "com.google.android.keep", label: "Google Keep", allow: 1, block: 0 },
     { pkg: "com.google.android.contacts", label: "Contactos de Google", allow: 2, block: 0 },
-    { pkg: "com.google.android.calendar", label: "Calendario de Google", allow: 1, block: 0 }
+    { pkg: "com.google.android.calendar", label: "Calendario de Google", allow: 1, block: 0 },
+    { pkg: "net.osmand", label: "OsmAnd", allow: 3, block: 5 },
+    { pkg: "com.irlox", label: "Irlox", allow: 3, block: 18 }
 ];
 
 /** Clave de Firebase: los paquetes llevan `.`, que RTDB no admite en una clave. */

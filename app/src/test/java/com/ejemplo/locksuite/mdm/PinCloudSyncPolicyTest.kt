@@ -130,7 +130,7 @@ class PinCloudSyncPolicyTest {
     // ── Revisión de la bandera pública ────────────────────────────────────────────────────
 
     @Test
-    fun laBanderaSeMiraAlPrincipioYCadaCincoMinutos() {
+    fun laBanderaSeMiraAlPrincipioYDespuesCadaSeisHoras() {
         assertTrue(PinCloudSyncPolicy.shouldCheckCloudFlag(1_000L, 0L))
         val last = 1_000_000L
         assertFalse(PinCloudSyncPolicy.shouldCheckCloudFlag(last + 60_000L, last))

@@ -25,12 +25,14 @@ object NetworkForwarder {
 
     private data class UpstreamResult(
         val address: InetAddress,
-        val network: Network?
+        val network: Network?,
+        val hasPhysicalInternetNetwork: Boolean = true
     )
 
     private data class CachedUpstream(
         val address: InetAddress,
         val network: Network?,
+        val hasPhysicalInternetNetwork: Boolean,
         val cachedAtMs: Long,
         val epoch: Long
     )
@@ -103,7 +105,7 @@ object NetworkForwarder {
     }
 
     /** Red de seguridad por si algo cambia sin avisar por el callback. */
-    private const val UPSTREAM_TTL_MS = 30_000L
+    private const val UPSTREAM_TTL_MS = 5 * 60_000L
     private const val UPSTREAM_UNBOUND_TTL_MS = 1_500L
 
     private val cacheEpoch = java.util.concurrent.atomic.AtomicLong(0L)
@@ -128,7 +130,7 @@ object NetworkForwarder {
         if (cached != null && cached.epoch == currentEpoch) {
             val ttl = if (cached.network != null) UPSTREAM_TTL_MS else UPSTREAM_UNBOUND_TTL_MS
             if (now - cached.cachedAtMs < ttl) {
-                return UpstreamResult(cached.address, cached.network)
+                return UpstreamResult(cached.address, cached.network, cached.hasPhysicalInternetNetwork)
             }
         }
 
@@ -138,6 +140,7 @@ object NetworkForwarder {
             cachedUpstream = CachedUpstream(
                 address = resolved.address,
                 network = resolved.network,
+                hasPhysicalInternetNetwork = resolved.hasPhysicalInternetNetwork,
                 cachedAtMs = android.os.SystemClock.elapsedRealtime(),
                 epoch = currentEpoch
             )
@@ -146,29 +149,16 @@ object NetworkForwarder {
     }
 
     private fun resolveUpstreamDns(vpnService: VpnService): UpstreamResult {
+        var hasPhysicalInternet = true
         try {
             val cm = vpnService.getSystemService(android.net.ConnectivityManager::class.java)
             if (cm != null) {
-                // ⚠️ ARREGLO 1/9/2026 (V-2). Antes esto era un único for sobre
-                // cm.allNetworks que devolvía LA PRIMERA red con DNS IPv4 usable. Dos
-                // problemas: el orden de allNetworks no está definido (con Wi-Fi y datos
-                // arriba a la vez podía elegir la que NO se está usando), y
-                // NET_CAPABILITY_INTERNET es la capacidad PEDIDA, no la validada — una
-                // Wi-Fi "conectada sin internet" la cumple igual. Ahora hay tres niveles
-                // de preferencia, y recién se baja al siguiente si el anterior no dio
-                // nada:
-                //
-                //   1º la red ACTIVA si está VALIDADA (y no es la nuestra);
-                //   2º cualquier red física VALIDADA (o sea, que el sistema confirmó que sale
-                //      a internet de verdad);
-                //   3º la red ACTIVA aunque todavía no esté validada (ej. portal cautivo);
-                //   4º cualquier red con capacidad de internet — el comportamiento viejo,
-                //      que se conserva como último recurso para no empeorar ningún caso
-                //      que hoy funcione.
+                var sawInternetCap = false
                 fun esUsable(net: Network, exigirValidada: Boolean): UpstreamResult? {
                     val caps = cm.getNetworkCapabilities(net) ?: return null
                     if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) return null
                     if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) return null
+                    sawInternetCap = true
                     if (exigirValidada &&
                         !caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
                     ) return null
@@ -177,12 +167,10 @@ object NetworkForwarder {
                     var v6: InetAddress? = null
                     for (dns in dnsList) {
                         if (!isUsableResolver(dns)) continue
-                        // Preferencia a IPv4: es el que existe en prácticamente todas las
-                        // redes y el que menos sorpresas da.
-                        if (dns is Inet4Address) return UpstreamResult(dns, net)
+                        if (dns is Inet4Address) return UpstreamResult(dns, net, true)
                         if (v6 == null) v6 = dns
                     }
-                    return v6?.let { UpstreamResult(it, net) }   // redes IPv6 puras / DNS64
+                    return v6?.let { UpstreamResult(it, net, true) }
                 }
 
                 // 1º — la red activa validada.
@@ -203,8 +191,10 @@ object NetworkForwarder {
                 for (network in cm.allNetworks) {
                     esUsable(network, exigirValidada = false)?.let { return it }
                 }
+                hasPhysicalInternet = sawInternetCap
             }
         } catch (e: Exception) {
+            hasPhysicalInternet = true
             android.util.Log.w("KosherVPN", "No se pudo resolver el DNS de salida: ${e.message}")
         }
 
@@ -215,7 +205,7 @@ object NetworkForwarder {
         } catch (e: Exception) {
             InetAddress.getByName("8.8.8.8")
         }
-        return UpstreamResult(fallbackAddress, null)
+        return UpstreamResult(fallbackAddress, null, hasPhysicalInternet)
     }
 
     private val FALLBACK_DNS_PRIMARY: InetAddress by lazy { InetAddress.getByName("8.8.8.8") }
@@ -247,13 +237,15 @@ object NetworkForwarder {
         try {
             if (Thread.currentThread().isInterrupted) return
 
+            val upstreamResult = getUpstreamDnsAddress(vpnService)
+            if (upstreamResult.network == null && !upstreamResult.hasPhysicalInternetNetwork) {
+                return
+            }
             var sock: DatagramSocket = DatagramSocket().also {
                 socket = it
                 vpnService.protect(it) // CRÍTICO: Evita bucle infinito de reentrada de red
                 it.soTimeout = TIMEOUT_MS
             }
-
-            val upstreamResult = getUpstreamDnsAddress(vpnService)
             val initialUpstream = upstreamResult.address
             var boundSuccessfully = false
 

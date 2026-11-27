@@ -118,8 +118,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         private const val MAX_TREE_DEPTH = 40
         private const val MAX_NODES_PER_SCAN = 2_500
 
-        /** Cada cuánto se puede re-armar la escalera de reintentos de WebView. */
-        private const val WEBVIEW_REARM_MS = 2_000L
+        /** Mínimo entre re-escaneos de WebView por CONTENT_CHANGED en el mismo paquete. */
+        private const val WEBVIEW_CONTENT_SCAN_MIN_MS = 1_200L
+
+        /** Mínimo entre escaneos del marcador ante ráfagas de CONTENT_CHANGED. */
+        private const val DIALER_SCAN_MIN_MS = 500L
 
         /**
          * Antirrebote del detector estructural de navegadores embebidos (B.60).
@@ -569,20 +572,53 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private var keyguardReceiverRegistered = false
     private var lastObservedKeyguardLocked: Boolean? = null
+    @Volatile private var cachedScreenInteractive = true
+    @Volatile private var scrollEventsEnabled = false
+
+    private fun setScrollEventsEnabled(enabled: Boolean) {
+        if (scrollEventsEnabled == enabled) return
+        scrollEventsEnabled = enabled
+        try {
+            val info = serviceInfo ?: return
+            info.eventTypes = if (enabled) {
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                    AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                    AccessibilityEvent.TYPE_VIEW_SELECTED or
+                    AccessibilityEvent.TYPE_VIEW_SCROLLED
+            } else {
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                    AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                    AccessibilityEvent.TYPE_VIEW_SELECTED
+            }
+            serviceInfo = info
+        } catch (e: Exception) {
+            if (VERBOSE) Log.w(TAG, "No se pudo actualizar eventTypes scroll=$enabled: ${e.message}")
+        }
+    }
+
     private val keyguardReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
             com.ejemplo.locksuite.util.Safe.guard("a11y.keyguardReceiver") {
                 UpdateFlowManager.invalidateKeyguardCache()
-                if (intent?.action == Intent.ACTION_USER_PRESENT) {
-                    lastObservedKeyguardLocked = false
-                    val ctx = applicationContext
-                    if (UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
-                        val pkg = UpdateFlowManager.currentPackage(ctx)
-                        if (!pkg.isNullOrBlank()) {
-                            mainHandler.post {
-                                com.ejemplo.locksuite.util.Safe.guard("a11y.userPresentTick") {
-                                    if (UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
-                                        scanAndAct(pkg)
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> {
+                        cachedScreenInteractive = false
+                    }
+                    Intent.ACTION_SCREEN_ON -> {
+                        cachedScreenInteractive = true
+                    }
+                    Intent.ACTION_USER_PRESENT -> {
+                        cachedScreenInteractive = true
+                        lastObservedKeyguardLocked = false
+                        val ctx = applicationContext
+                        if (UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
+                            val pkg = UpdateFlowManager.currentPackage(ctx)
+                            if (!pkg.isNullOrBlank()) {
+                                mainHandler.post {
+                                    com.ejemplo.locksuite.util.Safe.guard("a11y.userPresentTick") {
+                                        if (UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
+                                            scanAndAct(pkg)
+                                        }
                                     }
                                 }
                             }
@@ -601,13 +637,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             try { disableSelf() } catch (_: Exception) {}
             return
         }
-        // Configurar capacidades del servicio de accesibilidad
+        // Configurar capacidades del servicio de accesibilidad.
+        // TYPE_VIEW_SCROLLED solo se habilita dinámicamente mientras hay un portal cautivo
+        // abierto con cobertura de imágenes activa (evita cientos de eventos/min de scroll).
+        scrollEventsEnabled = false
         val info = serviceInfo ?: AccessibilityServiceInfo()
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                           AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                          AccessibilityEvent.TYPE_VIEW_SELECTED or
-                          // Necesario para actividad de scroll y seguimiento de imágenes en portales cautivos.
-                          AccessibilityEvent.TYPE_VIEW_SCROLLED
+                          AccessibilityEvent.TYPE_VIEW_SELECTED
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.flags = info.flags or
                      AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
@@ -615,6 +652,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                      AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
         info.notificationTimeout = 100
         serviceInfo = info
+
+        cachedScreenInteractive = try { powerManager.isInteractive } catch (_: Exception) { true }
 
         // IMPORTANTE: overlayManager se inicializa ANTES de publicar `instance`.
         // PackageReceiver hace `instance?.overlayManager`, y si `instance` quedaba
@@ -629,10 +668,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             try {
                 val filter = IntentFilter().apply {
                     addAction(Intent.ACTION_USER_PRESENT)
+                    addAction(Intent.ACTION_SCREEN_ON)
                     addAction(Intent.ACTION_SCREEN_OFF)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    registerReceiver(keyguardReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                    registerReceiver(keyguardReceiver, filter, Context.RECEIVER_EXPORTED)
                 } else {
                     registerReceiver(keyguardReceiver, filter)
                 }
@@ -855,7 +895,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         // Garantizar que no consuma batería si la pantalla está inactiva (apagada)
         // Esto va DESPUÉS del check de UPDATE_APP, que sí necesita funcionar con pantalla apagada
-        if (!powerManager.isInteractive) {
+        if (!cachedScreenInteractive) {
             return
         }
 
@@ -904,7 +944,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             } else if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
                 !UpdateFlowManager.isFinishingNoticeActive()
             ) {
-                val splitPlay = findWindowRootForPackages(setOf(PKG_PLAY_STORE))
+                val splitPlay = findWindowRootForPackages(
+                    setOf(PKG_PLAY_STORE),
+                    allowActiveFallback = false,
+                    requireMultiAppWindow = true
+                )
                 if (splitPlay != null) {
                     splitPlay.first.recycle()
                     Log.w(TAG, "🚫 Play Store abierta en ventana múltiple. Bloqueando y regresando a Home...")
@@ -1107,7 +1151,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         if (packageName.contains("dialer", ignoreCase = true) ||
             packageName.contains("phone", ignoreCase = true) ||
             packageName.contains("contact", ignoreCase = true)) {
-            handleDialerIntercept()
+            handleDialerIntercept(eventType)
         }
 
         // ── Tapado de imágenes en portales cautivos Wi-Fi (Opción B, B.126) ──
@@ -1275,10 +1319,24 @@ class LockSuiteAccessibilityService : AccessibilityService() {
      * `(root, isFocused)`. Recicla todos los `AccessibilityNodeInfo` obtenidos que no
      * se devuelven; quien llama DEBE reciclar `root` en un `try/finally`.
      */
-    private fun findWindowRootForPackages(pkgs: Set<String>): Pair<AccessibilityNodeInfo, Boolean>? {
+    private fun findWindowRootForPackages(
+        pkgs: Set<String>,
+        allowActiveFallback: Boolean = true,
+        requireMultiAppWindow: Boolean = false
+    ): Pair<AccessibilityNodeInfo, Boolean>? {
         if (pkgs.isEmpty()) return null
         try {
             val winList = windows
+            if (requireMultiAppWindow) {
+                var appWindows = 0
+                for (w in winList) {
+                    if (w.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
+                        appWindows++
+                        if (appWindows >= 2) break
+                    }
+                }
+                if (appWindows < 2) return null
+            }
             var unfocusedMatch: AccessibilityNodeInfo? = null
             for (w in winList) {
                 if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
@@ -1304,6 +1362,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         } catch (e: Exception) {
             if (VERBOSE) Log.w(TAG, "Error consultando windows: ${e.message}")
         }
+        if (!allowActiveFallback) return null
         val fallback = try { rootInActiveWindow } catch (_: Exception) { null } ?: return null
         val fPkg = fallback.packageName?.toString()
         return if (fPkg != null && fPkg in pkgs) {
@@ -1577,9 +1636,19 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private val webViewRetryRunnables = mutableListOf<Runnable>()
     private var lastRetryArmPkg: String? = null
-    private var lastRetryArmAt = 0L
+    private var lastWvScanPkg: String? = null
+    private var lastWvScanAt = 0L
 
     private fun checkAndBlockWebViewInTree(packageName: String, eventType: Int) {
+        val now = SystemClock.elapsedRealtime()
+        val windowChanged = eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        val pkgChanged = lastWvScanPkg != packageName
+        if (!windowChanged && !pkgChanged && now - lastWvScanAt < WEBVIEW_CONTENT_SCAN_MIN_MS) {
+            return
+        }
+        lastWvScanPkg = packageName
+        lastWvScanAt = now
+
         val targetPkgs = setOf(packageName) + WEBVIEW_PROVIDER_PACKAGES
         // Verificación inmediata sobre la ventana actual o en pantalla dividida.
         val match = findWindowRootForPackages(targetPkgs)
@@ -1599,17 +1668,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
 
         // La escalera de reintentos existe para atrapar WebViews que cargan tarde.
-        // Antes se cancelaba y se volvía a armar en CADA evento: mientras la pantalla
-        // tuviera actividad, se rearmaban tres recorridos completos del árbol una y
-        // otra vez. Ahora se arma cuando cambia la ventana, o como mucho una vez cada
-        // WEBVIEW_REARM_MS por paquete.
-        val now = SystemClock.elapsedRealtime()
-        val windowChanged = eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-        val staleArm = lastRetryArmPkg != packageName || now - lastRetryArmAt > WEBVIEW_REARM_MS
-        if (!windowChanged && !staleArm) return
+        // Solo se arma en cambio de ventana o cambio de paquete, no en ráfagas de CONTENT_CHANGED.
+        val retryPkgChanged = lastRetryArmPkg != packageName
+        if (!windowChanged && !retryPkgChanged) return
 
         lastRetryArmPkg = packageName
-        lastRetryArmAt = now
 
         // Cancelar reintentos previos acumulados para no sobrecargar la CPU con escaneos redundantes
         webViewRetryRunnables.forEach { mainHandler.removeCallbacks(it) }
@@ -1731,14 +1794,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         if (depth > 30) return false
         if (nodeBudget-- <= 0) return false
 
-        val className = node.className?.toString()?.lowercase() ?: ""
-        val nodePkg   = node.packageName?.toString()?.lowercase() ?: ""
+        val className = node.className?.toString()
+        val nodePkg   = node.packageName?.toString()
 
         val isWebView =
             EmbeddedBrowserDetector.isWebViewClassName(className) ||
-            nodePkg == "com.google.android.webview" ||
-            nodePkg == "com.android.webview"        ||
-            nodePkg == "com.android.chrome"
+            "com.google.android.webview".equals(nodePkg, ignoreCase = true) ||
+            "com.android.webview".equals(nodePkg, ignoreCase = true) ||
+            "com.android.chrome".equals(nodePkg, ignoreCase = true)
 
         if (isWebView) {
             if (VERBOSE) Log.i(TAG, "  🔍 WebView encontrado: class=$className pkg=$nodePkg depth=$depth")
@@ -2885,6 +2948,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 captiveLastActivityAt = captiveOpenedAt
                 captiveValidatedAt = 0L
                 captiveBounceInProgress = false
+                if (flags().captivePortalCoverImages) {
+                    setScrollEventsEnabled(true)
+                }
                 try {
                     val p = mdmPrefs
                     p.edit()
@@ -2918,6 +2984,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         captiveLastActivityAt = 0L
         captiveValidatedAt = 0L
         captiveBounceInProgress = false
+        setScrollEventsEnabled(false)
         mainHandler.removeCallbacks(captiveTickRunnable)
         if (::overlayManager.isInitialized && overlayManager.hasRegions("captive:")) {
             overlayManager.clearStaleRegions("captive:", emptySet())
@@ -3062,7 +3129,40 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     // ──────────────────────────────────────────────
     // Interceptor del marcador (códigos secretos)
     // ──────────────────────────────────────────────
-    private fun handleDialerIntercept() {
+    private var lastDialerScanAt = 0L
+    private val dialerTrailingScanRunnable = Runnable {
+        com.ejemplo.locksuite.util.Safe.guard("a11y.dialerTrailingScan") {
+            if (!cachedScreenInteractive) return@guard
+            val root = try { rootInActiveWindow } catch (_: Exception) { null } ?: return@guard
+            val pkg = try { root.packageName?.toString() ?: "" } finally { root.recycle() }
+            if (pkg.contains("dialer", ignoreCase = true) ||
+                pkg.contains("phone", ignoreCase = true) ||
+                pkg.contains("contact", ignoreCase = true)
+            ) {
+                lastDialerScanAt = SystemClock.elapsedRealtime()
+                handleDialerInterceptNow()
+            }
+        }
+    }
+
+    private fun handleDialerIntercept(eventType: Int) {
+        val now = SystemClock.elapsedRealtime()
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            now - lastDialerScanAt >= DIALER_SCAN_MIN_MS
+        ) {
+            mainHandler.removeCallbacks(dialerTrailingScanRunnable)
+            lastDialerScanAt = now
+            handleDialerInterceptNow()
+        } else {
+            mainHandler.removeCallbacks(dialerTrailingScanRunnable)
+            mainHandler.postDelayed(
+                dialerTrailingScanRunnable,
+                (DIALER_SCAN_MIN_MS - (now - lastDialerScanAt)).coerceAtLeast(1L)
+            )
+        }
+    }
+
+    private fun handleDialerInterceptNow() {
         val root = rootInActiveWindow ?: return
         // 27/9/2026 (batería): UN recorrido para los dos códigos y sin pasar cada texto a
         // minúscula. Antes eran dos recorridos completos por evento, y esto corre en cada
@@ -5450,6 +5550,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         captivePortalPkg = null
         captiveLastActivityAt = 0L
         captiveValidatedAt = 0L
+        setScrollEventsEnabled(false)
     }
 
     override fun onInterrupt() {
@@ -5469,6 +5570,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private fun handleUnbind(intent: Intent?): Boolean {
         com.ejemplo.locksuite.diag.DiagLog.w("a11y", "Servicio de accesibilidad desvinculado (onUnbind)")
+        setScrollEventsEnabled(false)
         if (instance === this) instance = null
         val appCtx = applicationContext
         try {
@@ -5546,6 +5648,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         mainHandler.removeCallbacks(legalDeferredRunnable)
         mainHandler.removeCallbacks(gAccDeferredRunnable)
         mainHandler.removeCallbacks(contactPhotoDeferredRunnable)
+        mainHandler.removeCallbacks(dialerTrailingScanRunnable)
+        scrollEventsEnabled = false
         webViewRetryRunnables.forEach { mainHandler.removeCallbacks(it) }
         webViewRetryRunnables.clear()
         releaseUpdateWakeLock()

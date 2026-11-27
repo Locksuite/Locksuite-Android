@@ -54,7 +54,7 @@ import java.util.Locale
  */
 internal object DiagCollector {
 
-    private const val SWEEP_GAP_MS = 30 * 60_000L
+    private const val SWEEP_GAP_MS = 2 * 60 * 60_000L
     private const val LOGCAT_TIMEOUT_MS = 8_000L
     private const val MAX_PACKAGES = 6
 
@@ -208,7 +208,7 @@ internal object DiagCollector {
     fun readLogcat(level: Char, maxBytes: Int): List<String>? {
         val filtro = "*:$level"
         var r = runLogcat(arrayOf("logcat", "-d", "-v", "threadtime", "-b", "main,crash", filtro), maxBytes)
-        if (r == null || r.isEmpty()) {
+        if (r == null) {
             r = runLogcat(arrayOf("logcat", "-d", "-v", "threadtime", filtro), maxBytes)
         }
         return r

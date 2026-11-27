@@ -273,4 +273,50 @@ class DomainBlockingTest {
         assertTrue(WebViewPolicy.isDomainAllowedForGenericApp("com.cabify.passenger", "api.cabify.com"))
         org.junit.Assert.assertFalse(WebViewPolicy.isDomainAllowedForGenericApp("com.cabify.passenger", "evilcabifyscam.ru"))
     }
+
+    @Test
+    fun irloxNonKosherDomains_areGloballyBlockedForAllDevices_andCatalogEntriesExist() {
+        val irloxBlocked = listOf(
+            "parodebondis.com.ar",
+            "torrezm.dev",
+            "itunes.apple.com",
+            "doubleclick.net",
+            "googleads.g.doubleclick.net",
+            "googlesyndication.com",
+            "pagead2.googlesyndication.com",
+            "googleadservices.com",
+            "imasdk.googleapis.com",
+            "fundingchoicesmessages.google.com",
+            "mediation.goog",
+            "admob-gmats.uc.r.appspot.com",
+            "unityads.unity3d.com",
+            "gateway.unityads.unity3d.com",
+            "unity3dusercontent.com"
+        )
+        val rules = WhitelistManager.buildRules(
+            decisions = emptyMap(),
+            custom = emptyMap(),
+            includeSharedCdn = true
+        )
+        val trie = DomainRuleTrie.build(rules)
+        for (domain in irloxBlocked) {
+            assertTrue("$domain debe estar bloqueado globalmente en WebViewPolicy", WebViewPolicy.isGloballyBlacklisted(domain))
+            assertEquals("$domain debe resolverse como FORCE_BLOCK en Trie", RuleType.FORCE_BLOCK, trie.resolve(domain))
+            assertEquals("sub.$domain debe resolverse como FORCE_BLOCK en Trie", RuleType.FORCE_BLOCK, trie.resolve("sub.$domain"))
+        }
+
+        org.junit.Assert.assertFalse("api.irlox.com no debe bloquearse globalmente", WebViewPolicy.isGloballyBlacklisted("api.irlox.com"))
+        org.junit.Assert.assertFalse("osmand.net no debe bloquearse globalmente", WebViewPolicy.isGloballyBlacklisted("osmand.net"))
+
+        val osmand = WhitelistCatalog.entryFor("net.osmand")
+        val irlox = WhitelistCatalog.entryFor("com.irlox")
+        org.junit.Assert.assertNotNull("Entrada OsmAnd debe existir", osmand)
+        org.junit.Assert.assertNotNull("Entrada Irlox debe existir", irlox)
+        assertTrue(osmand!!.allow.contains("osmand.net"))
+        assertTrue(irlox!!.allow.contains("api.irlox.com"))
+
+        val irloxCore = WebViewPolicy.getCoreDomainsFor("com.irlox")
+        org.junit.Assert.assertNotNull("CORE_DOMAINS debe incluir com.irlox", irloxCore)
+        assertTrue(irloxCore!!.contains("api.irlox.com"))
+    }
 }

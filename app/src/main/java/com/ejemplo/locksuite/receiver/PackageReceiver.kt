@@ -73,6 +73,8 @@ class PackageReceiver : BroadcastReceiver() {
                     lastEventAt = now
                 }
                 AppController.invalidateEligibleCache()
+                com.ejemplo.locksuite.service.KosherVpnService.invalidateInstalledAppsCache()
+                FirebaseDeviceSync.invalidateAppsSyncCache()
             }
         
             val prefs = PrefsHelper.getMdmPrefs(context)

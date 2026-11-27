@@ -3437,8 +3437,15 @@ class PolicyManager(private val context: Context) {
             val shouldSuspendPlayStore = prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
             if (!playStoreHidden || !shouldSuspendPlayStore) {
                 try {
-                    appController.suspendApp("com.android.vending", shouldSuspendPlayStore)
-                    android.util.Log.i("PolicyManager", "reapplyAllRestrictions: Google Play Store estado de suspensión aplicado ($shouldSuspendPlayStore)")
+                    val yaSuspendida = try {
+                        appController.isAppSuspended("com.android.vending")
+                    } catch (_: Exception) {
+                        !shouldSuspendPlayStore
+                    }
+                    if (yaSuspendida != shouldSuspendPlayStore) {
+                        appController.suspendApp("com.android.vending", shouldSuspendPlayStore)
+                        android.util.Log.i("PolicyManager", "reapplyAllRestrictions: Google Play Store estado de suspensión aplicado ($shouldSuspendPlayStore)")
+                    }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -3577,7 +3584,14 @@ class PolicyManager(private val context: Context) {
                 // solo si NO quedó oculta.
                 val debeOcultarse = prefs.getBoolean("hide_$pkg", false)
                 if (debeOcultarse) {
-                    appController.hideApp(pkg, true)
+                    val yaOculta = try {
+                        dpm.isApplicationHidden(adminComponent, pkg)
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (!yaOculta) {
+                        appController.hideApp(pkg, true)
+                    }
                     continue
                 }
 

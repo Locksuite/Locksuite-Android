@@ -170,12 +170,20 @@ object PlayStoreManager {
         val global = if (globalJson != null) (parseApps(globalJson, extra = false) ?: return false) else null
         val extras = if (extrasJson != null) (parseApps(extrasJson, extra = true) ?: return false) else null
         if (global == null && extras == null) return false
-        val edit = prefs(ctx).edit()
-        if (global != null) edit.putString(KEY_GLOBAL, serialize(global))
-        if (extras != null) edit.putString(KEY_EXTRAS, serialize(extras))
+        val globalJsonNorm = global?.let { serialize(it) }
+        val extrasJsonNorm = extras?.let { serialize(it) }
+        val p = prefs(ctx)
+        val globalChanged = globalJsonNorm != null && globalJsonNorm != p.getString(KEY_GLOBAL, null)
+        val extrasChanged = extrasJsonNorm != null && extrasJsonNorm != p.getString(KEY_EXTRAS, null)
+        if (!globalChanged && !extrasChanged) {
+            return false
+        }
+        val edit = p.edit()
+        if (globalChanged && globalJsonNorm != null) edit.putString(KEY_GLOBAL, globalJsonNorm)
+        if (extrasChanged && extrasJsonNorm != null) edit.putString(KEY_EXTRAS, extrasJsonNorm)
         edit.putLong(KEY_UPDATED_AT, System.currentTimeMillis()).apply()
-        if (global != null) globalCache = null
-        if (extras != null) extrasCache = null
+        if (globalChanged) globalCache = null
+        if (extrasChanged) extrasCache = null
         Log.i(TAG, "Tienda Play: catálogo global=${global?.size ?: "sin cambios"}, extras=${extras?.size ?: "sin cambios"}")
         reconcile(ctx)
         notifyChanged(ctx)
