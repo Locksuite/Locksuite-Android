@@ -1365,13 +1365,22 @@ exports.auroraStore = onRequest(
         let upToDate = 0;
         let failed = 0;
         for (const pkg of batch) {
-          const r = await auroraSync.syncSinglePackage({
-            packageName: pkg,
-            sessions,
-            db,
-            bucket,
-            force,
-          });
+          let r;
+          try {
+            r = await auroraSync.syncSinglePackage({
+              packageName: pkg,
+              sessions,
+              db,
+              bucket,
+              force,
+            });
+          } catch (pkgErr) {
+            r = {
+              packageName: pkg,
+              ok: false,
+              error: pkgErr && pkgErr.message ? pkgErr.message : String(pkgErr),
+            };
+          }
           results.push(r);
           if (!r.ok) failed++;
           else if (r.upToDate) upToDate++;

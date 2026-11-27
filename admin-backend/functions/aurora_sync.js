@@ -185,7 +185,9 @@ async function uploadToBucket(bucket, objectPath, localPath, ext) {
   };
   await new Promise((resolve, reject) => {
     const rs = fs.createReadStream(localPath);
-    const ws = file.createWriteStream({ resumable: false, public: true, metadata });
+    // El bucket locksuite-nueva-store-apks tiene Uniform Bucket-Level Access (ya es público por IAM):
+    // no pasar `public: true` ni `predefinedAcl` o GCS rechaza con HTTP 400.
+    const ws = file.createWriteStream({ resumable: true, metadata });
     rs.on("error", reject);
     ws.on("error", reject);
     ws.on("finish", resolve);

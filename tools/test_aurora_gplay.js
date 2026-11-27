@@ -278,7 +278,8 @@ test("aurora_sync deduplicates identical universal APK, splits multi-ABI APKs, s
     file(objectPath) {
       return {
         name: objectPath,
-        createWriteStream() {
+        createWriteStream(opts = {}) {
+          assert.ok(!opts.public && !opts.predefinedAcl, "No legacy ACL under Uniform Bucket-Level Access");
           const chunks = [];
           return new Writable({
             write(chunk, _enc, cb) { chunks.push(chunk); cb(); },
