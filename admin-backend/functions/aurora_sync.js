@@ -111,11 +111,12 @@ async function fileSha256(filePath) {
 
 async function buildVariantArtifact(client, pkg, det, workDir, abiKey) {
   const delivery = await client.getDelivery(pkg, det.versionCode);
+  const maxMb = Math.round(MAX_APK_DOWNLOAD_BYTES / (1024 * 1024));
   const totalEstimated =
     (delivery.downloadSize || 0) +
     delivery.splits.reduce((acc, s) => acc + (s.downloadSize || 0), 0);
   if (totalEstimated > MAX_APK_DOWNLOAD_BYTES) {
-    throw new Error(`El tamaño total supera el máximo permitido de 240 MB (${Math.round(totalEstimated / (1024 * 1024))} MB).`);
+    throw new Error(`El tamaño total supera el máximo permitido de ${maxMb} MB (${Math.round(totalEstimated / (1024 * 1024))} MB).`);
   }
 
   const subDir = path.join(workDir, abiKey);
@@ -158,8 +159,10 @@ async function buildVariantArtifact(client, pkg, det, workDir, abiKey) {
 
   const apksPath = path.join(subDir, `${abiKey}.apks`);
   const packed = await writeStoreZipToFile(entries, apksPath);
+  // Liberar de inmediato los splits crudos en /tmp (en Cloud Run viven en RAM).
+  await Promise.all(entries.map((e) => fs.promises.unlink(e.filePath).catch(() => {})));
   if (packed.sizeBytes > MAX_APK_DOWNLOAD_BYTES) {
-    throw new Error(`El paquete .apks generado supera 240 MB (${Math.round(packed.sizeBytes / (1024 * 1024))} MB).`);
+    throw new Error(`El paquete .apks generado supera ${maxMb} MB (${Math.round(packed.sizeBytes / (1024 * 1024))} MB).`);
   }
 
   return {

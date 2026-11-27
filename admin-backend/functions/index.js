@@ -1171,7 +1171,7 @@ async function testAuroraLogin(secret) {
 }
 
 exports.auroraStore = onRequest(
-  { ...FUNCTION_OPTIONS, timeoutSeconds: 300, memory: "1GiB", maxInstances: 4 },
+  { ...FUNCTION_OPTIONS, timeoutSeconds: 300, memory: "2GiB", maxInstances: 4 },
   async (req, res) => {
     applyAdminCors(req, res);
     if (req.method === "OPTIONS") {
@@ -1427,7 +1427,7 @@ exports.auroraStore = onRequest(
 );
 
 exports.auroraSyncCatalogScheduled = onSchedule(
-  { region: "us-central1", schedule: "every 12 hours", timeoutSeconds: 540, memory: "1GiB" },
+  { region: "us-central1", schedule: "every 12 hours", timeoutSeconds: 540, memory: "2GiB" },
   async () => {
     const db = admin.database();
     const bucket = admin.storage().bucket(STORE_APKS_BUCKET);

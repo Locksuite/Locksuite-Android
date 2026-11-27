@@ -21,7 +21,7 @@ import java.net.URL
 object SelfUpdater {
     private const val VERSION_URL = "https://locksuite-nueva.web.app/version.json"
     private const val FALLBACK_VERSION_URL = "https://locksuite-nueva.firebaseapp.com/version.json"
-    private const val MAX_APK_DOWNLOAD_BYTES = 250L * 1024L * 1024L
+    private const val MAX_APK_DOWNLOAD_BYTES = 460L * 1024L * 1024L
     private const val MAX_MANIFEST_BYTES = 1024 * 1024
     private val SAFE_PACKAGE_REGEX = Regex("^[a-zA-Z0-9_.]+$")
 
@@ -88,7 +88,7 @@ object SelfUpdater {
                         apkConnection.contentLength.toLong()
                     }
                     if (totalBytes > MAX_APK_DOWNLOAD_BYTES) {
-                        return@withContext "El archivo de actualización excede el límite máximo permitido (250 MB)."
+                        return@withContext "El archivo de actualización excede el límite máximo permitido (460 MB)."
                     }
                     var bytesDownloaded = 0L
                     apkConnection.inputStream.use { input ->
@@ -99,7 +99,7 @@ object SelfUpdater {
                             while (input.read(buffer).also { bytesRead = it } != -1) {
                                 bytesDownloaded += bytesRead
                                 if (bytesDownloaded > MAX_APK_DOWNLOAD_BYTES) {
-                                    throw IOException("El archivo de actualización excede el límite máximo permitido (250 MB)")
+                                    throw IOException("El archivo de actualización excede el límite máximo permitido (460 MB)")
                                 }
                                 output.write(buffer, 0, bytesRead)
                                 if (totalBytes > 0) {
@@ -287,7 +287,7 @@ object SelfUpdater {
                         apkConnection.contentLength.toLong()
                     }
                     if (totalBytes > MAX_APK_DOWNLOAD_BYTES) {
-                        return@withContext "El paquete excede el tamaño máximo permitido (250 MB)."
+                        return@withContext "El paquete excede el tamaño máximo permitido (460 MB)."
                     }
                     var bytesDownloaded = 0L
                     apkConnection.inputStream.use { input ->
@@ -301,7 +301,7 @@ object SelfUpdater {
                                 }
                                 bytesDownloaded += bytesRead
                                 if (bytesDownloaded > MAX_APK_DOWNLOAD_BYTES) {
-                                    throw IOException("El paquete excede el tamaño máximo permitido (250 MB)")
+                                    throw IOException("El paquete excede el tamaño máximo permitido (460 MB)")
                                 }
                                 output.write(buffer, 0, bytesRead)
                                 if (totalBytes > 0) {
