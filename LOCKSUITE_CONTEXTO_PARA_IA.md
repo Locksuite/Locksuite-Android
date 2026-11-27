@@ -3248,23 +3248,37 @@ Resumen técnico completo del diagnóstico y correcciones en [`AUDITORIA_INTEGRA
   1. En un celular real con el panel web (`celular.html`) y el panel local de la app (`DashboardActivity`), verificar: (a) con modo lista blanca apagado: pestaña oculta y navegación en modo lista negra normal; (b) al activar desde Inicio/Resumen: aparición de Lista blanca, precarga de 25 apps / 16 permitidos / 242 prohibidos, edición independiente entre dos dispositivos, importación/exportación `.txt`/`.docx`, respaldos en nube y local (`filesDir/whitelist_backups/`), `Sin web` y auditoría DNS; (c) verificar visualmente en `DashboardActivity` la ausencia de APK permitida / Actualizar LockSuite en Políticas y de los 7 switches en Servicios.
   2. Correr `tools/rules_tests/test_rules.mjs` con el emulador de Firebase RTDB y `tools/panel_render/run.sh` en entorno con Playwright instalado (en esta PC no estaban instalados `node_modules` de `rules_tests`/`panel_render` ni Playwright).
 
+### B.136 — Protección de des-ocultamiento de apps contra auto-desinstalación y re-bloqueo en `PackageReceiver` (27/11/2026) — implementado y probado en PC, pendiente de confirmación en equipo real
+
+- **Causa raíz verificada en dispositivo real (`19325a1143f44ba4`, DuoQin F21 Pro, Android 11, `v0.7.2`):**
+  - Al ejecutar `UNHIDE_APP` (`dpm.setApplicationHidden(admin, pkg, false)`) con `installAppsBlocked = true`, Android emite `Intent.ACTION_PACKAGE_ADDED` con `EXTRA_REPLACING = false`, idéntico al de una instalación nueva.
+  - `PackageReceiver.onReceive()` interpretaba ese broadcast como instalación no autorizada (`!isAllowed`) y llamaba `appController.uninstallApp(packageName)`, desinstalando la app silenciosamente (ocurrió con `com.kiloo.subwaysurf` el 27/11 tras `BLOCK_APP_INTERNET` + `UNHIDE_APP`).
+  - Además existían cuatro problemas acoplados: (1) otros 9 sitios directos de `dpm.setApplicationHidden(..., false)` sin protección (`PolicyManager`, `AndroidAutoStubs`, `AndroidAutoStubInstaller`, `UpdateFlowManager`), (2) re-ocultamiento/re-suspensión inmediata en `PackageReceiver` (si `hideSuspendedApps` o `blockPopularNonKosher` estaban activos) y falso reclamo en `PlayStoreManager`/`AuroraStoreManager`, (3) carrera en `AppController.hideApp(..., false)` al escribir `hide_<pkg>` con `.apply()` después de llamar a DPM y retornar `false` en no-op cuando ya estaba en ese estado, y (4) falta de re-sincronización de `syncMeteredDataDisabledPackages()` al volver a hacerse visible una app con bloqueo de internet por app.
+- **Solución implementada (`AppUnhideGuard.kt`, `AppController.kt`, `PackageReceiver.kt`, `PolicyManager.kt`, `AndroidAutoStubs.kt`, `AndroidAutoStubInstaller.kt`, `UpdateFlowManager.kt`, `AppUnhideGuardTest.kt`):**
+  - **`AppUnhideGuard`:** registra ventana monotónica de `60 s` (`elapsedRealtime` + `BOOT_COUNT`, en memoria + `SharedPreferences` síncrono `.commit()`) antes de cada des-ocultamiento (`markUnhiding` / `unhideSafely`). Limpia la marca al ocultar (`hideApp(true)`), al desinstalar (`ACTION_PACKAGE_REMOVED` con `!isReplacing`) o si `dpm.setApplicationHidden(..., false)` falla y el paquete sigue oculto.
+  - **`AppController.hideApp`:** orden síncrono (marca `AppUnhideGuard` y persiste `hide_<pkg> = false` con `.commit()` antes de DPM, con rollback si DPM falla y la app sigue oculta/inexistente), manejo idempotente si ya estaba visible/oculta, e invalidación inmediata de `KosherVpnService.invalidateInstalledAppsCache()` + `syncMeteredDataDisabledPackages()` al des-ocultar si la app tiene bloqueo de internet.
+  - **`PackageReceiver`:** detecta `isIntentionalUnhide` (`!isReplacing && AppUnhideGuard.isRecentlyUnhidden`) y omite la auto-desinstalación, el reclamo de Tienda y el re-bloqueo inmediato; sincroniza `syncMeteredDataDisabledPackages()` y `BootReceiver.ensureVpnRunning()` tanto tras instalación/actualización como tras des-ocultamiento.
+  - **Cobertura total:** los 9 sitios directos de `dpm.setApplicationHidden(..., false)` en `PolicyManager`, `AndroidAutoStubs`, `AndroidAutoStubInstaller` y `UpdateFlowManager` migrados a `AppUnhideGuard.unhideSafely()`, y `setPlayStoreAppBlocked(false)` escribe `hide_`/`suspend_` antes de llamar `hideApp(false)`.
+- **Qué falta confirmar en equipo real antes de tachar B.136:**
+  1. Con `installAppsBlocked = true` y `hideSuspendedApps = true`, ocultar y volver a des-ocultar una app de usuario (desde panel web `UNHIDE_APP` y desde `DashboardActivity`), verificando que no desaparece ni se re-oculta.
+  2. Con `BLOCK_APP_INTERNET` aplicado sobre una app oculta, des-ocultarla o reinstalarla y verificar que recupera inmediatamente el bloqueo DNS y de datos móviles medidos.
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**27/11 — Antigravity: modo lista blanca por dispositivo (estilo Lockfox, oculto por defecto) y limpieza de Políticas/Servicios (`B.135`).**
+**27/11 — Antigravity: diagnóstico en equipo real `19325a1143f44ba4` y fix universal de des-ocultamiento de apps (`B.136`).**
 
 - **Qué se hizo:**
-  - **Lista blanca por dispositivo y oculta por defecto:** se agregó `app/src/main/assets/default_whitelist_catalog.txt` + `admin-backend/public/default_whitelist_catalog.js` (25 apps, 16 permitidos globales, 242 prohibidos globales). En Android (`DomainSafety.kt`, `WhitelistCatalogIo.kt`, `WhitelistBackupStore.kt`, `WhitelistManager.kt`, `FirebaseDeviceSync.kt`, `CommandProcessor.kt`, `WhitelistTabContent.kt`, `DashboardActivity.kt`) y en Web (`dominios_catalogo_io.js`, `dominios_clasificar.js`, `whitelist_device_ui.js`, `celular.html`, `celular.js`, `panel2.css`, `index.html`, `app.js`, `dominios.html`) se implementó el modo lista blanca independiente por dispositivo (`deviceWhitelists/<id>` y `deviceWhitelistBackups/<id>`), oculto por defecto y activable solo mediante interruptor en **Inicio / Resumen**; se removieron las pestañas globales `#main-tab-whitelist`, `#main-tab-dominios` y `#whitelist-container` de `index.html` (reubicando Alta por QR y Detector IAB).
-  - **Limpieza en panel local Android (`DashboardActivity.kt`):** quitadas las tarjetas «Instalar / Actualizar APK Permitida» y «Actualizar LockSuite» de Políticas (conservando actualización externa en `LoginActivity`), y removidos los 7 interruptores duplicados de la pestaña Servicios.
-  - **Reglas, herramientas y tests:** actualizados `database.rules.json`, `tools/rules_tests/test_rules.mjs`, `tools/gen_default_whitelist_js.py`, `tools/check_whitelist_sync.py`, `tools/gen_policies_js.py` (`policies.js`), `tools/check_panel_commands.py`, `tools/panel_render/{fake-firebase.js,test_ficha.js,test_panel.js}`, `WhitelistPerDeviceTest.kt` y `tools/test_dominios_io.js`.
+  - **Diagnóstico forense en RTDB (`devices/19325a1143f44ba4` + `deviceDiag/19325a1143f44ba4`):** confirmado por `commandAcks` y `logcat` que al desocultar `com.kiloo.subwaysurf` (`UNHIDE_APP`) con `installAppsBlocked = true`, Android emitió `ACTION_PACKAGE_ADDED` y `PackageReceiver` la desinstaló por interpretarla como instalación no autorizada.
+  - **Fix universal (`B.136`):** creado `AppUnhideGuard.kt` (ventana de `60 s` por `elapsedRealtime` + `BOOT_COUNT`) y `AppUnhideGuardTest.kt`; actualizados `AppController.kt` (orden síncrono con rollback, idempotencia y sync de datos medidos), `PackageReceiver.kt` (saltea auto-desinstalación, reclamo de tienda y re-bloqueo cuando `isIntentionalUnhide` es `true`, limpia marca en `ACTION_PACKAGE_REMOVED` y sincroniza red/datos medidos), y los 9 llamadores directos de `dpm.setApplicationHidden(..., false)` en `PolicyManager.kt`, `AndroidAutoStubs.kt`, `AndroidAutoStubInstaller.kt` y `UpdateFlowManager.kt`.
 - **Verificado en PC antes de desplegar:**
-  - `.\gradlew.bat testDebugUnitTest --no-daemon`: `BUILD SUCCESSFUL` (verde, incluyendo `WhitelistPerDeviceTest` y `DomainBlockingTest`).
-  - 9/9 scripts Python de sincronía en verde (`gen_default_whitelist_js.py --check`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`, `check_whitelist_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_store_sync.py`, `check_diag_sync.py`).
-  - `node --check` sobre los 7 JS del panel en verde y `node tools/test_dominios_io.js` en verde.
-  - *Limitación de entorno local:* `tools/rules_tests/test_rules.mjs` y `tools/panel_render/{test_ficha,test_panel}.js` quedaron actualizados sin ejecutarse en esta PC por falta de `node_modules`/Playwright/emulador instalados; falta confirmación en equipo real (`B.135`).
+  - `.\gradlew.bat testDebugUnitTest --no-daemon`: `BUILD SUCCESSFUL` (incluyendo `AppUnhideGuardTest`).
+  - 6/6 scripts Python de sincronía en verde (`check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `check_store_sync.py`, `check_diag_sync.py`).
+  - Falta confirmación en equipo real (`B.136`).
+
 
 
 

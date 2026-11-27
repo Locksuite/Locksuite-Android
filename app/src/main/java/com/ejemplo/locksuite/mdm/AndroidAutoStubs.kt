@@ -210,7 +210,7 @@ object AndroidAutoStubs {
         for (pkg in PACKAGES) {
             if (!isStub(context, pkg)) continue
             try {
-                if (dpm.isApplicationHidden(admin, pkg) && dpm.setApplicationHidden(admin, pkg, false)) {
+                if (dpm.isApplicationHidden(admin, pkg) && AppUnhideGuard.unhideSafely(context, dpm, admin, pkg)) {
                     corregidos++
                 }
             } catch (e: Exception) {

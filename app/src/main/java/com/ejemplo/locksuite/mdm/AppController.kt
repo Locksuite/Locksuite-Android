@@ -265,6 +265,13 @@ class AppController(private val context: Context) {
         }
     }
 
+    private fun isInstalledAndVisible(packageName: String): Boolean = try {
+        pm.getApplicationInfo(packageName, 0)
+        !dpm.isApplicationHidden(adminComponent, packageName)
+    } catch (_: Exception) {
+        false
+    }
+
     fun hideApp(packageName: String, hide: Boolean): Boolean {
         // Ver la nota de PolicyManager.setRestriction: mientras LockSuite está
         // suspendido se registra la intención sin tocar el sistema.
@@ -289,17 +296,50 @@ class AppController(private val context: Context) {
             // Si se solicita ocultarla (hide = true), se rechaza por seguridad del SO -> retornar false.
             return !hide
         }
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val prevHidePref = prefs.getBoolean("hide_$packageName", false)
         return try {
-            val applied = dpm.setApplicationHidden(adminComponent, packageName, hide)
-            if (!applied) {
-                android.util.Log.w("AppController", "Android no aplico ocultamiento para $packageName")
-                return false
-            }
-            PrefsHelper.getMdmPrefs(context).edit().putBoolean("hide_$packageName", hide).apply()
-            
-            // Si des-ocultamos la app y estaba marcada como suspendida, aplicamos la suspensión física en este momento
-            if (!hide) {
-                val shouldSuspend = PrefsHelper.getMdmPrefs(context).getBoolean("suspend_$packageName", false)
+            if (hide) {
+                AppUnhideGuard.clear(context, packageName)
+                val alreadyHidden = try {
+                    dpm.isApplicationHidden(adminComponent, packageName)
+                } catch (_: Exception) {
+                    false
+                }
+                if (alreadyHidden) {
+                    prefs.edit().putBoolean("hide_$packageName", true).commit()
+                    return true
+                }
+                val applied = dpm.setApplicationHidden(adminComponent, packageName, true)
+                if (!applied) {
+                    val hiddenNow = try {
+                        dpm.isApplicationHidden(adminComponent, packageName)
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (!hiddenNow) {
+                        android.util.Log.w("AppController", "Android no aplico ocultamiento para $packageName")
+                        return false
+                    }
+                }
+                prefs.edit().putBoolean("hide_$packageName", true).commit()
+                true
+            } else {
+                // Marcar ANTES de llamar a DPM: Android dispara ACTION_PACKAGE_ADDED de forma
+                // inmediata al des-ocultar y PackageReceiver no debe desinstalar ni re-ocultar.
+                AppUnhideGuard.markUnhiding(context, packageName)
+                prefs.edit().putBoolean("hide_$packageName", false).commit()
+
+                val applied = dpm.setApplicationHidden(adminComponent, packageName, false)
+                if (!applied && !isInstalledAndVisible(packageName)) {
+                    prefs.edit().putBoolean("hide_$packageName", prevHidePref).commit()
+                    AppUnhideGuard.clear(context, packageName)
+                    android.util.Log.w("AppController", "Android no aplico des-ocultamiento para $packageName")
+                    return false
+                }
+
+                // Si des-ocultamos la app y estaba marcada como suspendida, aplicamos la suspensión física en este momento
+                val shouldSuspend = prefs.getBoolean("suspend_$packageName", false)
                 if (shouldSuspend) {
                     try {
                         dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), true)
@@ -307,9 +347,23 @@ class AppController(private val context: Context) {
                         e.printStackTrace()
                     }
                 }
+
+                // Al volver a ser visible, actualizar caché VPN y datos medidos si tenía bloqueo de internet
+                try {
+                    com.ejemplo.locksuite.service.KosherVpnService.invalidateInstalledAppsCache()
+                    val pmgr = PolicyManager(context)
+                    if (pmgr.isPerAppInternetBlocked(packageName)) {
+                        pmgr.syncMeteredDataDisabledPackages()
+                    }
+                } catch (_: Exception) {
+                }
+                true
             }
-            true
         } catch (e: Exception) {
+            if (!hide) {
+                prefs.edit().putBoolean("hide_$packageName", prevHidePref).commit()
+                AppUnhideGuard.clear(context, packageName)
+            }
             android.util.Log.e("AppController", "No se pudo cambiar ocultamiento de $packageName", e)
             false
         }

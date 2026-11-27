@@ -308,7 +308,7 @@ object AndroidAutoStubInstaller {
             val aa = AndroidAutoStubs.PKG_ANDROID_AUTO
             if (!prefs.getBoolean("hide_$aa", false)) {
                 try {
-                    if (dpm.isApplicationHidden(admin, aa)) dpm.setApplicationHidden(admin, aa, false)
+                    if (dpm.isApplicationHidden(admin, aa)) AppUnhideGuard.unhideSafely(ctx, dpm, admin, aa)
                 } catch (_: Exception) {}
             }
             if (!prefs.getBoolean("suspend_$aa", false)) {

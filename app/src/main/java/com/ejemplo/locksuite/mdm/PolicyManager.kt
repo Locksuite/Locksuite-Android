@@ -411,12 +411,12 @@ class PolicyManager(private val context: Context) {
                 isPlayStoreAppBlocked()
             }
         } else {
-            val unhid = appController.hideApp(AppController.PKG_PLAY_STORE, false)
-            val unsuspended = appController.suspendApp(AppController.PKG_PLAY_STORE, false)
             prefs.edit()
                 .putBoolean("hide_${AppController.PKG_PLAY_STORE}", false)
                 .putBoolean("suspend_${AppController.PKG_PLAY_STORE}", false)
                 .commit()
+            val unhid = appController.hideApp(AppController.PKG_PLAY_STORE, false)
+            val unsuspended = appController.suspendApp(AppController.PKG_PLAY_STORE, false)
             unhid || unsuspended || !isPlayStoreAppBlocked()
         }
     }
@@ -482,7 +482,12 @@ class PolicyManager(private val context: Context) {
             val shouldHidePlayStore = prefs.getBoolean("hide_com.android.vending", false)
             val shouldSuspendPlayStore = prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
             
-            dpm.setApplicationHidden(adminComponent, "com.android.vending", shouldHidePlayStore)
+            if (shouldHidePlayStore) {
+                AppUnhideGuard.clear(context, "com.android.vending")
+                dpm.setApplicationHidden(adminComponent, "com.android.vending", true)
+            } else {
+                AppUnhideGuard.unhideSafely(context, dpm, adminComponent, "com.android.vending")
+            }
             if (!shouldHidePlayStore) {
                 dpm.setPackagesSuspended(adminComponent, arrayOf("com.android.vending"), shouldSuspendPlayStore)
             }
@@ -508,7 +513,7 @@ class PolicyManager(private val context: Context) {
             android.util.Log.w("PolicyManager", "No se pudo levantar DISALLOW_INSTALL_UNKNOWN_SOURCES: ${e.message}")
         }
         try {
-            dpm.setApplicationHidden(adminComponent, AppController.PKG_PLAY_STORE, false)
+            AppUnhideGuard.unhideSafely(context, dpm, adminComponent, AppController.PKG_PLAY_STORE)
         } catch (e: Exception) {
             android.util.Log.w("PolicyManager", "No se pudo desocultar Play Store: ${e.message}")
         }
@@ -3031,7 +3036,7 @@ class PolicyManager(private val context: Context) {
             // Des-ocultar si quedó oculta
             try {
                 if (dpm.isApplicationHidden(adminComponent, pkg)) {
-                    dpm.setApplicationHidden(adminComponent, pkg, false)
+                    AppUnhideGuard.unhideSafely(context, dpm, adminComponent, pkg)
                 }
             } catch (e: Exception) { }
             prefs.edit().putBoolean("hide_$pkg", false).apply()
@@ -3966,7 +3971,7 @@ class PolicyManager(private val context: Context) {
             packages.forEach { pkg ->
                 try {
                     if (dpm.isApplicationHidden(adminComponent, pkg)) {
-                        dpm.setApplicationHidden(adminComponent, pkg, false)
+                        AppUnhideGuard.unhideSafely(context, dpm, adminComponent, pkg)
                     }
                 } catch (e: Exception) {
                     // Paquetes del sistema que no admiten el cambio: se ignoran.
@@ -4143,7 +4148,7 @@ class PolicyManager(private val context: Context) {
             packages.forEach { pkg ->
                 try {
                     if (dpm.isApplicationHidden(adminComponent, pkg)) {
-                        dpm.setApplicationHidden(adminComponent, pkg, false)
+                        AppUnhideGuard.unhideSafely(context, dpm, adminComponent, pkg)
                     }
                 } catch (e: Exception) {
                     // Paquetes del sistema que no admiten el cambio: se ignoran.

@@ -132,6 +132,19 @@ class PackageReceiver : BroadcastReceiver() {
             val packageName = intent.data?.schemeSpecificPart ?: return
             val isReplacing = intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
 
+            if (action == Intent.ACTION_PACKAGE_REMOVED && !isReplacing) {
+                com.ejemplo.locksuite.mdm.AppUnhideGuard.clear(context, packageName)
+            }
+
+            val isIntentionalUnhide = action == Intent.ACTION_PACKAGE_ADDED &&
+                com.ejemplo.locksuite.mdm.AppUnhideGuard.isIntentionalUnhideBroadcast(
+                    isReplacing = isReplacing,
+                    recentlyUnhidden = com.ejemplo.locksuite.mdm.AppUnhideGuard.isRecentlyUnhidden(context, packageName)
+                )
+            if (isIntentionalUnhide) {
+                Log.i("PackageReceiver", "👁️ Paquete desocultado por LockSuite ($packageName): se omite auto-desinstalación y re-bloqueo.")
+            }
+
             val updatingPkg = prefs.getString("updating_package", null)
             if (action == Intent.ACTION_PACKAGE_REPLACED || action == Intent.ACTION_PACKAGE_ADDED) {
                 if (updatingPkg != null && updatingPkg == packageName) {
@@ -144,7 +157,7 @@ class PackageReceiver : BroadcastReceiver() {
                 }
             }
 
-            if (action == Intent.ACTION_PACKAGE_ADDED && !isReplacing) {
+            if (action == Intent.ACTION_PACKAGE_ADDED && !isReplacing && !isIntentionalUnhide) {
                 val isInstallBlocked = prefs.getBoolean("install_apps_blocked_admin", false) || prefs.getBoolean("install_blocked_programmatic", false)
                 val isTempInstallActive = com.ejemplo.locksuite.mdm.TempInstallWindowManager.isActive(context)
                 if (isInstallBlocked && !isTempInstallActive) {
@@ -213,7 +226,7 @@ class PackageReceiver : BroadcastReceiver() {
             // actualización (isReplacing) no cuenta: es la misma app.
             if (!isReplacing) {
                 try {
-                    if (action == Intent.ACTION_PACKAGE_ADDED) {
+                    if (action == Intent.ACTION_PACKAGE_ADDED && !isIntentionalUnhide) {
                         com.ejemplo.locksuite.mdm.PlayStoreManager.onPackageAdded(context, packageName)
                     } else if (action == Intent.ACTION_PACKAGE_REMOVED) {
                         com.ejemplo.locksuite.mdm.PlayStoreManager.onPackageRemoved(context, packageName)
@@ -224,7 +237,7 @@ class PackageReceiver : BroadcastReceiver() {
             }
             // B.132/B.134: Tienda reclama instalaciones nuevas, reconcilia tras updates silenciosos
             // y dispara stubs embebidos cuando se instala o actualiza Android Auto desde la Tienda.
-            if (action == Intent.ACTION_PACKAGE_ADDED || action == Intent.ACTION_PACKAGE_REPLACED) {
+            if (!isIntentionalUnhide && (action == Intent.ACTION_PACKAGE_ADDED || action == Intent.ACTION_PACKAGE_REPLACED)) {
                 try {
                     com.ejemplo.locksuite.mdm.AuroraStoreManager.onPackageInstalled(context, packageName, isReplacing)
                 } catch (e: Exception) {
@@ -269,7 +282,7 @@ class PackageReceiver : BroadcastReceiver() {
                 }
 
                 // Re-suspender de forma inmediata el paquete si fue instalado o actualizado y debe estar suspendido
-                if (!playStoreDelFlujo &&
+                if (!playStoreDelFlujo && !isIntentionalUnhide &&
                     (action == Intent.ACTION_PACKAGE_ADDED || action == Intent.ACTION_PACKAGE_REPLACED)
                 ) {
                     try {
@@ -321,12 +334,25 @@ class PackageReceiver : BroadcastReceiver() {
                             com.ejemplo.locksuite.mdm.PlayStoreManager.releaseWebViewOwnership(context, setOf(packageName))
                             com.ejemplo.locksuite.mdm.ClassicStorePolicyManager.releaseWebViewOwnership(context, setOf(packageName))
                         }
+                    } catch (e: Exception) {
+                        Log.e("PackageReceiver", "Error al re-suspender paquete tras actualización: $packageName", e)
+                    }
+                }
 
+                // Sincronizar bloqueo de red (datos móviles + VPN) tanto tras instalación/actualización
+                // como tras des-ocultar una app que ya tenía restricciones de red guardadas.
+                if (action == Intent.ACTION_PACKAGE_ADDED || action == Intent.ACTION_PACKAGE_REPLACED) {
+                    try {
+                        val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
+                        if (policyManager.isPerAppInternetBlocked(packageName)) {
+                            policyManager.syncMeteredDataDisabledPackages()
+                            BootReceiver.ensureVpnRunning(context)
+                        }
                         if (com.ejemplo.locksuite.mdm.WebViewBlockManager.isBlocked(context, packageName)) {
                             BootReceiver.ensureVpnRunning(context)
                         }
                     } catch (e: Exception) {
-                        Log.e("PackageReceiver", "Error al re-suspender paquete tras actualización: $packageName", e)
+                        Log.w("PackageReceiver", "Error sincronizando bloqueo de red para $packageName: ${e.message}")
                     }
                 }
 

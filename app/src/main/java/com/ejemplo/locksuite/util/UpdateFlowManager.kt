@@ -1193,7 +1193,7 @@ object UpdateFlowManager {
             try { dpm.setUninstallBlocked(admin, packageName, true) } catch (e: Exception) { }
 
             try {
-                dpm.setApplicationHidden(admin, PKG_PLAY_STORE, false)
+                com.ejemplo.locksuite.mdm.AppUnhideGuard.unhideSafely(ctx, dpm, admin, PKG_PLAY_STORE)
             } catch (e: Exception) {
                 Log.w(TAG, "No se pudo des-ocultar Play Store: ${e.message}")
             }
@@ -1281,7 +1281,7 @@ object UpdateFlowManager {
         try {
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
             val admin = ComponentName(context, DeviceAdminReceiver::class.java)
-            try { dpm.setApplicationHidden(admin, PKG_PLAY_STORE, false) } catch (e: Exception) { }
+            try { com.ejemplo.locksuite.mdm.AppUnhideGuard.unhideSafely(context, dpm, admin, PKG_PLAY_STORE) } catch (e: Exception) { }
             try { dpm.setPackagesSuspended(admin, arrayOf(PKG_PLAY_STORE), false) } catch (e: Exception) { }
         } catch (e: Exception) {
             Log.w(TAG, "No se pudo destrabar Play Store: ${e.message}")
