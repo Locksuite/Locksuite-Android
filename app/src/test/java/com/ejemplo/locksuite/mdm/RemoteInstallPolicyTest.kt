@@ -140,4 +140,15 @@ class RemoteInstallPolicyTest {
         )
         assertTrue(missing is Resolution.Rejected)
     }
+
+    @Test
+    fun `isInstalledButHidden ignora dpmHidden true cuando el paquete no esta instalado`() {
+        assertFalse(RemoteInstallPolicy.isPackageInstalled(null))
+        assertFalse(RemoteInstallPolicy.isPackageInstalled(0))
+        assertFalse(RemoteInstallPolicy.isInstalledButHidden(null, dpmHidden = true))
+        assertFalse(RemoteInstallPolicy.isInstalledButHidden(0, dpmHidden = true))
+        assertTrue(RemoteInstallPolicy.isPackageInstalled(RemoteInstallPolicy.FLAG_INSTALLED))
+        assertTrue(RemoteInstallPolicy.isInstalledButHidden(RemoteInstallPolicy.FLAG_INSTALLED, dpmHidden = true))
+        assertFalse(RemoteInstallPolicy.isInstalledButHidden(RemoteInstallPolicy.FLAG_INSTALLED, dpmHidden = false))
+    }
 }

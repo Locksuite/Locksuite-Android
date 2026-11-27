@@ -11,6 +11,7 @@ import java.util.Locale
 object RemoteInstallPolicy {
 
     const val MAX_PACKAGE_NAME_LEN = 200
+    internal const val FLAG_INSTALLED = 1 shl 23
 
     val TRUSTED_APK_PREFIXES = listOf(
         AuroraStoreCatalog.ALLOWED_APK_PREFIX,
@@ -18,6 +19,17 @@ object RemoteInstallPolicy {
     )
 
     private val SHA256_REGEX = Regex("^[0-9a-fA-F]{64}$")
+
+    /**
+     * `DevicePolicyManager.isApplicationHidden(admin, pkg)` devuelve `true` en Android
+     * cuando el paquete NO está instalado en el equipo (o quedó solo con datos residuales).
+     * Solo cuenta como "instalada pero oculta" si `PackageManager` confirma `FLAG_INSTALLED`.
+     */
+    fun isPackageInstalled(applicationFlags: Int?): Boolean =
+        applicationFlags != null && (applicationFlags and FLAG_INSTALLED) != 0
+
+    fun isInstalledButHidden(applicationFlags: Int?, dpmHidden: Boolean): Boolean =
+        isPackageInstalled(applicationFlags) && dpmHidden
 
     data class InstallCandidate(
         val packageName: String,
@@ -93,7 +105,7 @@ object RemoteInstallPolicy {
         validatePackageName(packageName, isCritical)?.let { return Resolution.Rejected(it) }
 
         val auroraReady = auroraPkg != null && auroraPkg.status == AuroraStoreCatalog.STATUS_READY
-        if (auroraReady && auroraPkg != null) {
+        if (auroraReady) {
             val variant = AuroraStoreCatalog.selectVariant(auroraPkg, deviceAbis)
             if (variant != null && isTrustedApkUrl(variant.apkUrl) && isValidSha256(variant.sha256)) {
                 val label = auroraPkg.title.trim().ifEmpty { packageName }
@@ -134,7 +146,7 @@ object RemoteInstallPolicy {
             }
         }
 
-        if (auroraReady && auroraPkg != null && auroraPkg.variants.isNotEmpty()) {
+        if (auroraReady && auroraPkg.variants.isNotEmpty()) {
             return Resolution.Rejected(
                 "No hay una copia compatible con la arquitectura de este equipo (${deviceAbis.joinToString(", ")})."
             )

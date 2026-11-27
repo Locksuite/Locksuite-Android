@@ -4,6 +4,8 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageInstaller
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.SystemClock
 import com.ejemplo.locksuite.diag.DiagLog
 import com.ejemplo.locksuite.mdm.AppController
@@ -88,11 +90,33 @@ object RemoteAppInstaller {
             return
         }
 
-        val hiddenNow = try {
-            val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            val admin = ComponentName(ctx, DeviceAdminReceiver::class.java)
-            dpm.isApplicationHidden(admin, packageName)
+        val installedFlags = try {
+            val pm = ctx.packageManager
+            val ai = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getApplicationInfo(
+                    packageName,
+                    PackageManager.ApplicationInfoFlags.of(PackageManager.MATCH_UNINSTALLED_PACKAGES.toLong())
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                @Suppress("DEPRECATION")
+                pm.getApplicationInfo(packageName, PackageManager.MATCH_UNINSTALLED_PACKAGES)
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getApplicationInfo(packageName, PackageManager.GET_UNINSTALLED_PACKAGES)
+            }
+            ai.flags
         } catch (_: Exception) {
+            null
+        }
+        val hiddenNow = if (RemoteInstallPolicy.isPackageInstalled(installedFlags)) {
+            try {
+                val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                val admin = ComponentName(ctx, DeviceAdminReceiver::class.java)
+                RemoteInstallPolicy.isInstalledButHidden(installedFlags, dpm.isApplicationHidden(admin, packageName))
+            } catch (_: Exception) {
+                false
+            }
+        } else {
             false
         }
         if (hiddenNow) {
